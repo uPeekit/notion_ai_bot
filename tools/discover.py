@@ -16,7 +16,7 @@ from app.notion.errors import NotionError
 async def main() -> int:
     logging.basicConfig(level="INFO", format="%(levelname)s %(name)s: %(message)s")
     s = load_settings()
-    async with DirectNotionProvider(s.notion_token, s.notion_version) as p:
+    async with DirectNotionProvider(s.notion_token.get_secret_value(), s.notion_version) as p:
         try:
             await p.me()
         except NotionError as e:

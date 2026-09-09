@@ -34,3 +34,17 @@ def test_empty_allowlist_fails(env):
     env.setenv("TELEGRAM_ALLOWED_USER_IDS", " ")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_tokens_are_not_exposed_in_repr_or_str(env):
+    s = Settings(_env_file=None)
+    assert "ntn-test-token" not in repr(s)
+    assert "ntn-test-token" not in str(s)
+    assert "tg-test-token" not in repr(s)
+    assert "tg-test-token" not in str(s)
+
+
+def test_items_per_target_out_of_range_fails(env):
+    env.setenv("ITEMS_PER_TARGET", "200")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

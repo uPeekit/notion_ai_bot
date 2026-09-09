@@ -1,18 +1,20 @@
 from functools import cached_property
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-Prob = Field(ge=0.0, le=1.0)
+
+def Prob(default: float) -> float:
+    return Field(default, ge=0.0, le=1.0)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    telegram_bot_token: str
+    telegram_bot_token: SecretStr
     telegram_allowed_user_ids: str
-    notion_token: str
+    notion_token: SecretStr
     notion_version: str = "2025-09-03"
 
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -32,14 +34,14 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/bot.sqlite")
     targets_file: Path = Path("data/targets.yaml")
     schema_cache_ttl_s: int = 60
-    items_per_target: int = 50
+    items_per_target: int = Field(50, ge=1, le=100)
     admin_ui_port: int = 8787
 
-    policy_intent_min: float = Field(0.85, ge=0.0, le=1.0)
-    policy_target_min: float = Field(0.85, ge=0.0, le=1.0)
-    policy_target_margin: float = Field(0.10, ge=0.0, le=1.0)
-    policy_field_min: float = Field(0.75, ge=0.0, le=1.0)
-    policy_date_min: float = Field(0.80, ge=0.0, le=1.0)
+    policy_intent_min: float = Prob(0.85)
+    policy_target_min: float = Prob(0.85)
+    policy_target_margin: float = Prob(0.10)
+    policy_field_min: float = Prob(0.75)
+    policy_date_min: float = Prob(0.80)
 
     session_ttl_s: int = 900
     undo_window_s: int = 300
