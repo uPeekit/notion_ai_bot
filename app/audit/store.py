@@ -71,7 +71,8 @@ class AuditStore:
             self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     # events
     def new_event(self, *, telegram_user_id: int, chat_id: int, kind: str, **cols) -> int:
