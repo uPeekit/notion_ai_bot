@@ -96,7 +96,7 @@ notion_ai_bot/
 ```text
 Telegram update
   → auth (allowlist) → reject silently if not allowed
-  → voice? download → SpeechToText → text (echo "🎤 …" to user)
+  → voice? download → SpeechToText → text (audited, not echoed)
   → Orchestrator.handle(chat_id, text)
       → session = pending for chat? (then this is a clarification answer, see §7)
       → snapshot = Discovery.get(ttl)                      (Notion)
@@ -254,7 +254,7 @@ Commands hold Notion ids resolved by the app from keys. `mapper.py` is the only 
 
 ## 10. Speech
 
-faster-whisper, model `WHISPER_MODEL` (default `large-v3-turbo`), `compute_type=int8`, `device=auto` (CUDA if available, else CPU), `language=ru` hint (configurable), `vad_filter=True`. Runs via `asyncio.to_thread`. Model loaded lazily on first voice message and kept. Transcript echoed to the user and stored in audit. GPU on Windows needs cuBLAS + cuDNN 9 for CUDA 12 (install via `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` wheels, add their `bin` to PATH); CPU fallback is automatic if CUDA libs are missing.
+faster-whisper, model `WHISPER_MODEL` (default `large-v3-turbo`), `compute_type=int8`, `device=auto` (CUDA if available, else CPU), `language=ru` hint (configurable), `vad_filter=True`. Runs via `asyncio.to_thread`. Model loaded lazily on first voice message and kept. Transcript is stored in audit only; the reply describes the actual Notion change. GPU on Windows needs cuBLAS + cuDNN 9 for CUDA 12 (install via `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` wheels, add their `bin` to PATH); CPU fallback is automatic if CUDA libs are missing.
 
 ## 11. Audit and storage (SQLite)
 
