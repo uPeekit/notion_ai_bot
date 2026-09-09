@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field
+
+log = logging.getLogger(__name__)
 
 
 class FieldMeta(BaseModel):
@@ -21,11 +24,23 @@ class TargetMeta(BaseModel):
 class Descriptions:
     def __init__(self, path: Path) -> None:
         self._path = path
+        self.broken = False
 
     def load(self) -> dict[str, TargetMeta]:
         if not self._path.exists():
+            self.broken = False
             return {}
-        raw = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
+        try:
+            raw = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            log.warning("targets file %s is malformed; ignoring descriptions", self._path)
+            self.broken = True
+            return {}
+        if not isinstance(raw, dict):
+            log.warning("targets file %s is malformed; ignoring descriptions", self._path)
+            self.broken = True
+            return {}
+        self.broken = False
         return {str(k): TargetMeta.model_validate(v or {}) for k, v in raw.items()}
 
     def save(self, meta: dict[str, TargetMeta]) -> None:
@@ -37,6 +52,7 @@ class Descriptions:
 
     def ensure(self, discovered: dict[str, tuple[str, dict[str, str]]]) -> dict[str, TargetMeta]:
         meta = self.load()
+        broken = self.broken
         before = {k: v.model_dump() for k, v in meta.items()}
         for tid, (name, fields) in discovered.items():
             t = meta.setdefault(tid, TargetMeta())
@@ -44,6 +60,6 @@ class Descriptions:
             for fid, fname in fields.items():
                 f = t.fields.setdefault(fid, FieldMeta())
                 f.name = fname
-        if {k: v.model_dump() for k, v in meta.items()} != before:
+        if not broken and {k: v.model_dump() for k, v in meta.items()} != before:
             self.save(meta)
         return meta

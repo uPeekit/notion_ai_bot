@@ -38,3 +38,48 @@ def test_utf8_roundtrip(tmp_path):
     d.save({"a": TargetMeta(name="Ёжик", description="описание")})
     assert "Ёжик" in p.read_text(encoding="utf-8")
     assert d.load()["a"].description == "описание"
+
+
+def test_malformed_yaml_syntax_is_tolerated(tmp_path):
+    p = tmp_path / "t.yaml"
+    p.write_text("a: [unclosed\n", encoding="utf-8")
+    d = Descriptions(p)
+    assert d.load() == {}
+    assert d.broken is True
+    before = p.read_text(encoding="utf-8")
+    d.ensure({"ds1": ("Покупки", {})})
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_top_level_list_is_malformed(tmp_path):
+    p = tmp_path / "t.yaml"
+    p.write_text("- a\n- b\n", encoding="utf-8")
+    d = Descriptions(p)
+    assert d.load() == {}
+    assert d.broken is True
+    before = p.read_text(encoding="utf-8")
+    merged = d.ensure({"ds1": ("Покупки", {})})
+    assert merged["ds1"].name == "Покупки"
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_top_level_scalar_is_malformed(tmp_path):
+    p = tmp_path / "t.yaml"
+    p.write_text("just a string\n", encoding="utf-8")
+    d = Descriptions(p)
+    assert d.load() == {}
+    assert d.broken is True
+    before = p.read_text(encoding="utf-8")
+    d.ensure({"ds1": ("Покупки", {})})
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_valid_file_still_roundtrips_after_broken_check(tmp_path):
+    p = tmp_path / "t.yaml"
+    d = Descriptions(p)
+    d.save({"ds1": TargetMeta(name="Old")})
+    assert d.load() == {"ds1": TargetMeta(name="Old")}
+    assert d.broken is False
+    merged = d.ensure({"ds1": ("Покупки", {})})
+    assert merged["ds1"].name == "Покупки"
+    assert d.load()["ds1"].name == "Покупки"
