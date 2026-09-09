@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -59,96 +60,111 @@ def _iso(dt: datetime) -> str:
 class AuditStore:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=5.0)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
 
     def migrate(self) -> None:
-        self._conn.executescript(SCHEMA)
-        self._conn.commit()
+        with self._lock:
+            self._conn.executescript(SCHEMA)
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
 
     # events
     def new_event(self, *, telegram_user_id: int, chat_id: int, kind: str, **cols) -> int:
-        cols.update(telegram_user_id=telegram_user_id, chat_id=chat_id, kind=kind)
-        self._check_cols(cols)
-        cols["ts"] = _iso(datetime.now(UTC))
-        keys = ", ".join(cols)
-        marks = ", ".join("?" for _ in cols)
-        cur = self._conn.execute(f"INSERT INTO events ({keys}) VALUES ({marks})",
-                                 list(cols.values()))
-        self._conn.commit()
-        return int(cur.lastrowid)
+        with self._lock:
+            cols.update(telegram_user_id=telegram_user_id, chat_id=chat_id, kind=kind)
+            self._check_cols(cols)
+            cols["ts"] = _iso(datetime.now(UTC))
+            keys = ", ".join(cols)
+            marks = ", ".join("?" for _ in cols)
+            cur = self._conn.execute(f"INSERT INTO events ({keys}) VALUES ({marks})",
+                                     list(cols.values()))
+            self._conn.commit()
+            return int(cur.lastrowid)
 
     def update_event(self, event_id: int, **cols) -> None:
-        self._check_cols(cols)
-        if not cols:
-            return
-        sets = ", ".join(f"{k} = ?" for k in cols)
-        self._conn.execute(f"UPDATE events SET {sets} WHERE id = ?", [*cols.values(), event_id])
-        self._conn.commit()
+        with self._lock:
+            self._check_cols(cols)
+            if not cols:
+                return
+            sets = ", ".join(f"{k} = ?" for k in cols)
+            self._conn.execute(f"UPDATE events SET {sets} WHERE id = ?",
+                               [*cols.values(), event_id])
+            self._conn.commit()
 
     def get_event(self, event_id: int) -> dict | None:
-        row = self._conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM events WHERE id = ?",
+                                     (event_id,)).fetchone()
+            return dict(row) if row else None
 
     # sessions
     def save_session(self, chat_id: int, payload: str, expires_at: datetime) -> None:
-        self._conn.execute(
-            "INSERT INTO sessions (chat_id, payload, expires_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(chat_id) DO UPDATE SET payload = excluded.payload, "
-            "expires_at = excluded.expires_at",
-            (chat_id, payload, _iso(expires_at)),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO sessions (chat_id, payload, expires_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(chat_id) DO UPDATE SET payload = excluded.payload, "
+                "expires_at = excluded.expires_at",
+                (chat_id, payload, _iso(expires_at)),
+            )
+            self._conn.commit()
 
     def get_session(self, chat_id: int, now: datetime) -> str | None:
-        row = self._conn.execute(
-            "SELECT payload, expires_at FROM sessions WHERE chat_id = ?", (chat_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        if row["expires_at"] <= _iso(now):
-            self.delete_session(chat_id)
-            return None
-        return row["payload"]
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload, expires_at FROM sessions WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            if row["expires_at"] <= _iso(now):
+                self.delete_session(chat_id)
+                return None
+            return row["payload"]
 
     def delete_session(self, chat_id: int) -> None:
-        self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
 
     # executions
     def add_execution(
         self, event_id: int, chat_id: int, reply_message_id: int | None, undo: str,
         expires_at: datetime,
     ) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO executions (event_id, chat_id, reply_message_id, undo, expires_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (event_id, chat_id, reply_message_id, undo, _iso(expires_at)),
-        )
-        self._conn.commit()
-        return int(cur.lastrowid)
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO executions (event_id, chat_id, reply_message_id, undo, expires_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (event_id, chat_id, reply_message_id, undo, _iso(expires_at)),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
 
     def get_execution(self, execution_id: int, now: datetime) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM executions WHERE id = ? AND expires_at > ?",
-            (execution_id, _iso(now)),
-        ).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM executions WHERE id = ? AND expires_at > ?",
+                (execution_id, _iso(now)),
+            ).fetchone()
+            return dict(row) if row else None
 
     def latest_execution(self, chat_id: int, now: datetime) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM executions WHERE chat_id = ? AND undone = 0 AND expires_at > ? "
-            "ORDER BY id DESC LIMIT 1",
-            (chat_id, _iso(now)),
-        ).fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM executions WHERE chat_id = ? AND undone = 0 AND expires_at > ? "
+                "ORDER BY id DESC LIMIT 1",
+                (chat_id, _iso(now)),
+            ).fetchone()
+            return dict(row) if row else None
 
     def mark_undone(self, execution_id: int) -> None:
-        self._conn.execute("UPDATE executions SET undone = 1 WHERE id = ?", (execution_id,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("UPDATE executions SET undone = 1 WHERE id = ?", (execution_id,))
+            self._conn.commit()
 
     @staticmethod
     def _check_cols(cols: dict) -> None:

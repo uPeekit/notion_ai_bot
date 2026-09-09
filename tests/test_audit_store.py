@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -64,3 +65,15 @@ def test_migrate_idempotent(tmp_path):
     s = AuditStore(p)
     s.migrate()
     s.close()
+
+
+def test_execution_requires_existing_event(store):
+    now = datetime.now(UTC)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.add_execution(999, 9, None, "{}", now + timedelta(minutes=5))
+
+
+def test_update_event_unknown_column_rejected(store):
+    eid = store.new_event(telegram_user_id=1, chat_id=1, kind="text")
+    with pytest.raises(ValueError):
+        store.update_event(eid, notion_token="x")
