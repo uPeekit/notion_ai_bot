@@ -252,13 +252,15 @@ Risk classes: `create`, `append`, `search` = LOW; `update` = MEDIUM. Both auto-e
 
 Commands hold Notion ids resolved by the app from keys. `mapper.py` is the only place that builds Notion JSON. LLM output never reaches it.
 
+`Target.operations` vocabulary: databases `{create, update, search}`, pages `{create_page, append, search}`; the command classes above are the executable form of those operations.
+
 ## 10. Speech
 
 faster-whisper, model `WHISPER_MODEL` (default `large-v3-turbo`), `compute_type=int8`, `device=auto` (CUDA if available, else CPU), `language=ru` hint (configurable), `vad_filter=True`. Runs via `asyncio.to_thread`. Model loaded lazily on first voice message and kept. Transcript is stored in audit only; the reply describes the actual Notion change. GPU on Windows needs cuBLAS + cuDNN 9 for CUDA 12 (install via `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` wheels, add their `bin` to PATH); CPU fallback is automatic if CUDA libs are missing.
 
 ## 11. Audit and storage (SQLite)
 
-Tables: `events` (one row per handled message, per spec §27), `sessions` (pending clarification, one per chat), `executions` (undo data, expires), `settings` (last successful discovery hash). See [DATA_MODEL.md](DATA_MODEL.md). Tokens never stored; LLM request context and raw response stored as JSON text.
+Tables: `events` (one row per handled message, per spec §27), `sessions` (pending clarification, one per chat), `executions` (undo data, expires). See [DATA_MODEL.md](DATA_MODEL.md). Tokens never stored; LLM request context and raw response stored as JSON text.
 
 ## 12. Admin page
 

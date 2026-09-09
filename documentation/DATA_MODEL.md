@@ -2,12 +2,13 @@
 
 ## 1. Workspace snapshot (in-memory, rebuilt from Notion)
 
+Per-request short keys live in the ContextBuilder (Plan 2), not on the shared cached snapshot.
+
 ```python
 @dataclass(frozen=True)
 class WorkspaceSnapshot:
     fetched_at: datetime
     targets: list[Target]               # databases (data sources) and pages
-    key_map: dict[str, str]             # request key → Notion id (regenerated per ContextBuilder run)
 
 @dataclass(frozen=True)
 class Target:
@@ -44,6 +45,7 @@ class Item:
     title: str
     hint: str | None                    # e.g. status name or "куплено", shown to LLM in parentheses
     last_edited: datetime
+    url: str                            # Notion page url
 ```
 
 ## 2. targets.yaml (human-edited, `data/targets.yaml`)
