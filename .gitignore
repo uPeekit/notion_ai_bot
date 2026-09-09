@@ -8,3 +8,5 @@ __pycache__/
 .superpowers/
 *.egg-info/
 dist/
+VERSION
+.backup/
