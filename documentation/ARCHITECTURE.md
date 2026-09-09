@@ -277,3 +277,7 @@ Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `qwen3:8b` 
 - Notion calls originate only from `direct.py`, invoked only by `executor.py` and `discovery.py`.
 - Telegram allowlist enforced before any processing; unknown users get no reply.
 - Admin page bound to loopback, no auth (host-local by design).
+
+## 15. Releases and migrations
+
+`pyproject.toml`'s `[project].version` is the version source (`app/version.py`); `release.py` bumps it, commits, tags, and builds `dist/notion_ai_bot-X.Y.Z.zip` (app files + `VERSION` + `manifest.json` with a lock hash). Production is a separate directory (e.g. `C:\apps\notion_ai_bot`) with its own `.env`/`.venv`/`data`, populated only from a release zip via `deploy/install.ps1` or `deploy/update.ps1` (`apply_update.py`), never `git clone`; `uv sync --frozen --no-dev` (re-run on updates only when the lock hash changed) provisions the venv. Schema migrations (`migrations/NNNN_name.sql`, journaled in `schema_migrations`) are applied only by the installer/updater or `tools/migrate.py` — never implicitly. At startup, `AuditStore.assert_schema_current()` verifies no migration is pending and refuses to run otherwise. See [RELEASE.md](../RELEASE.md) for the full process.

@@ -8,7 +8,7 @@ Expand-Archive -Path $Zip -DestinationPath $Dest -Force
 Push-Location $Dest
 try {
   & $uv sync --frozen --no-dev
-  if (-not (Test-Path ".env")) { Copy-Item ".env.example" ".env"; Write-Host "created .env — fill in tokens before running" }
+  if (-not (Test-Path ".env")) { Copy-Item ".env.example" ".env"; Write-Host "created .env - fill in tokens before running" }
   New-Item -ItemType Directory -Force "data","logs" | Out-Null
   & ".venv\Scripts\python.exe" -m tools.migrate --apply --db "data\bot.sqlite"
   Write-Host "installed $(Get-Content VERSION) into $Dest. Start with deploy\run.ps1"
