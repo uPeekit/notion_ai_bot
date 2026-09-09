@@ -156,7 +156,7 @@ Supported property types for write: `title, rich_text, select, multi_select, sta
 }
 ```
 
-`required` for a database = the `title` property only, unless `targets.yaml` marks other fields required (semantic metadata). Keys are regenerated per request; the mapping key → Notion id is held by the app.
+Extraction covers every writable field of the chosen target, always. `required` only controls whether the bot must ask when the message did not mention the field. Notion exposes no mandatory-property flag except the title, so `required` defaults to the title and other fields are marked in `targets.yaml` (admin page). Keys are regenerated per request; the mapping key → Notion id is held by the app.
 
 ### Output (grammar-enforced by Ollama `format`)
 
