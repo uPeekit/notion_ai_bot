@@ -3,13 +3,14 @@
 Waterfall phases, strictly ordered. Each task = code + tests, done before the next starts.
 Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 
-## Open questions (do not block Phase 0–2)
+## Resolved questions
 
-| # | Question | Default if unanswered |
+| # | Question | Answer |
 |---|---|---|
-| Q1 | Do you want other fields than the title to be required (e.g. Приоритет)? | none; set later in `targets.yaml` |
-| Q2 | Should the bot echo the transcription of every voice message? | yes |
-| Q3 | Should `update` require a Confirm step instead of Undo? | Undo (auto-execute) |
+| Q1 | Required fields beyond title? | Set per table in `targets.yaml` via admin page; default title only |
+| Q2 | Echo voice transcription? | No. Audit only. Reply shows the actual Notion change |
+| Q3 | Confirm before update? | No. Auto-execute with Undo |
+| Q4 | Telegram / Notion tokens? | Not yet; README setup steps, needed from Phase 4 |
 
 ## Phase 0 — Environment
 
@@ -60,7 +61,7 @@ Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 | T-041 | `conversation/orchestrator.py`: full pipeline text → reply model (`Reply(text, keyboard, undo_id)`), free-text-while-pending handling (F4, F5), search reply formatting | T-040, T-034, T-022 | L | end-to-end tests with FakeLLM + FakeNotion for F1–F12, F14 |
 | T-042 | `telegram/auth.py`, `telegram/handlers.py`: text, voice (download), callbacks, commands `/start /help /refresh /targets /undo /cancel`; wiring in `main.py` with startup checks | T-041 | L | handler tests with PTB test utilities; manual run |
 | T-043 | `speech/base.py`, `speech/whisper_local.py`, lazy load, device auto-detect, CUDA→CPU fallback | T-004 | M | unit test with mocked model; manual test with a real voice note |
-| T-044 | Voice path in orchestrator + transcript echo (F13) | T-042, T-043 | S | e2e test with fake STT |
+| T-044 | Voice path in orchestrator, transcript to audit (F13) | T-042, T-043 | S | e2e test with fake STT |
 
 ## Phase 5 — Admin and polish
 

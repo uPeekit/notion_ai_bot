@@ -5,11 +5,11 @@ All bot replies in Russian. Buttons in `[brackets]`.
 ## F1. Create item, unambiguous
 
 1. User (voice): «купи молоко в Рими»
-2. Bot: `🎤 купи молоко в Рими`
+2. Transcript stored in audit (not shown).
 3. Snapshot fetched (or cached). LLM: intent create 0.97; candidates: Покупки 0.95 {Название: Молоко, Магазин: Rimi}, Задачи 0.60.
 4. Policy: margin 0.35 ≥ 0.10, fields valid → EXECUTE.
 5. Notion `POST /v1/pages`.
-6. Bot: `✅ Покупки: Молоко · Магазин: Rimi` + `[Открыть]` (Notion URL) `[Отменить]`.
+6. Bot: `✅ Покупки: Молоко · Магазин: Rimi` + `[Открыть]` (Notion URL) `[Отменить]`. Reply text reflects the properties actually written, read back from the Notion response.
 7. `[Отменить]` within 5 min → page archived → `↩️ Отменено`.
 
 ## F2. Create, target ambiguous
