@@ -14,14 +14,19 @@ from app.notion.errors import NotionError
 
 
 async def main() -> int:
-    logging.basicConfig(level="INFO", format="%(levelname)s %(name)s: %(message)s")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     s = load_settings()
+    logging.basicConfig(level=s.log_level, format="%(levelname)s %(name)s: %(message)s")
     async with DirectNotionProvider(s.notion_token.get_secret_value(), s.notion_version) as p:
         try:
             await p.me()
         except NotionError as e:
-            print(f"Notion auth failed: {e.status} {e.code}", file=sys.stderr)
-            return 3
+            if e.status == 401:
+                print(f"Notion auth failed: {e.status} {e.code}", file=sys.stderr)
+                return 3
+            print(f"Notion error: {e.status} {e.code}", file=sys.stderr)
+            return 4
         disco = Discovery(p, Descriptions(s.targets_file), items_per_target=s.items_per_target)
         snap = await disco.refresh()
 
