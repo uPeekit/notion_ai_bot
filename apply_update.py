@@ -34,7 +34,11 @@ def read_manifest(zip_path: Path) -> dict:
     with zipfile.ZipFile(zip_path) as zf:
         if MANIFEST not in zf.namelist():
             raise ValueError("not a release archive: manifest.json missing")
-        return json.loads(zf.read(MANIFEST))
+        manifest = json.loads(zf.read(MANIFEST))
+    files = manifest.get("files")
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        raise ValueError("manifest.json 'files' must be a list of strings")
+    return manifest
 
 
 def installed_manifest(root: Path) -> dict:
@@ -68,17 +72,28 @@ def _protected(rel: str) -> bool:
     return top in PROTECTED
 
 
+def _safe_rel(rel: str) -> bool:
+    """Reject archive/manifest paths that are absolute, carry a drive, or climb out via '..'."""
+    p = Path(rel)
+    return not (p.is_absolute() or p.drive or ".." in p.parts)
+
+
 def backup_app_layer(root: Path, version: str) -> Path:
-    dest = root / ".backup" / version
+    backup_dir = root / ".backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    dest = backup_dir / version
     if dest.exists():
         shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
     for rel in installed_manifest(root)["files"] + ["VERSION", MANIFEST]:
+        if not _safe_rel(rel):
+            continue
         src = root / rel
         if src.is_file() and not _protected(rel):
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
-    backups = sorted((root / ".backup").iterdir(), key=lambda p: _vt(p.name))
+    backups = sorted(backup_dir.iterdir(), key=lambda p: _vt(p.name))
     for old in backups[:-KEEP_BACKUPS]:
         shutil.rmtree(old)
     return dest
@@ -89,7 +104,7 @@ def extract(zip_path: Path, root: Path) -> int:
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             name = info.filename
-            if name.startswith("/") or ".." in Path(name).parts:
+            if not _safe_rel(name):
                 raise ValueError(f"unsafe path in archive: {name}")
             if _protected(name) or name == "VERSION":
                 skipped += 1
@@ -101,6 +116,8 @@ def extract(zip_path: Path, root: Path) -> int:
 def prune_removed(root: Path, old_files: list[str], new_files: list[str]) -> list[str]:
     removed = []
     for rel in set(old_files) - set(new_files):
+        if not _safe_rel(rel):
+            continue
         p = root / rel
         if p.is_file() and not _protected(rel):
             p.unlink()

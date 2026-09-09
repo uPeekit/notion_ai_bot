@@ -1,3 +1,4 @@
+import os
 import zipfile
 from pathlib import Path
 
@@ -138,3 +139,31 @@ def test_backups_pruned_to_two(tmp_path, calls):
         z = release.build_zip(repo, v, "patch", tmp_path / "dist")
         assert au.apply(z, prod) == 0
     assert sorted(p.name for p in (prod / ".backup").iterdir()) == ["0.0.2", "0.0.3"]
+
+
+def test_prune_never_escapes_root(tmp_path):
+    prod = tmp_path / "prod"
+    prod.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    bad_abs = "C:/outside.txt" if os.name == "nt" else "/etc/passwd"
+    removed = au.prune_removed(prod, ["../outside.txt", bad_abs], [])
+    assert removed == []
+    assert outside.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive-letter paths only meaningful on Windows")
+def test_extract_refuses_drive_letter_entry(tmp_path):
+    z = tmp_path / "evil.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("C:/evil.txt", "x")
+    with pytest.raises(ValueError):
+        au.extract(z, tmp_path / "root")
+
+
+def test_backup_on_bare_root_does_not_crash(tmp_path):
+    root = tmp_path / "bare"
+    root.mkdir()
+    dest = au.backup_app_layer(root, "0.0.0")
+    assert dest == root / ".backup" / "0.0.0"
+    assert dest.exists()
