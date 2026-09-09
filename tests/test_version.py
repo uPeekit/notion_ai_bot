@@ -1,3 +1,5 @@
+import re
+
 from app.version import app_root, get_version, read_pyproject_version
 
 
@@ -5,8 +7,11 @@ def test_app_root_contains_app_package():
     assert (app_root() / "app" / "__init__.py").exists()
 
 
-def test_pyproject_version_is_0_0_1():
-    assert read_pyproject_version(app_root() / "pyproject.toml") == "0.0.1"
+def test_pyproject_version_has_semver_shape():
+    version = read_pyproject_version(app_root() / "pyproject.toml")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version)
+    if not (app_root() / "VERSION").exists():
+        assert get_version() == version
 
 
 def test_version_prefers_version_file(tmp_path, monkeypatch):
