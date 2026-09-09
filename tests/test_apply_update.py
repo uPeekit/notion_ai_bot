@@ -1,3 +1,4 @@
+import json
 import os
 import zipfile
 from pathlib import Path
@@ -124,6 +125,105 @@ def test_failed_migration_returns_2_and_rollback_restores(tmp_path, calls, monke
     assert (prod / ".env").read_text() == "SECRET=1"
 
 
+def test_retry_after_failed_migration_keeps_original_backup(tmp_path, calls, monkeypatch):
+    prod, _ = install(tmp_path)
+    repo2 = make_repo(tmp_path / "repo-0.0.2", "0.0.2")
+    (repo2 / "app" / "a.py").write_text("V='0.0.2'", encoding="utf-8")
+    z2 = release.build_zip(repo2, "0.0.2", "patch", tmp_path / "dist")
+
+    def boom(root):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(au, "run_migrations", boom)
+    assert au.apply(z2, prod) == 2
+    assert (prod / ".backup" / "0.0.1" / "app" / "a.py").read_text() == "V='0.0.1'"
+
+    monkeypatch.setattr(au, "run_migrations", lambda root: calls.append("migrate"))
+    assert au.apply(z2, prod) == 0
+    assert (prod / "VERSION").read_text().strip() == "0.0.2"
+    # the retry must not have re-run backup_app_layer over the original rollback point
+    assert (prod / ".backup" / "0.0.1" / "app" / "a.py").read_text() == "V='0.0.1'"
+
+
+def test_read_manifest_rejects_missing_kind(tmp_path):
+    z = tmp_path / "bad.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        manifest = {"version": "0.0.2", "lock_hash": "abc", "files": ["app/a.py"]}
+        zf.writestr("manifest.json", json.dumps(manifest))
+    with pytest.raises(ValueError):
+        au.read_manifest(z)
+
+
+def test_apply_refuses_zip_with_invalid_manifest(tmp_path, calls):
+    prod, _ = install(tmp_path)
+    z = tmp_path / "bad.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        manifest = {"version": "0.0.2", "lock_hash": "abc", "files": ["app/a.py"]}
+        zf.writestr("manifest.json", json.dumps(manifest))
+    assert au.apply(z, prod) == 1
+
+
+def test_current_version_treats_non_semver_as_0_0_0(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "VERSION").write_text("dev\n", encoding="utf-8")
+    assert au.current_version(root) == "0.0.0"
+
+
+def test_update_proceeds_when_installed_version_is_not_semver(tmp_path, calls):
+    prod, _ = install(tmp_path)
+    (prod / "VERSION").write_text("dev\n", encoding="utf-8")
+    repo2 = make_repo(tmp_path / "repo-0.0.2", "0.0.2")
+    z2 = release.build_zip(repo2, "0.0.2", "patch", tmp_path / "dist")
+    assert au.apply(z2, prod) == 0
+    assert (prod / "VERSION").read_text().strip() == "0.0.2"
+
+
+def test_stray_backup_entry_does_not_crash_update_or_rollback(tmp_path, calls):
+    prod, _ = install(tmp_path)
+    (prod / ".backup").mkdir(exist_ok=True)
+    (prod / ".backup" / "notes.txt").write_text("not a version dir", encoding="utf-8")
+    repo2 = make_repo(tmp_path / "repo-0.0.2", "0.0.2")
+    z2 = release.build_zip(repo2, "0.0.2", "patch", tmp_path / "dist")
+    assert au.apply(z2, prod) == 0
+    assert (prod / ".backup" / "notes.txt").exists()
+    assert au.rollback(prod) == 0
+    assert (prod / ".backup" / "notes.txt").exists()
+
+
+def test_extract_stops_before_writing_on_unsafe_entry(tmp_path):
+    z = tmp_path / "evil.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("app/good.py", "GOOD=1")
+        zf.writestr("../evil", "EVIL=1")
+    root = tmp_path / "root"
+    root.mkdir()
+    with pytest.raises(ValueError):
+        au.extract(z, root)
+    assert not (root / "app" / "good.py").exists()
+
+
+def test_sync_runtime_and_run_migrations_argv(tmp_path, monkeypatch):
+    recorded = []
+
+    class Result:
+        returncode = 0
+
+    def fake_run(args, **kwargs):
+        recorded.append((args, kwargs))
+        return Result()
+
+    monkeypatch.setattr(au.subprocess, "run", fake_run)
+    root = tmp_path / "root"
+    root.mkdir()
+    au.sync_runtime(root)
+    au.run_migrations(root)
+    assert recorded[0] == ([au.uv_exe(), "sync", "--frozen", "--no-dev"],
+                            {"cwd": root, "check": True})
+    assert recorded[1] == ([str(au.venv_python(root)), "-m", "tools.migrate", "--apply"],
+                            {"cwd": root, "check": True})
+
+
 def test_dry_run_changes_nothing(tmp_path, calls):
     prod, _ = install(tmp_path)
     repo2 = make_repo(tmp_path / "repo-0.0.2", "0.0.2")
@@ -171,9 +271,15 @@ def test_backup_on_bare_root_does_not_crash(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "rel", ["/x", "\\x", "C:/x", "C:\\x", "a/../b", "../a", "", "//host/share/x"]
+    "rel", ["/x", "\\x", "a/../b", "../a", "", "//host/share/x"]
 )
 def test_safe_rel_rejects(rel):
+    assert au._safe_rel(rel) is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive-letter paths only meaningful on Windows")
+@pytest.mark.parametrize("rel", ["C:/x", "C:\\x"])
+def test_safe_rel_rejects_drive_letter(rel):
     assert au._safe_rel(rel) is False
 
 

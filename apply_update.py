@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 PROTECTED = {".env", "data", "logs", ".venv", ".backup"}
 KEEP_BACKUPS = 2
 MANIFEST = "manifest.json"
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def _vt(v: str) -> tuple[int, ...]:
@@ -27,7 +29,10 @@ def is_newer(new: str, current: str) -> bool:
 
 def current_version(root: Path) -> str:
     vf = root / "VERSION"
-    return vf.read_text(encoding="utf-8").strip() if vf.exists() else "0.0.0"
+    if not vf.exists():
+        return "0.0.0"
+    v = vf.read_text(encoding="utf-8").strip()
+    return v if _VERSION_RE.fullmatch(v) else "0.0.0"
 
 
 def read_manifest(zip_path: Path) -> dict:
@@ -35,9 +40,17 @@ def read_manifest(zip_path: Path) -> dict:
         if MANIFEST not in zf.namelist():
             raise ValueError("not a release archive: manifest.json missing")
         manifest = json.loads(zf.read(MANIFEST))
+    version = manifest.get("version")
+    if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+        raise ValueError("not a release archive: manifest.json 'version' is invalid")
+    if manifest.get("kind") not in ("patch", "full"):
+        raise ValueError("not a release archive: manifest.json 'kind' must be 'patch' or 'full'")
+    lock_hash = manifest.get("lock_hash")
+    if not isinstance(lock_hash, str) or not lock_hash:
+        raise ValueError("not a release archive: manifest.json 'lock_hash' must be non-empty")
     files = manifest.get("files")
     if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
-        raise ValueError("manifest.json 'files' must be a list of strings")
+        raise ValueError("not a release archive: manifest.json 'files' must be a list of strings")
     return manifest
 
 
@@ -80,12 +93,19 @@ def _safe_rel(rel: str) -> bool:
     return bool(rel) and not rel.startswith(("/", "\\"))
 
 
+def _sorted_backups(backup_dir: Path) -> list[Path]:
+    return sorted(
+        (p for p in backup_dir.iterdir() if p.is_dir() and _VERSION_RE.fullmatch(p.name)),
+        key=lambda p: _vt(p.name),
+    )
+
+
 def backup_app_layer(root: Path, version: str) -> Path:
     backup_dir = root / ".backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
     dest = backup_dir / version
     if dest.exists():
-        shutil.rmtree(dest)
+        return dest
     dest.mkdir(parents=True, exist_ok=True)
     for rel in installed_manifest(root)["files"] + ["VERSION", MANIFEST]:
         if not _safe_rel(rel):
@@ -95,7 +115,7 @@ def backup_app_layer(root: Path, version: str) -> Path:
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
-    backups = sorted(backup_dir.iterdir(), key=lambda p: _vt(p.name))
+    backups = _sorted_backups(backup_dir)
     for old in backups[:-KEEP_BACKUPS]:
         shutil.rmtree(old)
     return dest
@@ -104,10 +124,12 @@ def backup_app_layer(root: Path, version: str) -> Path:
 def extract(zip_path: Path, root: Path) -> int:
     skipped = 0
     with zipfile.ZipFile(zip_path) as zf:
-        for info in zf.infolist():
+        infos = zf.infolist()
+        for info in infos:
+            if not _safe_rel(info.filename):
+                raise ValueError(f"unsafe path in archive: {info.filename}")
+        for info in infos:
             name = info.filename
-            if not _safe_rel(name):
-                raise ValueError(f"unsafe path in archive: {name}")
             if _protected(name) or name == "VERSION":
                 skipped += 1
                 continue
@@ -163,8 +185,13 @@ def apply(zip_path: Path, root: Path, *, force: bool = False, dry_run: bool = Fa
     print(f"update {cur} -> {new['version']} ({new['kind']}); runtime sync: {need_sync}")
     if dry_run:
         return 0
-    backup = backup_app_layer(root, cur)
-    print(f"backup  {backup}")
+    installed_version = old.get("version")
+    if installed_version and installed_version != cur:
+        print(f"root is mid-update (manifest {installed_version}, VERSION {cur}); "
+              "keeping existing backup")
+    else:
+        backup = backup_app_layer(root, cur)
+        print(f"backup  {backup}")
     try:
         skipped = extract(zip_path, root)
         removed = prune_removed(root, old["files"], new["files"])
@@ -182,7 +209,7 @@ def apply(zip_path: Path, root: Path, *, force: bool = False, dry_run: bool = Fa
 
 def rollback(root: Path) -> int:
     backup_dir = root / ".backup"
-    backups = sorted(backup_dir.glob("*"), key=lambda p: _vt(p.name)) if backup_dir.exists() else []
+    backups = _sorted_backups(backup_dir) if backup_dir.exists() else []
     if not backups:
         print("no backup to roll back to", file=sys.stderr)
         return 1
