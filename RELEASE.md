@@ -33,6 +33,11 @@
 deploy\install.ps1 -Zip dist\notion_ai_bot-0.0.2.zip -Dest C:\apps\notion_ai_bot
 ```
 
+**Warning:** `install.ps1` is for a fresh, empty `-Dest` only. Never re-run it against an
+existing install: unlike `apply_update.py`, it does no version check, takes no backup, does
+not prune files the new zip removed, and offers no rollback if something goes wrong
+mid-extract. To upgrade an existing install, use `deploy\update.ps1` (see Update, below).
+
 Does, in order: locate `uv` (`PATH`, else `%USERPROFILE%\.local\bin\uv.exe`), extract the zip into `-Dest`, `uv sync --frozen --no-dev`, create `.env` from `.env.example` if missing (fill in tokens before running), create `data\` and `logs\`, then `.venv\Scripts\python.exe -m tools.migrate --apply --db data\bot.sqlite`. Start the bot with `deploy\run.ps1`.
 
 ## Update
@@ -55,15 +60,15 @@ Wraps `apply_update.py <zip> --root <install dir>`. Refuses (exit 1) if the zip'
 
 ## Rollback
 
-- **App layer:** `python apply_update.py --rollback --root <install dir>` (or `deploy\update.ps1` has no rollback flag — call `apply_update.py` directly, or `.venv\Scripts\python.exe apply_update.py --rollback`). Copies files from the newest `.backup\<version>\` back over the app layer. Does not touch the database.
-- **Database:** migrations back up the DB before applying any pending file, as `data\<name>.pre-NNNN-<timestamp>.sqlite`. To roll back, stop the bot, copy the relevant `.pre-` file over `data\bot.sqlite` manually. There are no down-migrations — restoring the pre-migration snapshot is the only supported path backward.
+- **App layer:** `python apply_update.py --rollback --root <install dir>` (or `deploy\update.ps1` has no rollback flag — call `apply_update.py` directly, or `.venv\Scripts\python.exe apply_update.py --rollback`). Copies files from the newest `.backup\<version>\` back over the app layer. Does not touch the database. Two things it does **not** do: it does not delete files the new version added (only the backed-up files are copied back over; anything new the failed update introduced stays on disk), and it does not re-sync the venv even if the failed update changed `uv.lock` — if the update that's being rolled back touched dependencies, re-run `uv sync --frozen --no-dev` by hand after rolling back.
+- **Database:** migrations back up the DB before applying any pending file, as `data\<name>.pre-NNNN-<timestamp>.sqlite`. To roll back, stop the bot, copy the relevant `.pre-` file over `data\bot.sqlite` manually. There are no down-migrations — restoring the pre-migration snapshot is the only supported path backward. These `.pre-*.sqlite` snapshots are never pruned automatically and accumulate in `data\` across updates; delete the ones you no longer need by hand.
 
 ## Migrations authoring rules
 
 - New file only: `migrations\NNNN_name.sql`, zero-padded 4-digit version, next integer after the highest existing one. Never edit or delete a migration that has shipped — `app/audit/migrate.py` stores a SHA-256 checksum per applied version in `schema_migrations` and raises on mismatch (the file changed after it was applied).
 - Additive DDL only in practice: `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN`, `CREATE INDEX IF NOT EXISTS`. Avoid destructive schema changes; there is no down-migration.
 - Data-seeding statements must be idempotent: `INSERT OR IGNORE`, not bare `INSERT`.
-- **Do not** write `BEGIN`, `COMMIT`, `ROLLBACK`, `END`, or `VACUUM` in a migration file — the runner wraps each file's SQL in its own transaction and rejects any file containing those tokens (`MigrationError`).
+- **Do not** write `BEGIN`, `COMMIT`, `ROLLBACK`, `END`, or `VACUUM` in a migration file — the runner wraps each file's SQL in its own transaction and rejects any file containing those tokens (`MigrationError`). This also rules out `CREATE TRIGGER ... BEGIN ... END;` — the linter's `END` check matches the trigger body's terminator too, so triggers are unavailable in migrations.
 - The runner applies pending migrations in ascending version order inside one `sqlite3` connection per run and records each applied version's `(version, name, checksum, applied_at)` in `schema_migrations`.
 
 ## Checking schema state
@@ -72,7 +77,7 @@ Wraps `apply_update.py <zip> --root <install dir>`. Refuses (exit 1) if the zip'
 .venv\Scripts\python.exe -m tools.migrate --status --db data\bot.sqlite
 ```
 
-Prints `schema current` and exits 0 if nothing is pending; otherwise prints each `pending NNNN_name` and exits 2. `--dry-run` does the same computation without opening a write path implication (equivalent output to `--status`); `--apply` actually runs them (exit 0 on success, 1 on `MigrationError`, e.g. checksum mismatch or a bad migration file). `--db` defaults to `DB_PATH` from `.env`; `--dir` defaults to `migrations/` under the app root.
+Prints `schema current` and exits 0 if nothing is pending; otherwise prints each `pending NNNN_name` and exits 2. `--dry-run` does the same computation as `--status` (equivalent output) and neither one applies any migration — but both still open the database file for writing: they create `data\bot.sqlite` if it doesn't exist yet (and its parent directory) and create the `schema_migrations` journal table if it's missing. Neither writes any migration row. `--apply` actually runs pending migrations (exit 0 on success, 1 on `MigrationError`, e.g. checksum mismatch or a bad migration file). `--db` defaults to `DB_PATH` from `.env`; `--dir` defaults to `migrations/` under the app root.
 
 At startup, `AuditStore.assert_schema_current()` (wired into `app.main` in a later plan) raises if any migration is pending, so the bot refuses to run against a stale schema instead of silently misbehaving.
 
