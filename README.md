@@ -10,9 +10,8 @@ Design: see `documentation/`.
 2. Copy `.env.example` to `.env` and fill tokens (see below).
 3. `uv run python -m tools.discover` prints what the Notion integration can see.
 
-### Notion integration
-1. https://www.notion.so/profile/integrations → New integration (internal), copy the secret into `NOTION_TOKEN`.
-2. In Notion, open each top-level page you want the bot to use → `...` → Connections → add the integration. Child pages and databases inherit access.
+### Notion access
+Follow `documentation/NOTION_SETUP.md` (personal access token, 2 minutes). Put the token in `NOTION_TOKEN`.
 
 ### Telegram bot
 1. Talk to @BotFather → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`.
