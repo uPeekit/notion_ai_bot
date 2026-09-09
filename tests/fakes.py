@@ -42,7 +42,13 @@ class FakeNotionProvider:
         self.calls.append(("query", data_source_id, page_size))
         if data_source_id not in self.data_sources:
             raise NotionError(404, "object_not_found", data_source_id)
-        return list(self.items.get(data_source_id, []))[:page_size]
+        rows = list(self.items.get(data_source_id, []))
+        if sorts and any(
+            s.get("timestamp") == "last_edited_time" and s.get("direction") == "descending"
+            for s in sorts
+        ):
+            rows.sort(key=lambda r: r.get("last_edited_time", ""), reverse=True)
+        return rows[:page_size]
 
     async def get_page(self, page_id: str) -> dict:
         self.calls.append(("get_page", page_id))

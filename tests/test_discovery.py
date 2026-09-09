@@ -59,10 +59,10 @@ def fake():
     }
     f.items = {
         "ds-buy": [
+            page("row1", "Хлеб", {"type": "data_source_id", "data_source_id": "ds-buy"}),
             page("row2", "Молоко", {"type": "data_source_id", "data_source_id": "ds-buy"},
                  edited="2026-09-02T00:00:00.000Z",
                  extra={"Куплено": {"type": "checkbox", "checkbox": True}}),
-            page("row1", "Хлеб", {"type": "data_source_id", "data_source_id": "ds-buy"}),
         ],
         "ds-shops": [page("s1", "Rimi Hyper", {"type": "data_source_id",
                                                "data_source_id": "ds-shops"})],
@@ -93,6 +93,7 @@ async def test_databases_discovered(disco):
     assert [o.name for o in buy.field("rel").options] == ["Rimi Hyper"]
     assert [(i.id, i.title, i.hint) for i in buy.items] == [("row2", "Молоко", "Куплено"),
                                                             ("row1", "Хлеб", None)]
+    assert buy.items[0].url == "https://notion.so/row2"
     assert buy.operations == frozenset({"create", "update", "search"})
     assert snap.target("ds-shops").path == "Магазины"
 
@@ -147,6 +148,19 @@ async def test_stale_snapshot_on_failure(fake, tmp_path):
     t["now"] += timedelta(minutes=31)
     with pytest.raises(NotionUnavailable):
         await disco.get()
+
+
+async def test_invalidate_keeps_stale_snapshot_on_failure(fake, tmp_path):
+    t = {"now": datetime(2026, 9, 9, 12, 0, tzinfo=UTC)}
+    disco = Discovery(fake, Descriptions(tmp_path / "t.yaml"), ttl_s=60, clock=lambda: t["now"])
+    a = await disco.get()
+    disco.invalidate()
+    fake.fail_search = NotionUnavailable()
+    b = await disco.get()
+    assert b is a
+    fake.fail_search = None
+    c = await disco.get()
+    assert c is not a
 
 
 async def test_missing_relation_target_gives_empty_options(disco, fake):

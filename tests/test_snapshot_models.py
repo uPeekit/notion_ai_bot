@@ -22,7 +22,7 @@ def make_db(id="ds1", name="Покупки"):
             Field(id="shop", name="Магазин", type="select", required=False,
                   options=[Option("o1", "Rimi")], relation_data_source_id=None, description=""),
         ],
-        items=[Item(id="p1", title="Хлеб", hint=None, last_edited=datetime.now(UTC))],
+        items=[Item(id="p1", title="Хлеб", hint=None, last_edited=datetime.now(UTC), url="")],
         operations=DB_OPERATIONS, url="https://notion.so/ds1",
     )
 

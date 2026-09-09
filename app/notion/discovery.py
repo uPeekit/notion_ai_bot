@@ -50,6 +50,7 @@ class Discovery:
         self._ttl = timedelta(seconds=ttl_s)
         self._clock = clock
         self._last: WorkspaceSnapshot | None = None
+        self._force = False
         self._lock = asyncio.Lock()
 
     @property
@@ -57,20 +58,29 @@ class Discovery:
         return self._last
 
     def invalidate(self) -> None:
-        self._last = None
+        self._force = True
 
     async def get(self) -> WorkspaceSnapshot:
         async with self._lock:
             now = self._clock()
-            if self._last and now - self._last.fetched_at < self._ttl:
+            needs_refresh = (
+                self._last is None
+                or self._force
+                or now - self._last.fetched_at >= self._ttl
+            )
+            if not needs_refresh:
                 return self._last
             try:
-                return await self._refresh_locked()
-            except NotionError as e:
+                snap = await self._refresh_locked()
+            except Exception as e:
                 if self._last and now - self._last.fetched_at < STALE_MAX:
-                    log.warning("discovery failed (%s); using stale snapshot", e.code)
+                    log.warning(
+                        "discovery failed (%s); using stale snapshot", type(e).__name__
+                    )
                     return self._last
                 raise
+            self._force = False
+            return snap
 
     async def refresh(self) -> WorkspaceSnapshot:
         async with self._lock:
@@ -190,7 +200,8 @@ class Discovery:
                 field_names[prop["id"]] = pname
             items = [
                 Item(id=r["id"], title=props.page_title(r), hint=props.item_hint(r),
-                     last_edited=_parse_time(r.get("last_edited_time")))
+                     last_edited=_parse_time(r.get("last_edited_time")),
+                     url=r.get("url", ""))
                 for r in items_by_ds.get(ds_id, [])
             ]
             discovered[ds_id] = (name, field_names)
@@ -214,7 +225,8 @@ class Discovery:
                 children.get(pid, []), key=lambda c: c.get("last_edited_time", ""), reverse=True
             )
             items = [Item(id=c["id"], title=titles[c["id"]], hint=None,
-                          last_edited=_parse_time(c.get("last_edited_time")))
+                          last_edited=_parse_time(c.get("last_edited_time")),
+                          url=c.get("url", ""))
                      for c in kids[: self._items_per_target]]
             discovered[pid] = (name, {})
             targets.append(Target(

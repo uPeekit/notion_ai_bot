@@ -30,6 +30,7 @@ class Item:
     title: str
     hint: str | None
     last_edited: datetime
+    url: str
 
 
 @dataclass(frozen=True)
