@@ -20,3 +20,4 @@ Follow `documentation/NOTION_SETUP.md` (personal access token, 2 minutes). Put t
 ## Development
 - `uv run pytest -q`
 - `uv run ruff check .`
+- Releases & updates: see [RELEASE.md](RELEASE.md).
