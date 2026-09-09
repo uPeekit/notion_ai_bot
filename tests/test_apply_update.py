@@ -147,7 +147,8 @@ def test_prune_never_escapes_root(tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     bad_abs = "C:/outside.txt" if os.name == "nt" else "/etc/passwd"
-    removed = au.prune_removed(prod, ["../outside.txt", bad_abs], [])
+    removed = au.prune_removed(prod, ["../outside.txt", bad_abs, "/outside.txt", "\\outside.txt"],
+                                [])
     assert removed == []
     assert outside.exists()
 
@@ -167,3 +168,17 @@ def test_backup_on_bare_root_does_not_crash(tmp_path):
     dest = au.backup_app_layer(root, "0.0.0")
     assert dest == root / ".backup" / "0.0.0"
     assert dest.exists()
+
+
+@pytest.mark.parametrize(
+    "rel", ["/x", "\\x", "C:/x", "C:\\x", "a/../b", "../a", "", "//host/share/x"]
+)
+def test_safe_rel_rejects(rel):
+    assert au._safe_rel(rel) is False
+
+
+@pytest.mark.parametrize(
+    "rel", ["app/a.py", "deploy/run.ps1", "VERSION", "migrations/0001_initial.sql"]
+)
+def test_safe_rel_accepts(rel):
+    assert au._safe_rel(rel) is True

@@ -73,9 +73,11 @@ def _protected(rel: str) -> bool:
 
 
 def _safe_rel(rel: str) -> bool:
-    """Reject archive/manifest paths that are absolute, carry a drive, or climb out via '..'."""
+    """Reject paths that are absolute, carry a drive/root, or climb out of root via '..'."""
     p = Path(rel)
-    return not (p.is_absolute() or p.drive or ".." in p.parts)
+    if p.is_absolute() or p.drive or p.root or ".." in p.parts:
+        return False
+    return bool(rel) and not rel.startswith(("/", "\\"))
 
 
 def backup_app_layer(root: Path, version: str) -> Path:
