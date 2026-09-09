@@ -102,6 +102,26 @@ def test_failed_migration_is_atomic(tmp_path, mig):
         assert c.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 2
 
 
+@pytest.mark.parametrize("sql", [
+    "BEGIN; CREATE TABLE q (id INTEGER); COMMIT;",
+    "CREATE TABLE q (id INTEGER); VACUUM;",
+    "create table q (id integer);\ncommit;",
+])
+def test_discover_rejects_transaction_control(mig, sql):
+    write(mig, "0003_bad.sql", sql)
+    with pytest.raises(MigrationError, match="transaction control"):
+        discover(mig)
+
+
+def test_discover_allows_tokens_in_comments_and_identifiers(mig):
+    write(
+        mig, "0003_ok.sql",
+        "-- we do not BEGIN here\n"
+        "CREATE TABLE commit_log (id INTEGER, begin_at TEXT);",
+    )
+    assert [m.version for m in discover(mig)] == [1, 2, 3]
+
+
 def test_real_initial_migration_matches_store(tmp_path):
     db = tmp_path / "bot.sqlite"
     r = apply(db, MIGRATIONS_DIR, backup=False)

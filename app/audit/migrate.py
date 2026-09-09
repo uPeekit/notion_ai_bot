@@ -1,3 +1,10 @@
+"""SQLite migration runner.
+
+Migration files must not manage transactions (BEGIN/COMMIT/ROLLBACK/END) or run VACUUM —
+each migration is wrapped in its own transaction by the runner, and a migration that manages
+its own transaction defeats that atomicity guarantee.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,6 +25,21 @@ JOURNAL = (
     "version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, "
     "applied_at TEXT NOT NULL)"
 )
+_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
+_TXN_TOKEN = re.compile(r"\b(BEGIN|COMMIT|ROLLBACK|VACUUM)\b", re.IGNORECASE)
+_END_TOKEN = re.compile(r"\bEND\s+TRANSACTION\b|\bEND\s*;", re.IGNORECASE)
+
+
+def _check_no_transaction_control(sql: str, filename: str) -> None:
+    stripped = _COMMENT.sub(" ", sql)
+    m = _TXN_TOKEN.search(stripped)
+    token = m.group(1).upper() if m else None
+    if not token and _END_TOKEN.search(stripped):
+        token = "END"
+    if token:
+        raise MigrationError(
+            f"migration {filename} must not contain transaction control or VACUUM: {token}"
+        )
 
 
 class MigrationError(Exception):
@@ -54,6 +76,7 @@ def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
         if version in found:
             raise MigrationError(f"duplicate migration version {version}: {p.name}")
         sql = p.read_text(encoding="utf-8")
+        _check_no_transaction_control(sql, p.name)
         found[version] = Migration(version, name, p, sql, hashlib.sha256(sql.encode()).hexdigest())
     return [found[v] for v in sorted(found)]
 
