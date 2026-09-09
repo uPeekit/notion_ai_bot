@@ -19,10 +19,11 @@ ROOT = Path(__file__).resolve().parent
 INCLUDE_GLOBS = [
     "app/**/*.py", "tools/**/*.py", "migrations/*.sql", "deploy/*.ps1",
     "apply_update.py", "pyproject.toml", "uv.lock", ".env.example", "README.md", "RELEASE.md",
-    "documentation/NOTION_SETUP.md",
+    "documentation/NOTION_SETUP.md", ".python-version",
 ]
 APP_PREFIXES = ("app/", "tools/", "migrations/", "deploy/", "apply_update.py", "pyproject.toml")
 Kind = Literal["patch", "full"]
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def uv_exe() -> str:
@@ -33,11 +34,15 @@ def sha256_file(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def bump(version: str, kind: Kind) -> str:
-    parts = version.split(".")
-    if len(parts) != 3 or not all(x.isdigit() for x in parts):
+def parse_version(version: str) -> tuple[int, int, int]:
+    if not _VERSION_RE.fullmatch(version):
         raise ValueError(f"bad version {version!r}")
-    major, minor, patch = (int(x) for x in parts)
+    major, minor, patch = (int(x) for x in version.split("."))
+    return major, minor, patch
+
+
+def bump(version: str, kind: Kind) -> str:
+    major, minor, patch = parse_version(version)
     return f"{major}.{minor + 1}.0" if kind == "full" else f"{major}.{minor}.{patch + 1}"
 
 
@@ -109,15 +114,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", type=Path, default=ROOT / "dist")
     a = ap.parse_args(argv)
 
-    if git("status", "--porcelain") and not a.allow_dirty:
-        print("working tree is dirty; commit first or pass --allow-dirty", file=sys.stderr)
-        return 1
-
     from app.version import read_pyproject_version
 
     current = read_pyproject_version(ROOT / "pyproject.toml")
     tag = last_tag()
     if a.set_version:
+        try:
+            parse_version(a.set_version)
+        except ValueError:
+            print(f"invalid --set-version {a.set_version!r}; expected MAJOR.MINOR.PATCH",
+                  file=sys.stderr)
+            return 1
         version, kind = a.set_version, "full"
     elif a.auto:
         changed = git("diff", "--name-only", f"{tag}..HEAD").splitlines() if tag else ["uv.lock"]
@@ -131,14 +138,23 @@ def main(argv: list[str] | None = None) -> int:
         version = bump(current, kind)
 
     print(f"release {current} -> {version} ({kind}); last tag {tag}")
+    dirty = bool(git("status", "--porcelain"))
     if a.dry_run:
+        if dirty:
+            print("note: working tree is dirty")
         return 0
+    if dirty and not a.allow_dirty:
+        print("working tree is dirty; commit first or pass --allow-dirty", file=sys.stderr)
+        return 1
     if not a.skip_tests:
         subprocess.run([uv_exe(), "run", "pytest", "-q"], cwd=ROOT, check=True)
         subprocess.run([uv_exe(), "run", "ruff", "check", "."], cwd=ROOT, check=True)
 
     set_pyproject_version(ROOT / "pyproject.toml", version)
-    subprocess.run([uv_exe(), "lock", "--offline"], cwd=ROOT, check=False, capture_output=True)
+    lock_result = subprocess.run([uv_exe(), "lock", "--offline"], cwd=ROOT, check=False,
+                                  capture_output=True, text=True)
+    if lock_result.returncode != 0:
+        print(f"warning: uv lock failed: {lock_result.stderr}", file=sys.stderr)
     git("add", "pyproject.toml", "uv.lock")
     git("commit", "-m", f"release: v{version}")
     if not a.no_tag:

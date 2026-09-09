@@ -14,6 +14,12 @@ def test_bump():
         release.bump("1.2", "patch")
 
 
+def test_parse_version():
+    assert release.parse_version("1.2.3") == (1, 2, 3)
+    with pytest.raises(ValueError):
+        release.parse_version("1.2")
+
+
 def test_classify_changes():
     assert release.classify_changes(["uv.lock", "app/x.py"]) == "full"
     assert release.classify_changes(["app/x.py"]) == "patch"
@@ -31,6 +37,7 @@ def fake_repo(tmp_path):
         ".env.example": "X=",
         "README.md": "r",
         "RELEASE.md": "rel",
+        ".python-version": "3.12\n",
         "apply_update.py": "print(1)",
         "app/__init__.py": "",
         "app/a.py": "A=1",
@@ -53,6 +60,7 @@ def test_collect_files_includes_only_shippable(fake_repo):
     files = {str(p).replace("\\", "/") for p in release.collect_files(fake_repo)}
     assert "app/a.py" in files and "migrations/0001_initial.sql" in files
     assert "deploy/run.ps1" in files and "apply_update.py" in files and "uv.lock" in files
+    assert ".python-version" in files
     assert not any(f.startswith(("tests/", "data/")) for f in files)
     assert ".env" not in files and "app/__pycache__/a.cpython-312.pyc" not in files
 
