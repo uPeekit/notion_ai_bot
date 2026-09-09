@@ -10,6 +10,7 @@ from app.notion.errors import NotionError, NotionUnavailable
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://api.notion.com/v1"
+MAX_RETRY_AFTER_S = 30.0
 
 
 class DirectNotionProvider:
@@ -46,31 +47,37 @@ class DirectNotionProvider:
     # ---- low level -------------------------------------------------------
 
     async def _request(self, method: str, path: str, json: dict | None = None) -> dict:
-        attempt = 0
+        attempt_net = 0
+        attempt_429 = 0
+        attempt_5xx = 0
         while True:
             try:
                 resp = await self._client.request(method, path, json=json)
             except httpx.HTTPError as e:
-                if attempt >= self._max_retries:
+                if method == "POST" or attempt_net >= self._max_retries:
                     raise NotionUnavailable(f"network error: {type(e).__name__}") from None
-                attempt += 1
-                await asyncio.sleep(min(2.0**attempt, 8.0))
+                attempt_net += 1
+                await asyncio.sleep(min(2.0**attempt_net, 8.0))
                 continue
 
             if resp.status_code < 400:
                 return resp.json() if resp.content else {}
 
-            if resp.status_code == 429 and attempt < self._max_retries:
-                attempt += 1
-                delay = float(resp.headers.get("Retry-After", "1"))
-                log.warning("notion 429, retry %d in %.1fs", attempt, delay)
+            if resp.status_code == 429 and attempt_429 < self._max_retries:
+                attempt_429 += 1
+                raw = resp.headers.get("Retry-After", "1")
+                try:
+                    delay = min(float(raw), MAX_RETRY_AFTER_S)
+                except ValueError:  # HTTP-date form
+                    delay = min(2.0**attempt_429, 8.0)
+                log.warning("notion 429, retry %d in %.1fs", attempt_429, delay)
                 await asyncio.sleep(delay)
                 continue
 
             if resp.status_code >= 500:
-                if attempt < min(self._max_retries, 2):
-                    attempt += 1
-                    await asyncio.sleep(min(2.0**attempt, 8.0))
+                if method != "POST" and attempt_5xx < min(self._max_retries, 2):
+                    attempt_5xx += 1
+                    await asyncio.sleep(min(2.0**attempt_5xx, 8.0))
                     continue
                 raise NotionUnavailable(f"server error {resp.status_code}")
 

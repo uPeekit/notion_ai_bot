@@ -162,3 +162,137 @@ async def test_5xx_and_network_become_unavailable(monkeypatch):
     async with make(boom) as p:
         with pytest.raises(NotionUnavailable):
             await p.get_page("pg")
+
+
+async def test_retry_after_http_date_falls_back_to_backoff(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+
+    def handler(req):
+        n["i"] += 1
+        if n["i"] < 3:
+            return httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+                                  json={"code": "rate_limited", "message": "slow"})
+        return httpx.Response(200, json={"id": "ok"})
+
+    async with make(handler) as p:
+        assert (await p.get_page("pg"))["id"] == "ok"
+    assert sleeps == [2.0, 4.0]
+
+
+async def test_retry_after_is_clamped(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+
+    def handler(req):
+        n["i"] += 1
+        if n["i"] < 2:
+            return httpx.Response(429, headers={"Retry-After": "3600"},
+                                  json={"code": "rate_limited", "message": "slow"})
+        return httpx.Response(200, json={"id": "ok"})
+
+    async with make(handler) as p:
+        assert (await p.get_page("pg"))["id"] == "ok"
+    assert sleeps == [30.0]
+
+
+async def test_5xx_retries_exactly_twice(monkeypatch):
+    async def fake_sleep(s):
+        pass
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+
+    def handler(req):
+        n["i"] += 1
+        return httpx.Response(502, text="bad gateway")
+
+    async with make(handler) as p:
+        with pytest.raises(NotionUnavailable):
+            await p.get_page("pg")
+    assert n["i"] == 3
+
+
+async def test_429_does_not_consume_5xx_budget(monkeypatch):
+    async def fake_sleep(s):
+        pass
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+    codes = [429, 502, 502, 200]
+
+    def handler(req):
+        code = codes[n["i"]]
+        n["i"] += 1
+        if code == 200:
+            return httpx.Response(200, json={"id": "ok"})
+        if code == 429:
+            return httpx.Response(429, json={"code": "rate_limited", "message": "slow"})
+        return httpx.Response(502, text="bad gateway")
+
+    async with make(handler) as p:
+        assert (await p.get_page("pg"))["id"] == "ok"
+    assert n["i"] == 4
+
+
+async def test_post_not_retried_on_network_error(monkeypatch):
+    async def fake_sleep(s):
+        pass
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+
+    def boom(req):
+        n["i"] += 1
+        raise httpx.ConnectError("no route")
+
+    async with make(boom) as p:
+        with pytest.raises(NotionUnavailable):
+            await p.create_page({"type": "data_source_id", "data_source_id": "ds"}, {"T": {}})
+    assert n["i"] == 1
+
+
+async def test_post_not_retried_on_5xx(monkeypatch):
+    async def fake_sleep(s):
+        pass
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+
+    def handler(req):
+        n["i"] += 1
+        return httpx.Response(502, text="bad gateway")
+
+    async with make(handler) as p:
+        with pytest.raises(NotionUnavailable):
+            await p.create_page({"type": "data_source_id", "data_source_id": "ds"}, {"T": {}})
+    assert n["i"] == 1
+
+
+async def test_post_still_retried_on_429(monkeypatch):
+    async def fake_sleep(s):
+        pass
+
+    monkeypatch.setattr("app.notion.direct.asyncio.sleep", fake_sleep)
+    n = {"i": 0}
+
+    def handler(req):
+        n["i"] += 1
+        if n["i"] < 2:
+            return httpx.Response(429, json={"code": "rate_limited", "message": "slow"})
+        return httpx.Response(200, json={"id": "new-page"})
+
+    async with make(handler) as p:
+        res = await p.create_page({"type": "data_source_id", "data_source_id": "ds"}, {"T": {}})
+    assert res["id"] == "new-page"
+    assert n["i"] == 2
