@@ -268,7 +268,7 @@ Tables: `events` (one row per handled message, per spec §27), `sessions` (pendi
 
 ## 13. Model selection
 
-Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `qwen3:8b` (default, `think: false`), `qwen2.5:7b-instruct`, `llama3.1:8b`, `gemma3:4b` (fast fallback). `mistral-nemo:12b` and `gemma3:12b` only with CPU offload. `tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each and reports schema-validity rate, target accuracy, field accuracy, p50/p95 latency. `LLM_NUM_CTX=16384` default.
+Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `llama3.1:8b` (default; benchmark winner, see [BENCHMARK.md](BENCHMARK.md)), `qwen3:8b` (runner-up, `think: false`), `qwen2.5:7b-instruct`, `gemma3:4b` (fast fallback). `mistral-nemo:12b` and `gemma3:12b` only with CPU offload. `tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each and reports schema-validity rate, target accuracy, field accuracy, p50/p95 latency. `LLM_NUM_CTX=16384` default.
 
 ## 14. Security boundaries
 

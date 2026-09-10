@@ -198,7 +198,7 @@ Secrets are never written. `llm_context` contains keys, not Notion ids.
 | `NOTION_TOKEN` | required | internal integration secret |
 | `NOTION_VERSION` | `2025-09-03` | |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | point at remote host later |
-| `LLM_MODEL` | `qwen3:8b` | |
+| `LLM_MODEL` | `llama3.1:8b` | |
 | `LLM_TEMPERATURE` | `0` | |
 | `LLM_NUM_CTX` | `16384` | |
 | `LLM_TIMEOUT_S` | `120` | |
