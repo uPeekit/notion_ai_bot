@@ -18,6 +18,7 @@ Follow `documentation/NOTION_SETUP.md` (personal access token, 2 minutes). Put t
 2. Get your numeric user id (e.g. from @userinfobot) → `TELEGRAM_ALLOWED_USER_IDS`.
 
 ## Development
+- Release with a double-click: `release.cmd` (see `RELEASE.md`).
 - `uv run pytest -q`
 - `uv run ruff check .`
 - Releases & updates: see [RELEASE.md](RELEASE.md).

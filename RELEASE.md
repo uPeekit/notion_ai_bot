@@ -1,5 +1,13 @@
 # Release, install, update
 
+## Quick way (double-click)
+
+- `release.cmd` in the repo root: shows current version and what `--auto` would do, asks kind / dry run / skip tests with defaults, runs `release.py`, then offers to push and to update (or freshly install) the production directory. Answers are remembered in `%USERPROFILE%\.notion_ai_bot\wizard.json`.
+- `update.cmd` in the production install root: shows installed version and schema state, then a menu: update (default zip = newest `notion_ai_bot-*.zip` in the repo `dist/` or Downloads; a dry run is shown before confirming), dry run only, roll back, quit.
+
+Every wizard prints the exact command it runs, so the manual commands below stay discoverable.
+
+
 ## Versioning rule
 
 `pyproject.toml`'s `[project].version` (`MAJOR.MINOR.PATCH`) is the single source of truth; `app.version.get_version()` reads it (or a shipped `VERSION` file, if present, which takes priority). `release.py` bumps it:

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 INCLUDE_GLOBS = [
     "app/**/*.py", "tools/**/*.py", "migrations/*.sql", "deploy/*.ps1",
     "apply_update.py", "pyproject.toml", "uv.lock", ".env.example", "README.md", "RELEASE.md",
-    "documentation/NOTION_SETUP.md", ".python-version",
+    "documentation/NOTION_SETUP.md", ".python-version", "update.cmd",
 ]
 APP_PREFIXES = ("app/", "tools/", "migrations/", "deploy/", "apply_update.py", "pyproject.toml")
 Kind = Literal["patch", "full"]
