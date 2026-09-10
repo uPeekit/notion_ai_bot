@@ -16,7 +16,7 @@ def test_system_prompt_mentions_rules():
     for needle in ("not_mentioned", "ambiguous", "explicit_null", "item_candidates", "search_query",
                    "только ключи", "YYYY-MM-DD", "никогда через ambiguous",
                    "независимо от того, обязательное",
-                   "блок calendar", "понедельник следующей недели"):
+                   "блок calendar", "понедельник следующей недели", "Примеры"):
         assert needle in SYSTEM_PROMPT
 
 
