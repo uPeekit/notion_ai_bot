@@ -172,7 +172,7 @@ async def test_no_undo_when_append_returns_no_block_ids(fake):
     assert r.undo is None and r.block_ids == []
 
 
-async def test_partial_capture_is_flagged(fake):
+async def test_mapper_dropped_property_does_not_flag_partial(fake):
     fake.pages["p1"] = {
         "id": "p1",
         "properties": {
@@ -195,8 +195,45 @@ async def test_partial_capture_is_flagged(fake):
             ],
         )
     )
-    assert r.undo.partial is True and r.undo.properties == {"done": {"checkbox": False}}
-    assert [w.name for w in r.written] == ["Куплено"]  # formula dropped by the mapper
+    assert r.undo.partial is False  # formula was never written
+    assert r.undo.properties == {"done": {"checkbox": False}}
+    assert [w.name for w in r.written] == ["Куплено"]
+
+
+async def test_uncapturable_written_property_flags_partial(fake):
+    # page lacks the "shop" property entirely, so its previous value cannot be captured
+    fake.pages["p1"] = {
+        "id": "p1",
+        "properties": {"Куплено": {"id": "done", "type": "checkbox", "checkbox": False}},
+    }
+    r = await Executor(fake).run(
+        UpdateItem(
+            page_id="p1",
+            target_name="x",
+            item_title="y",
+            properties=[
+                pw("done", "Куплено", "checkbox", True),
+                pw("shop", "Магазин", "select", {"id": "o1", "name": "Rimi"}),
+            ],
+        )
+    )
+    assert r.undo.partial is True
+    assert r.undo.properties == {"done": {"checkbox": False}}
+    assert [w.name for w in r.written] == ["Куплено", "Магазин"]
+
+
+async def test_create_item_written_excludes_mapper_dropped(fake):
+    r = await Executor(fake).run(
+        CreateItem(
+            data_source_id="ds",
+            target_name="x",
+            properties=[
+                pw("title", "Название", "title", "Молоко"),
+                pw("fx", "Формула", "formula", 1),
+            ],
+        )
+    )
+    assert [w.name for w in r.written] == ["Название"]
 
 
 async def test_notion_errors_propagate(fake):

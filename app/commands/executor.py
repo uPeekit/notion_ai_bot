@@ -102,7 +102,7 @@ class Executor:
                     kind="restore",
                     page_id=cmd.page_id,
                     properties=previous,
-                    partial=bool(wanted - previous.keys()),
+                    partial=bool(set(payload) - previous.keys()),
                 ),
             )
         if isinstance(cmd, CreatePage):
