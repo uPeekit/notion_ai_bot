@@ -72,9 +72,12 @@ def read_to_write(prop: dict) -> dict | None:
     t = prop.get("type")
     v = prop.get(t) if t else None
     if t in ("title", "rich_text"):
+        # Restore keeps plain text only: undo does not restore bold/italic/links.
         return {t: _rich("".join(r.get("plain_text", "") for r in (v or [])))}
-    if t in ("select", "status"):
-        return {t: {"id": v["id"]} if v else None}
+    if t == "select":
+        return {"select": {"id": v["id"]} if v else None}
+    if t == "status":
+        return {"status": {"id": v["id"]}} if v else None
     if t in ("multi_select", "relation"):
         return {t: [{"id": x["id"]} for x in (v or [])]}
     if t == "date":

@@ -41,12 +41,10 @@ def to_json_value(v: Any) -> Any:
     return v
 
 
-def _writes(c: VCandidate, *, include_title: bool = True) -> list[PropertyWrite]:
+def _writes(c: VCandidate) -> list[PropertyWrite]:
     out: list[PropertyWrite] = []
     for f in c.fields.values():
         if f.field.id == PAGE_TITLE_FIELD_ID or f.status not in ("value", "explicit_null"):
-            continue
-        if f.field.type == "title" and not include_title:
             continue
         out.append(PropertyWrite(property_id=f.field.id, property_name=f.field.name,
                                  type=f.field.type,

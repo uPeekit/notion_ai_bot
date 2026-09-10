@@ -94,3 +94,8 @@ def test_read_to_write_roundtrip_shapes():
     assert read_to_write({"type": "url", "url": "https://x"}) == {"url": "https://x"}
     assert read_to_write({"type": "formula", "formula": {}}) is None
     assert read_to_write({"type": "rich_text", "rich_text": []}) == {"rich_text": []}
+
+
+def test_read_to_write_status_unset_is_skipped():
+    assert read_to_write({"type": "status", "status": None}) is None
+    assert read_to_write({"type": "select", "select": None}) == {"select": None}
