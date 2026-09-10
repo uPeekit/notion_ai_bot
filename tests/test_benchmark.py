@@ -151,6 +151,15 @@ def test_score_case_safe_ok_deferred_vs_confidently_wrong_value():
     assert s.wrong == 1
 
 
+def test_score_case_scalar_expected_matches_single_item_list_field():
+    # relation/multi_select fields resolve to a list even when only one value is set; a case
+    # written with a bare scalar expectation ("Работа") must still match ["Работа"].
+    case = {"id": "rel", "text": "", "intent": "create", "target": "Задачи",
+            "fields": {"Проект": "Работа"}}
+    i = interp(target="t3", fields={"t3.f5": val(["t3.f5.o2"])})
+    assert score_case(case, i, ctx()).fields_ok
+
+
 def test_score_case_statuses_only_wrong_and_safe():
     # model returns a confident value where only not_mentioned was allowed -> wrong (unsafe)
     case_wrong = {"id": "sw", "text": "", "intent": "create", "target": "Задачи",

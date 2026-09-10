@@ -95,6 +95,8 @@ def _match(expected: Any, actual: Any) -> bool:
         return isinstance(actual, int | float) and float(actual) == float(expected)
     if isinstance(expected, list):
         return isinstance(actual, list) and sorted(map(str, actual)) == sorted(map(str, expected))
+    if isinstance(actual, list):  # scalar expectation on a list field (e.g. single relation value)
+        return sorted(map(str, actual)) == sorted(map(str, [expected]))
     if isinstance(actual, dict) and "start" in actual:  # date
         return str(actual["start"]).startswith(str(expected))
     return str(actual).strip().casefold() == str(expected).strip().casefold()
@@ -240,7 +242,9 @@ def render_table(summaries: list[Summary]) -> str:
 
 async def main_async(a: argparse.Namespace) -> int:
     cases = load_cases(a.cases)
-    ctx = ContextBuilder("Europe/Tallinn").build(sample_snapshot(), now=SAMPLE_NOW)
+    ctx = ContextBuilder("Europe/Tallinn", items_per_target=a.items_per_target).build(
+        sample_snapshot(), now=SAMPLE_NOW
+    )
     schema = build_schema(ctx)
     summaries: list[Summary] = []
     failures: dict[str, list[CaseResult]] = {}
@@ -256,7 +260,8 @@ async def main_async(a: argparse.Namespace) -> int:
     if a.write:
         lines = [f"# LLM benchmark — {datetime.now(UTC).date().isoformat()}", "",
                  f"Cases: `{a.cases}` ({len(cases)}), context: `tools/sample_workspace.py`, "
-                 f"num_ctx={a.num_ctx}, temperature=0.", "", table, ""]
+                 f"num_ctx={a.num_ctx}, items_per_target={a.items_per_target}, temperature=0.",
+                 "", table, ""]
         for model, fails in failures.items():
             lines.append(f"## {model} failures ({len(fails)})")
             lines.extend(f"- `{r.id}`: {r.error}" for r in fails)
@@ -273,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--ollama", default="http://127.0.0.1:11434")
     ap.add_argument("--num-ctx", type=int, default=16384)
+    ap.add_argument("--items-per-target", type=int, default=15)
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--write", type=Path)
     return asyncio.run(main_async(ap.parse_args(argv)))
