@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     notion_version: str = "2025-09-03"
 
     ollama_base_url: str = "http://127.0.0.1:11434"
-    llm_model: str = "llama3.1:8b"
+    llm_model: str = "qwen3:8b"
     llm_temperature: float = 0.0
     llm_num_ctx: int = 16384
     llm_timeout_s: float = 120.0

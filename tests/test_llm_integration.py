@@ -25,8 +25,8 @@ def _model() -> str:
         try:
             return Settings().llm_model
         except Exception:
-            return "llama3.1:8b"
-    return "llama3.1:8b"
+            return "qwen3:8b"
+    return "qwen3:8b"
 
 
 MODEL = _model()
