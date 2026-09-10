@@ -40,6 +40,7 @@ class CaseResult:
     safe_ok: bool
     ms: int
     error: str
+    wrong_value: bool
 
 
 @dataclass
@@ -160,6 +161,8 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
         if fv is None or fv.status not in allowed:
             fields_ok = False
             errors.append(f"{fname}.status {getattr(fv, 'status', None)} not in {allowed}")
+            status = getattr(fv, "status", None)
+            field_failures_safe.append(status in ("ambiguous", "not_mentioned"))
     for fname, limit in case.get("max_confidence", {}).items():
         fk = _key_by_name(ctx, "field", fname, tk)
         fv = best.fields.get(fk) if fk else None
@@ -175,9 +178,10 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
 
     all_ok = intent_ok and target_ok and item_ok and fields_ok and candidates_ok
     safe_ok = all_ok or (intent_ok and target_ok and all(field_failures_safe))
+    wrong_value = any(not safe for safe in field_failures_safe)
     return CaseResult(
         case["id"], True, intent_ok, target_ok, item_ok, fields_ok, all_ok, safe_ok, 0,
-        "; ".join(errors),
+        "; ".join(errors), wrong_value,
     )
 
 
@@ -193,7 +197,7 @@ def summarize(model: str, results: list[CaseResult]) -> Summary:
         fields=sum(r.fields_ok for r in results) / n,
         all=sum(r.all_ok for r in results) / n,
         safe=sum(r.safe_ok for r in results) / n,
-        wrong=sum(1 for r in results if not r.fields_ok and not r.safe_ok),
+        wrong=sum(1 for r in results if r.wrong_value),
         p50_ms=int(statistics.median(times)), p95_ms=int(p95),
     )
 
@@ -207,7 +211,8 @@ async def run_model(client: OllamaClient, cases: list[dict], ctx: Context, schem
         except LLMError as e:
             out.append(
                 CaseResult(
-                    case["id"], False, False, False, False, False, False, False, 0, str(e)[:200]
+                    case["id"], False, False, False, False, False, False, False, 0,
+                    str(e)[:200], False,
                 )
             )
             print(f"  {case['id']:<24} INVALID {str(e)[:80]}", flush=True)

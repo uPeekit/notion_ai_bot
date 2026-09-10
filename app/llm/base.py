@@ -41,7 +41,6 @@ class LLMTrace:
     prompt_tokens: int | None = None
     output_tokens: int | None = None
     done_reason: str | None = None
-    truncated: bool = False
 
 
 class LLMClient(Protocol):

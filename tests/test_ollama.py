@@ -187,7 +187,7 @@ async def test_trace_carries_token_counts(ctx):
     async with make(handler) as c:
         interp, trace = await c.interpret("x", ctx, build_schema(ctx))
     assert trace.prompt_tokens == 500 and trace.output_tokens == 120
-    assert trace.done_reason == "stop" and trace.truncated is False
+    assert trace.done_reason == "stop"
 
 
 async def test_non_json_response_raises_unavailable(ctx):
