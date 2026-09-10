@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.llm.context import PAGE_TITLE_FIELD_ID, ContextBuilder
+from app.llm.context import PAGE_TITLE_FIELD_ID, ContextBuilder, build_calendar
 from tools.sample_workspace import SAMPLE_NOW, sample_snapshot
 
 
@@ -17,6 +17,7 @@ def test_keys_and_payload_shape():
     p = ctx.payload
     assert p["now"] == "2026-09-09T18:00+03:00"
     assert p["tz"] == "Europe/Tallinn" and p["weekday"] == "среда"
+    assert p["calendar"]["сегодня"] == "2026-09-09 (среда)"
     assert [t["key"] for t in p["targets"]] == ["t1", "t2", "t3", "t4", "t5"]
     buy = p["targets"][1]
     assert buy["name"] == "Покупки" and buy["kind"] == "database" and buy["path"] == "Дом / Покупки"
@@ -93,3 +94,25 @@ def test_json_is_compact_and_unicode():
     s = ctx.json()
     assert '"name":"Покупки"' in s and "\\u" not in s
     assert json.loads(s)["targets"][0]["name"] == "Дом"
+
+
+def test_build_calendar_wednesday():
+    cal = build_calendar(SAMPLE_NOW)  # 2026-09-09 is a Wednesday
+    assert cal["сегодня"] == "2026-09-09 (среда)"
+    assert cal["завтра"] == "2026-09-10 (четверг)"
+    assert cal["послезавтра"] == "2026-09-11 (пятница)"
+    assert cal["ближайшие дни"] == {
+        "четверг": "2026-09-10", "пятница": "2026-09-11", "суббота": "2026-09-12",
+        "воскресенье": "2026-09-13", "понедельник": "2026-09-14", "вторник": "2026-09-15",
+        "среда": "2026-09-16",
+    }
+    assert cal["через неделю"] == "2026-09-16"
+    assert cal["через две недели"] == "2026-09-23"
+    assert cal["следующая неделя"] == "2026-09-14 … 2026-09-20"
+
+
+def test_build_calendar_sunday_next_week_starts_tomorrow():
+    sunday = datetime(2026, 9, 13, 12, tzinfo=ZoneInfo("Europe/Tallinn"))  # Sunday
+    cal = build_calendar(sunday)
+    assert cal["завтра"] == "2026-09-14 (понедельник)"
+    assert cal["следующая неделя"] == "2026-09-14 … 2026-09-20"
