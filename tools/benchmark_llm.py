@@ -40,6 +40,7 @@ class CaseResult:
     safe_ok: bool
     ms: int
     error: str
+    wrong_value: bool
 
 
 @dataclass
@@ -94,6 +95,8 @@ def _match(expected: Any, actual: Any) -> bool:
         return isinstance(actual, int | float) and float(actual) == float(expected)
     if isinstance(expected, list):
         return isinstance(actual, list) and sorted(map(str, actual)) == sorted(map(str, expected))
+    if isinstance(actual, list):  # scalar expectation on a list field (e.g. single relation value)
+        return sorted(map(str, actual)) == sorted(map(str, [expected]))
     if isinstance(actual, dict) and "start" in actual:  # date
         return str(actual["start"]).startswith(str(expected))
     return str(actual).strip().casefold() == str(expected).strip().casefold()
@@ -160,6 +163,8 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
         if fv is None or fv.status not in allowed:
             fields_ok = False
             errors.append(f"{fname}.status {getattr(fv, 'status', None)} not in {allowed}")
+            status = getattr(fv, "status", None)
+            field_failures_safe.append(status in ("ambiguous", "not_mentioned"))
     for fname, limit in case.get("max_confidence", {}).items():
         fk = _key_by_name(ctx, "field", fname, tk)
         fv = best.fields.get(fk) if fk else None
@@ -175,9 +180,10 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
 
     all_ok = intent_ok and target_ok and item_ok and fields_ok and candidates_ok
     safe_ok = all_ok or (intent_ok and target_ok and all(field_failures_safe))
+    wrong_value = any(not safe for safe in field_failures_safe)
     return CaseResult(
         case["id"], True, intent_ok, target_ok, item_ok, fields_ok, all_ok, safe_ok, 0,
-        "; ".join(errors),
+        "; ".join(errors), wrong_value,
     )
 
 
@@ -193,7 +199,7 @@ def summarize(model: str, results: list[CaseResult]) -> Summary:
         fields=sum(r.fields_ok for r in results) / n,
         all=sum(r.all_ok for r in results) / n,
         safe=sum(r.safe_ok for r in results) / n,
-        wrong=sum(1 for r in results if not r.fields_ok and not r.safe_ok),
+        wrong=sum(1 for r in results if r.wrong_value),
         p50_ms=int(statistics.median(times)), p95_ms=int(p95),
     )
 
@@ -207,7 +213,8 @@ async def run_model(client: OllamaClient, cases: list[dict], ctx: Context, schem
         except LLMError as e:
             out.append(
                 CaseResult(
-                    case["id"], False, False, False, False, False, False, False, 0, str(e)[:200]
+                    case["id"], False, False, False, False, False, False, False, 0,
+                    str(e)[:200], False,
                 )
             )
             print(f"  {case['id']:<24} INVALID {str(e)[:80]}", flush=True)
@@ -235,7 +242,9 @@ def render_table(summaries: list[Summary]) -> str:
 
 async def main_async(a: argparse.Namespace) -> int:
     cases = load_cases(a.cases)
-    ctx = ContextBuilder("Europe/Tallinn").build(sample_snapshot(), now=SAMPLE_NOW)
+    ctx = ContextBuilder("Europe/Tallinn", items_per_target=a.items_per_target).build(
+        sample_snapshot(), now=SAMPLE_NOW
+    )
     schema = build_schema(ctx)
     summaries: list[Summary] = []
     failures: dict[str, list[CaseResult]] = {}
@@ -251,7 +260,8 @@ async def main_async(a: argparse.Namespace) -> int:
     if a.write:
         lines = [f"# LLM benchmark — {datetime.now(UTC).date().isoformat()}", "",
                  f"Cases: `{a.cases}` ({len(cases)}), context: `tools/sample_workspace.py`, "
-                 f"num_ctx={a.num_ctx}, temperature=0.", "", table, ""]
+                 f"num_ctx={a.num_ctx}, items_per_target={a.items_per_target}, temperature=0.",
+                 "", table, ""]
         for model, fails in failures.items():
             lines.append(f"## {model} failures ({len(fails)})")
             lines.extend(f"- `{r.id}`: {r.error}" for r in fails)
@@ -268,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--ollama", default="http://127.0.0.1:11434")
     ap.add_argument("--num-ctx", type=int, default=16384)
+    ap.add_argument("--items-per-target", type=int, default=15)
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--write", type=Path)
     return asyncio.run(main_async(ap.parse_args(argv)))

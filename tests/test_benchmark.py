@@ -115,14 +115,14 @@ def test_unknown_intent_case_needs_no_target():
 
 
 def test_summarize():
-    rs = [CaseResult("a", True, True, True, True, True, True, True, 100, ""),
-          CaseResult("b", True, True, False, True, False, False, True, 300, "t"),
-          CaseResult("c", False, False, False, False, False, False, False, 50, "invalid")]
+    rs = [CaseResult("a", True, True, True, True, True, True, True, 100, "", False),
+          CaseResult("b", True, True, False, True, False, False, True, 300, "t", False),
+          CaseResult("c", False, False, False, False, False, False, False, 50, "invalid", True)]
     s = summarize("m", rs)
     assert s.n == 3 and s.valid == 2 / 3 and s.intent == 2 / 3
     assert s.target == 1 / 3 and s.all == 1 / 3
     assert s.safe == 2 / 3
-    assert s.wrong == 1  # only "c": fields_ok False and safe_ok False
+    assert s.wrong == 1  # only "c" has wrong_value=True; wrong is now summed directly
     assert s.p50_ms == 100 and s.p95_ms == 300
 
 
@@ -141,11 +141,36 @@ def test_score_case_safe_ok_deferred_vs_confidently_wrong_value():
                             "candidates": [{"start": "2026-09-10", "end": None}],
                             "source_text": "завтра"}}
     r_amb = score_case(case, interp(target="t3", fields=amb_fields), ctx())
-    assert r_amb.safe_ok and not r_amb.all_ok
+    assert r_amb.safe_ok and not r_amb.all_ok and not r_amb.wrong_value
 
     wrong_fields = {"t3.f3": val({"start": "2026-09-15", "end": None})}
     r_wrong = score_case(case, interp(target="t3", fields=wrong_fields), ctx())
-    assert not r_wrong.safe_ok and not r_wrong.all_ok
+    assert not r_wrong.safe_ok and not r_wrong.all_ok and r_wrong.wrong_value
 
     s = summarize("m", [r_amb, r_wrong])
     assert s.wrong == 1
+
+
+def test_score_case_scalar_expected_matches_single_item_list_field():
+    # relation/multi_select fields resolve to a list even when only one value is set; a case
+    # written with a bare scalar expectation ("Работа") must still match ["Работа"].
+    case = {"id": "rel", "text": "", "intent": "create", "target": "Задачи",
+            "fields": {"Проект": "Работа"}}
+    i = interp(target="t3", fields={"t3.f5": val(["t3.f5.o2"])})
+    assert score_case(case, i, ctx()).fields_ok
+
+
+def test_score_case_statuses_only_wrong_and_safe():
+    # model returns a confident value where only not_mentioned was allowed -> wrong (unsafe)
+    case_wrong = {"id": "sw", "text": "", "intent": "create", "target": "Задачи",
+                  "statuses": {"Приоритет": "not_mentioned"}}
+    r_wrong = score_case(
+        case_wrong, interp(target="t3", fields={"t3.f2": val("t3.f2.o1")}), ctx()
+    )
+    assert not r_wrong.fields_ok and not r_wrong.safe_ok and r_wrong.wrong_value
+
+    # model defers (not_mentioned) where a value was expected -> safe failure
+    case_safe = {"id": "ss", "text": "", "intent": "create", "target": "Задачи",
+                 "statuses": {"Приоритет": "value"}}
+    r_safe = score_case(case_safe, interp(target="t3"), ctx())
+    assert not r_safe.fields_ok and r_safe.safe_ok and not r_safe.wrong_value

@@ -99,7 +99,6 @@ class OllamaClient:
                         prompt_tokens=prompt_tokens,
                         output_tokens=output_tokens,
                         done_reason=done_reason,
-                        truncated=False,
                     )
             messages = [*base_messages, {"role": "user", "content": retry_message(error)}]
         raise LLMInvalidOutput(

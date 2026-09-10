@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -15,6 +15,31 @@ _PAGE_TITLE = Field(
     id=PAGE_TITLE_FIELD_ID, name="Заголовок", type="title", required=True, options=[],
     relation_data_source_id=None, description="Название новой подстраницы",
 )
+
+
+def build_calendar(now: datetime) -> dict:
+    """Pre-computed relative dates so the model looks them up instead of doing date math."""
+    today = now.date()
+
+    def label(d):
+        return f"{d.isoformat()} ({RU_WEEKDAYS[d.weekday()]})"
+
+    nearest = {}
+    for i in range(1, 8):
+        d = today + timedelta(days=i)
+        nearest[RU_WEEKDAYS[d.weekday()]] = d.isoformat()
+    days_to_next_monday = 7 - today.weekday()
+    next_monday = today + timedelta(days=days_to_next_monday)
+    next_sunday = next_monday + timedelta(days=6)
+    return {
+        "сегодня": label(today),
+        "завтра": label(today + timedelta(days=1)),
+        "послезавтра": label(today + timedelta(days=2)),
+        "ближайшие дни": nearest,
+        "через неделю": (today + timedelta(days=7)).isoformat(),
+        "через две недели": (today + timedelta(days=14)).isoformat(),
+        "следующая неделя": f"{next_monday.isoformat()} … {next_sunday.isoformat()}",
+    }
 
 
 @dataclass(frozen=True)
@@ -98,6 +123,7 @@ class ContextBuilder:
             "now": now.isoformat(timespec="minutes"),
             "tz": str(self._tz),
             "weekday": RU_WEEKDAYS[now.weekday()],
+            "calendar": build_calendar(now),
             "targets": targets,
         }
         if pending:
