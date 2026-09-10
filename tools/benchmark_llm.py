@@ -37,6 +37,7 @@ class CaseResult:
     item_ok: bool
     fields_ok: bool
     all_ok: bool
+    safe_ok: bool
     ms: int
     error: str
 
@@ -50,6 +51,8 @@ class Summary:
     target: float
     fields: float
     all: float
+    safe: float
+    wrong: int
     p50_ms: int
     p95_ms: int
 
@@ -102,13 +105,14 @@ def _best(interp: Interpretation) -> Candidate:
 
 def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
     errors: list[str] = []
-    intent_ok = interp.intent.value == case["intent"]
+    acceptable_intents = case["intent_any"] if "intent_any" in case else [case["intent"]]
+    intent_ok = interp.intent.value in acceptable_intents
     if not intent_ok:
-        errors.append(f"intent {interp.intent.value}!={case['intent']}")
+        errors.append(f"intent {interp.intent.value} not in {acceptable_intents}")
     best = _best(interp)
     best_name = ctx.ref(best.target).name if ctx.ref(best.target) else best.target
 
-    if case["intent"] == "unknown" and "target" not in case and "targets_any" not in case:
+    if case.get("intent") == "unknown" and "target" not in case and "targets_any" not in case:
         target_ok = True
     elif "targets_any" in case:
         target_ok = best_name in case["targets_any"]
@@ -116,8 +120,10 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
         target_ok = best_name == case.get("target")
     if not target_ok:
         errors.append(f"target {best_name}")
+
+    candidates_ok = True
     if "min_candidates" in case and len(interp.candidates) < case["min_candidates"]:
-        target_ok = False
+        candidates_ok = False
         errors.append(f"candidates {len(interp.candidates)}<{case['min_candidates']}")
 
     item_ok = True
@@ -132,6 +138,7 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
             errors.append(f"item_candidates {best.item_candidates} item={best.item}")
 
     fields_ok = True
+    field_failures_safe: list[bool] = []
     tk = best.target
     for fname, expected in case.get("fields", {}).items():
         fk = _key_by_name(ctx, "field", fname, tk)
@@ -144,6 +151,8 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
                 else getattr(fv, "status", None)
             )
             errors.append(f"{fname}: {got!r} != {expected!r}")
+            status = getattr(fv, "status", None)
+            field_failures_safe.append(status in ("ambiguous", "not_mentioned"))
     for fname, statuses in case.get("statuses", {}).items():
         allowed = statuses if isinstance(statuses, list) else [statuses]
         fk = _key_by_name(ctx, "field", fname, tk)
@@ -164,9 +173,11 @@ def score_case(case: dict, interp: Interpretation, ctx: Context) -> CaseResult:
         fields_ok = False
         errors.append("search_query empty")
 
-    all_ok = intent_ok and target_ok and item_ok and fields_ok
+    all_ok = intent_ok and target_ok and item_ok and fields_ok and candidates_ok
+    safe_ok = all_ok or (intent_ok and target_ok and all(field_failures_safe))
     return CaseResult(
-        case["id"], True, intent_ok, target_ok, item_ok, fields_ok, all_ok, 0, "; ".join(errors)
+        case["id"], True, intent_ok, target_ok, item_ok, fields_ok, all_ok, safe_ok, 0,
+        "; ".join(errors),
     )
 
 
@@ -181,6 +192,8 @@ def summarize(model: str, results: list[CaseResult]) -> Summary:
         target=sum(r.target_ok for r in results) / n,
         fields=sum(r.fields_ok for r in results) / n,
         all=sum(r.all_ok for r in results) / n,
+        safe=sum(r.safe_ok for r in results) / n,
+        wrong=sum(1 for r in results if not r.fields_ok and not r.safe_ok),
         p50_ms=int(statistics.median(times)), p95_ms=int(p95),
     )
 
@@ -193,7 +206,9 @@ async def run_model(client: OllamaClient, cases: list[dict], ctx: Context, schem
             interp, trace = await client.interpret(case["text"], ctx, schema)
         except LLMError as e:
             out.append(
-                CaseResult(case["id"], False, False, False, False, False, False, 0, str(e)[:200])
+                CaseResult(
+                    case["id"], False, False, False, False, False, False, False, 0, str(e)[:200]
+                )
             )
             print(f"  {case['id']:<24} INVALID {str(e)[:80]}", flush=True)
             continue
@@ -207,12 +222,12 @@ async def run_model(client: OllamaClient, cases: list[dict], ctx: Context, schem
 
 def render_table(summaries: list[Summary]) -> str:
     head = (
-        "| model | n | valid | intent | target | fields | all | p50 ms | p95 ms |\n"
-        "|---|---|---|---|---|---|---|---|---|"
+        "| model | n | valid | intent | target | fields | all | safe | wrong | p50 ms | p95 ms |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|"
     )
     rows = [
         f"| {s.model} | {s.n} | {s.valid:.0%} | {s.intent:.0%} | {s.target:.0%} | {s.fields:.0%} | "
-        f"{s.all:.0%} | {s.p50_ms} | {s.p95_ms} |"
+        f"{s.all:.0%} | {s.safe:.0%} | {s.wrong} | {s.p50_ms} | {s.p95_ms} |"
         for s in summaries
     ]
     return "\n".join([head, *rows])

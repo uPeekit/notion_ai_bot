@@ -36,6 +36,7 @@ def test_cases_load_and_reference_known_names():
     cases = load_cases(CASES)
     assert len(cases) >= 40
     names = {r.name for r in ctx().keys.values()}
+    known_intents = {"create", "update", "append", "search", "unknown"}
     for case in cases:
         for name in [case.get("target"), *case.get("targets_any", []), case.get("item")]:
             if name is not None:
@@ -45,7 +46,9 @@ def test_cases_load_and_reference_known_names():
         }
         for fname in expected:
             assert fname in names, (case["id"], fname)
-        assert case["intent"] in {"create", "update", "append", "search", "unknown"}
+        intents = case["intent_any"] if "intent_any" in case else [case.get("intent")]
+        for intent in intents:
+            assert intent in known_intents, (case["id"], intent)
 
 
 def test_resolve_value_maps_option_keys():
@@ -112,10 +115,37 @@ def test_unknown_intent_case_needs_no_target():
 
 
 def test_summarize():
-    rs = [CaseResult("a", True, True, True, True, True, True, 100, ""),
-          CaseResult("b", True, True, False, True, False, False, 300, "t"),
-          CaseResult("c", False, False, False, False, False, False, 50, "invalid")]
+    rs = [CaseResult("a", True, True, True, True, True, True, True, 100, ""),
+          CaseResult("b", True, True, False, True, False, False, True, 300, "t"),
+          CaseResult("c", False, False, False, False, False, False, False, 50, "invalid")]
     s = summarize("m", rs)
     assert s.n == 3 and s.valid == 2 / 3 and s.intent == 2 / 3
     assert s.target == 1 / 3 and s.all == 1 / 3
+    assert s.safe == 2 / 3
+    assert s.wrong == 1  # only "c": fields_ok False and safe_ok False
     assert s.p50_ms == 100 and s.p95_ms == 300
+
+
+def test_score_case_intent_any_accepts_any_listed_intent():
+    case = {"id": "ia", "text": "", "intent_any": ["create", "search"],
+            "targets_any": ["Покупки", "Задачи"]}
+    assert score_case(case, interp(intent="search"), ctx()).intent_ok
+    assert score_case(case, interp(intent="create"), ctx()).intent_ok
+    assert not score_case(case, interp(intent="update"), ctx()).intent_ok
+
+
+def test_score_case_safe_ok_deferred_vs_confidently_wrong_value():
+    case = {"id": "sd", "text": "", "intent": "create", "target": "Задачи",
+            "fields": {"Срок": "2026-09-10"}}
+    amb_fields = {"t3.f3": {"status": "ambiguous",
+                            "candidates": [{"start": "2026-09-10", "end": None}],
+                            "source_text": "завтра"}}
+    r_amb = score_case(case, interp(target="t3", fields=amb_fields), ctx())
+    assert r_amb.safe_ok and not r_amb.all_ok
+
+    wrong_fields = {"t3.f3": val({"start": "2026-09-15", "end": None})}
+    r_wrong = score_case(case, interp(target="t3", fields=wrong_fields), ctx())
+    assert not r_wrong.safe_ok and not r_wrong.all_ok
+
+    s = summarize("m", [r_amb, r_wrong])
+    assert s.wrong == 1

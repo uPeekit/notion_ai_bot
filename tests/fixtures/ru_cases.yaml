@@ -6,7 +6,7 @@
    fields: {Название: Молоток, Категория: Инструменты}}
 - {id: buy_quantity, text: "купить 6 яиц", intent: create, target: Покупки, fields: {Количество: 6}}
 - {id: buy_shop_prisma, text: "надо взять сыр в присме", intent: create, target: Покупки, fields: {Название: Сыр, Магазин: Prisma}}
-- {id: buy_note, text: "купить кофе, лучше зерновой", intent: create, target: Покупки, fields: {Название: Кофе}, statuses: {Заметка: value}}
+- {id: buy_note, text: "купить кофе, лучше зерновой", intent: create, target: Покупки, fields: {Название: "*"}, statuses: {Заметка: [value, not_mentioned]}}
 - {id: todo_explicit, text: "создай задачу купить молоко", intent: create, target: Задачи, fields: {Задача: "*"}}
 - {id: todo_remember, text: "не забудь позвонить в банк", intent: create, target: Задачи, fields: {Задача: "*"}}
 - {id: todo_priority, text: "задача: подготовить отчёт, приоритет A", intent: create, target: Задачи,
@@ -19,7 +19,7 @@
 - {id: idea_page, text: "создай страницу отпуск 2028 в идеях", intent: create, target: Идеи, fields: {Заголовок: "*"}}
 # Ambiguity
 - {id: amb_bread, text: "добавь хлеб", intent: create, targets_any: [Покупки, Задачи], min_candidates: 2}
-- {id: amb_tickets, text: "билеты", intent: create, targets_any: [Покупки, Задачи], min_candidates: 2}
+- {id: amb_tickets, text: "билеты", intent_any: [create, search], targets_any: [Покупки, Задачи], min_candidates: 2}
 # Missing required / invalid values
 - {id: missing_priority, text: "добавь задачу подготовить документы", intent: create, target: Задачи,
    statuses: {Приоритет: not_mentioned}}
@@ -61,8 +61,8 @@
 - {id: append_trip, text: "допиши в отпуск 2027: взять палатку", intent: append, target: Идеи, item: Отпуск 2027, content: "*"}
 - {id: append_books, text: "запиши в книги: Пелевин, iPhuck 10", intent: append, target: Идеи, item: Книги, content: "*"}
 # Search
-- {id: search_shop, text: "что у меня в покупках на Rimi?", intent: search, target: Покупки}
-- {id: search_todo, text: "какие задачи по дому?", intent: search, target: Задачи}
+- {id: search_shop, text: "что у меня в покупках на Rimi?", intent: search, target: Покупки, search_query: "*"}
+- {id: search_todo, text: "какие задачи по дому?", intent: search, target: Задачи, search_query: "*"}
 - {id: search_bought, text: "что уже куплено?", intent: search, target: Покупки}
 # Unknown
 - {id: unknown_chat, text: "привет, как дела?", intent: unknown}

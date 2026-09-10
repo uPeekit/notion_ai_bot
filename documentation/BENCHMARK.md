@@ -107,12 +107,15 @@ Cases: `tests/fixtures/ru_cases.yaml` (44), context: `tools/sample_workspace.py`
 
 ## Decision
 
-**Chosen model: `llama3.1:8b`** — highest `all` rate (57%), and also fastest among the two
-top scorers is not the deciding factor here since 57% > 55% outright (no tie-break needed).
-p50 9288 ms / p95 13202 ms, well within interactive budget on the RTX 4070 Laptop 8 GB.
+llama3.1:8b chosen provisionally: 25/44 vs 24/44 for qwen3:8b is within noise, but llama3.1
+fails dates by deferring (ambiguous → the bot asks) while qwen3 fails them by writing
+confidently wrong ranges; llama3.1 also leads on intent (89% vs 84%), target (95% vs 91%) and
+p95 latency (13.2 s vs 21.6 s). Re-decide after the prompt-tuning pass with the `safe`/`wrong`
+columns.
 
-**Runner-up: `qwen3:8b`** — 55% `all`, highest `fields` rate (77%) of all four models, but
-slower (p50 11141 ms, p95 21625 ms) and less reliable on intent classification (84% vs 89%).
+Note: this run used the pre-fix prompt (dates/required-field contradictions, see Group C of the
+final-review fix wave) and `ITEMS_PER_TARGET=50`; both changed after this benchmark was recorded,
+so the numbers above will shift and should not be treated as final.
 
 `qwen2.5:7b-instruct` and `gemma3:4b` tied for third at 45% `all`; `gemma3:4b` is fastest
 overall (p50 7835 ms) but weakest on target selection (84%), making it the better fast-fallback
