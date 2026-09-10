@@ -132,7 +132,7 @@ class Decision:
     kind: Literal["EXECUTE", "CLARIFY", "REJECT"]
     candidate: VCandidate | None         # set for EXECUTE, CLARIFY, and the item_not_found REJECT; else None
     questions: list[Question]            # non-empty for CLARIFY; exactly one Question("item_not_found", ...) for that REJECT case; else []
-    reasons: list[str]                   # REJECT: issue codes/messages or ["no valid candidates"]; CLARIFY: question types in ask order
+    reasons: list[str]                   # REJECT: issue codes/messages, ["no valid candidates"], or ["item not found in target"] for the item_not_found case; CLARIFY: question types in ask order
     risk: Literal["LOW", "MEDIUM"] | None  # RISK_BY_INTENT[intent]; None only when REJECT has no candidate
 ```
 
@@ -142,7 +142,7 @@ class Decision:
 |---|---|---|
 | `target` | candidate key (the target key itself) | `t3` |
 | `item` | `<target_key>.item:<page id>` | `t3.item:2f1c…a9` |
-| `field_required` (field has options: select/status/relation) | `<field_key>.o<1-based index>` | `t3.f2.o1` |
+| `field_required`, when field has non-empty `options` | `<field_key>.o<1-based index>` | `t3.f2.o1` |
 | `field_ambiguous` | `<field_key>#<0-based index>` | `t3.f2#0` |
 | `field_confirm`, `date`, `item_not_found`, `content_required` | no options; answer is free text or a confirm/other action | — |
 
@@ -219,8 +219,12 @@ RISK = {"create_item": "LOW", "create_page": "LOW", "append_blocks": "LOW",
 class UndoRecord(BaseModel):
     kind: Literal["archive", "restore", "delete_blocks"]
     page_id: str | None = None
-    properties: dict | None = None      # restore: property_id -> same JSON shape as property_payload input
+    properties: dict | None = None      # restore: property_id -> the shape property_payload RETURNS
+                                         # (what update_page's properties dict expects), not the
+                                         # PropertyWrite.value shape above
     block_ids: list[str] = []           # delete_blocks
+    partial: bool = False               # restore: True when some updated properties could not be
+                                         # captured before the write (record is still usable)
 ```
 
 Undo by command: `CreateItem`/`CreatePage` → `archive` (`page_id`); `UpdateItem` → `restore` (`page_id` + `properties` captured from the page *before* the write, via `mapper.read_to_write`); `AppendBlocks` → `delete_blocks` (`block_ids` of the blocks just created); `Search` produces no `UndoRecord`.

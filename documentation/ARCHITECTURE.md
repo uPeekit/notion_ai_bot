@@ -251,11 +251,11 @@ Risk classes: `RISK_BY_INTENT` = `create`, `append`, `search` → LOW; `update` 
 
 | Command | Fields | Notion call |
 |---|---|---|
-| `CreateItem` | data_source_id, properties | `POST /v1/pages` parent `data_source_id` |
-| `UpdateItem` | page_id, properties | `PATCH /v1/pages/{id}` |
-| `CreatePage` | parent_page_id, title, body | `POST /v1/pages` parent `page_id` + paragraph blocks |
-| `AppendBlocks` | page_id, paragraphs | `PATCH /v1/blocks/{id}/children` |
-| `Search` | data_source_id or None, query | `POST /v1/data_sources/{id}/query` title filter, or `POST /v1/search` |
+| `CreateItem` | data_source_id, target_name, properties | `POST /v1/pages` parent `data_source_id` |
+| `UpdateItem` | page_id, target_name, item_title, properties | `PATCH /v1/pages/{id}` |
+| `CreatePage` | parent_page_id, target_name, title, body | `POST /v1/pages` parent `page_id` + paragraph blocks |
+| `AppendBlocks` | page_id, target_name, page_title, paragraphs | `PATCH /v1/blocks/{id}/children` |
+| `Search` | data_source_id or None, target_name, title_property or None, query | `POST /v1/data_sources/{id}/query` title filter, or `POST /v1/search` |
 | `ArchivePage` (undo) | page_id | `PATCH /v1/pages/{id}` `archived: true` |
 | `DeleteBlocks` (undo) | block_ids | `DELETE /v1/blocks/{id}` |
 
