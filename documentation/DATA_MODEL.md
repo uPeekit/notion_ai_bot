@@ -107,6 +107,51 @@ The JSON schema sent to Ollama is generated from these models and then specialis
 
 ## 4. Resolved interpretation (after clarification)
 
+`Question`/`QOption`/`Decision` are real code (`validation/policy.py`), produced by `Policy.evaluate(ValidationResult) -> Decision`:
+
+```python
+QType = Literal["target", "item", "item_not_found", "field_required", "field_ambiguous",
+                "field_confirm", "date", "content_required"]
+
+@dataclass(frozen=True)
+class QOption:
+    key: str                            # format depends on question type, see table below
+    label: str
+
+@dataclass
+class Question:
+    type: QType
+    target_key: str | None = None       # candidate key the question concerns, e.g. "t3"
+    field_key: str | None = None        # set for field_required / field_ambiguous / field_confirm / date
+    field_name: str | None = None
+    options: list[QOption] = []         # empty for field_confirm, date, item_not_found, content_required
+    proposed: Any = None                # date / field_confirm: the low-confidence typed value to confirm
+
+@dataclass
+class Decision:
+    kind: Literal["EXECUTE", "CLARIFY", "REJECT"]
+    candidate: VCandidate | None         # set for EXECUTE, CLARIFY, and the item_not_found REJECT; else None
+    questions: list[Question]            # non-empty for CLARIFY; exactly one Question("item_not_found", ...) for that REJECT case; else []
+    reasons: list[str]                   # REJECT: issue codes/messages or ["no valid candidates"]; CLARIFY: question types in ask order
+    risk: Literal["LOW", "MEDIUM"] | None  # RISK_BY_INTENT[intent]; None only when REJECT has no candidate
+```
+
+`QOption.key` format by question type (built in `policy.py`):
+
+| Question type | Key format | Example |
+|---|---|---|
+| `target` | candidate key (the target key itself) | `t3` |
+| `item` | `<target_key>.item:<page id>` | `t3.item:2f1c…a9` |
+| `field_required` (field has options: select/status/relation) | `<field_key>.o<1-based index>` | `t3.f2.o1` |
+| `field_ambiguous` | `<field_key>#<0-based index>` | `t3.f2#0` |
+| `field_confirm`, `date`, `item_not_found`, `content_required` | no options; answer is free text or a confirm/other action | — |
+
+Question order (ties within one `Decision.questions` broken by this order, one asked at a time): `target → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required`.
+
+Special case: `update` intent with no resolvable item and no `item_candidates` does not ask a question — it returns `Decision("REJECT", best, [Question("item_not_found", ...)], ["item not found in target"], risk)`. The candidate and a single `item_not_found` question are carried on the REJECT so Plan 3 can offer "create instead" without re-running the LLM.
+
+`PendingSession` below is a **Plan 3 placeholder** (no code yet); `Resolution` remains sketched, but `question` now names the real type:
+
 ```python
 class Resolution(BaseModel):
     target_key: str | None
@@ -119,29 +164,66 @@ class PendingSession(BaseModel):
     original_text: str
     interpretation: Interpretation
     resolution: Resolution
-    question: Question                  # type, prompt, options[(label, callback_data)]
+    question: Question                  # validation.policy.Question (see above)
     created_at: datetime
     expires_at: datetime
 ```
 
-## 5. Commands (`commands/models.py`)
+## 5. Commands (`commands/models.py`, `commands/executor.py`)
 
 ```python
-class CreateItem(BaseModel):
-    action: Literal["create_item"]; data_source_id: str; properties: dict[str, PropertyValue]
-class UpdateItem(BaseModel):
-    action: Literal["update_item"]; page_id: str; properties: dict[str, PropertyValue]
-class CreatePage(BaseModel):
-    action: Literal["create_page"]; parent_page_id: str; title: str; body: list[str]
-class AppendBlocks(BaseModel):
-    action: Literal["append_blocks"]; page_id: str; paragraphs: list[str]
-class Search(BaseModel):
-    action: Literal["search"]; data_source_id: str | None; query: str
+class PropertyWrite(BaseModel):         # extra="forbid"
+    property_id: str
+    property_name: str
+    type: str
+    value: Any = None                   # None = clear the property
 
-PropertyValue = TitleV | RichTextV | SelectV | MultiSelectV | StatusV | DateV | CheckboxV | NumberV | UrlV | RelationV
-# each carries Notion property id + typed value; mapper.py turns them into Notion JSON
+class CreateItem(BaseModel):
+    action: Literal["create_item"] = "create_item"
+    data_source_id: str; target_name: str; properties: list[PropertyWrite]
+class UpdateItem(BaseModel):
+    action: Literal["update_item"] = "update_item"
+    page_id: str; target_name: str; item_title: str; properties: list[PropertyWrite]
+class CreatePage(BaseModel):
+    action: Literal["create_page"] = "create_page"
+    parent_page_id: str; target_name: str; title: str; body: list[str] = []
+class AppendBlocks(BaseModel):
+    action: Literal["append_blocks"] = "append_blocks"
+    page_id: str; target_name: str; page_title: str; paragraphs: list[str]
+class Search(BaseModel):
+    action: Literal["search"] = "search"
+    data_source_id: str | None; target_name: str; title_property: str | None; query: str
+
 Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
+RISK = {"create_item": "LOW", "create_page": "LOW", "append_blocks": "LOW",
+        "search": "LOW", "update_item": "MEDIUM"}   # matches policy.RISK_BY_INTENT by intent
 ```
+
+`PropertyWrite.value` JSON shapes (built by `commands/builder.py:to_json_value`, consumed by `notion/mapper.py:property_payload`); `value=None` always means "clear this property" (dropped entirely for `status`, since Notion cannot clear a status — see §8 of ARCHITECTURE.md):
+
+| `type` | `value` shape |
+|---|---|
+| `title`, `rich_text` | `str` (mapper splits into 2000-char rich-text runs) |
+| `select`, `status` | `{"id": str, "name": str}` or `None` |
+| `multi_select`, `relation` | `list[{"id": str, "name": str}]` |
+| `date` | `{"start": ISO str, "end": ISO str \| None}` or `None` |
+| `checkbox` | `bool` |
+| `number` | `int \| float` |
+| `url` | `str` |
+
+`Search` results are capped at `executor.SEARCH_LIMIT` (20) hits regardless of source (data-source query or global search).
+
+`UndoRecord` (`commands/executor.py`, pydantic):
+
+```python
+class UndoRecord(BaseModel):
+    kind: Literal["archive", "restore", "delete_blocks"]
+    page_id: str | None = None
+    properties: dict | None = None      # restore: property_id -> same JSON shape as property_payload input
+    block_ids: list[str] = []           # delete_blocks
+```
+
+Undo by command: `CreateItem`/`CreatePage` → `archive` (`page_id`); `UpdateItem` → `restore` (`page_id` + `properties` captured from the page *before* the write, via `mapper.read_to_write`); `AppendBlocks` → `delete_blocks` (`block_ids` of the blocks just created); `Search` produces no `UndoRecord`.
 
 ## 6. SQLite (`data/bot.sqlite`)
 

@@ -12,8 +12,10 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `DISCOVERY_FAILED` | notion/discovery | HTTP/network error on any step | Notion недоступен. | use stale snapshot if < 1 h; else reply and stop |
 | `LLM_UNAVAILABLE` | llm/ollama | connection refused / timeout | Локальная модель недоступна. Попробуйте позже. | none; startup check warns if model missing (`ollama pull` hint in log) |
 | `LLM_INVALID_OUTPUT` | llm/ollama → interpretation | JSON invalid or Pydantic fails | Не удалось разобрать запрос. | 1 retry with error text appended; both responses audited |
+| `INTENT_UNKNOWN` | validation/semantic | LLM `intent.value == "unknown"` | Не понял, что нужно сделать в Notion. | REJECT immediately, no candidates built |
 | `SEM_UNKNOWN_KEY` | validation/semantic | target/field/item/option key not in snapshot | Не удалось сопоставить запрос с Notion. | REJECT; indicates schema/enum fallback issue → log ERROR |
 | `SEM_TYPE` | validation/semantic | value type mismatch (e.g. date not ISO) | Не удалось разобрать значение «…». | REJECT |
+| `SEM_STATUS_CLEAR` | validation/semantic | `explicit_null` on a `status` field (Notion API cannot clear a status) | — (not user-visible) | field dropped (left unwritten), warning logged |
 | `SEM_UNSUPPORTED_OP` | validation/semantic | operation not in target.operations | Эта операция недоступна для «…». | REJECT |
 | `SEM_READONLY_FIELD` | validation/semantic | write to readonly property | field dropped, warning appended to reply | continue |
 | `NOTION_4XX` | notion/direct | validation error from Notion | Notion отклонил операцию: <message>. | REJECT after execute attempt; audit |

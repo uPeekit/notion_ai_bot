@@ -222,23 +222,30 @@ One question per message. Several open issues are asked in order: target → ite
 
 ## 8. Policy engine
 
-Deterministic, thresholds from settings:
+Deterministic (`validation/policy.py`). `Thresholds.from_settings` reads `POLICY_INTENT_MIN`, `POLICY_TARGET_MIN`, `POLICY_TARGET_MARGIN`, `POLICY_FIELD_MIN`, `POLICY_DATE_MIN` from `Settings` (§7 of DATA_MODEL.md); no threshold is hardcoded in the policy itself.
 
 ```text
-REJECT if intent = unknown
-      or target not in snapshot, or field not writable, or value type invalid
-      or (update|append) and item not in target's items after clarification
+REJECT if intent = unknown, or no candidate survived semantic validation (SemanticValidator issues)
+      or (update) and item not in target's items and no item_candidates      # carries the candidate + an item_not_found Question, see below
 CLARIFY if intent.confidence < POLICY_INTENT_MIN
       or best.confidence < POLICY_TARGET_MIN
       or (best.confidence - second.confidence) < POLICY_TARGET_MARGIN   (only when second exists)
-      or any required field not_mentioned / ambiguous
-      or any provided field confidence < POLICY_FIELD_MIN
-      or any date value confidence < POLICY_DATE_MIN
-      or update|append with item null and item_candidates non-empty
+      or (update|append) with item null and item_candidates non-empty
+      or (create) with a required field not_mentioned / explicit_null
+      or any field status = ambiguous
+      or a date-typed field value with confidence < POLICY_DATE_MIN
+      or any other field value with confidence < POLICY_FIELD_MIN
+      or (append) with no content
 EXECUTE otherwise
 ```
 
-Risk classes: `create`, `append`, `search` = LOW; `update` = MEDIUM. Both auto-execute in MVP. Undo available for `create` (archive page), `update` (restore previous property values), `append` (delete appended blocks). Undo button expires after `UNDO_WINDOW_SECONDS`.
+Question order when several apply (one asked per message, `_ORDER` in `policy.py`): `target → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required`.
+
+`update` with no resolvable item is a REJECT, not a CLARIFY, when there are no `item_candidates` to pick from — but unlike other REJECTs it still carries `Decision.candidate` (the resolved target/fields) and one `Question("item_not_found", ...)`, purely so Plan 3 can offer "add as new item" without re-running the LLM; MVP has no handler for that question type yet.
+
+An `explicit_null` on a `status`-type field is dropped before it reaches the policy: `SemanticValidator` turns it back into `not_mentioned` and appends a `SEM_STATUS_CLEAR` issue (warning-level, not user-visible — the Notion API has no way to clear a status property), so the field is simply left unwritten rather than blocking or clarifying.
+
+Risk classes: `RISK_BY_INTENT` = `create`, `append`, `search` → LOW; `update` → MEDIUM. `Decision.risk` records this on every EXECUTE/CLARIFY (and on the `item_not_found` REJECT) for the audit log; both LOW and MEDIUM auto-execute in MVP with no extra confirmation step. Undo available for `create` (archive page), `update` (restore previous property values), `append` (delete appended blocks). Undo button expires after `UNDO_WINDOW_SECONDS`.
 
 ## 9. Commands and Notion mapping
 
