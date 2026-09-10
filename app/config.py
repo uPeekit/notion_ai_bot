@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     notion_version: str = "2025-09-03"
 
     ollama_base_url: str = "http://127.0.0.1:11434"
-    llm_model: str = "qwen3:8b"
+    llm_model: str = "llama3.1:8b"
     llm_temperature: float = 0.0
     llm_num_ctx: int = 16384
     llm_timeout_s: float = 120.0
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/bot.sqlite")
     targets_file: Path = Path("data/targets.yaml")
     schema_cache_ttl_s: int = 60
-    items_per_target: int = Field(50, ge=1, le=100)
+    items_per_target: int = Field(15, ge=1, le=100)
     admin_ui_port: int = 8787
 
     policy_intent_min: float = Prob(0.85)

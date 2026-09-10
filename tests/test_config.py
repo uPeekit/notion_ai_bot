@@ -7,7 +7,7 @@ from app.config import Settings, load_settings
 def test_defaults_load(env):
     s = load_settings()
     assert s.notion_version == "2025-09-03"
-    assert s.llm_model == "qwen3:8b"
+    assert s.llm_model == "llama3.1:8b"
     assert s.policy_target_margin == 0.10
     assert s.allowed_user_ids == frozenset({1, 2})
     assert s.timezone == "Europe/Tallinn"

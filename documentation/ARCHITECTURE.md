@@ -122,7 +122,7 @@ Free text while a session is pending → LLM call with `conversation_context` = 
 
 1. `POST /v1/search` paginated, no filter → all pages and data sources visible to the integration.
 2. For each data source: `GET /v1/data_sources/{id}` → properties, title, description, parent database id.
-3. For each data source: `POST /v1/data_sources/{id}/query` with `sorts=[last_edited_time desc]`, `page_size=ITEMS_PER_TARGET` → items (id, title, status/checkbox if present).
+3. For each data source: `POST /v1/data_sources/{id}/query` with `sorts=[last_edited_time desc]`, `page_size=ITEMS_PER_TARGET` (default 15) → items (id, title, status/checkbox if present).
 4. Relation properties: options = items of the related data source (already fetched in step 3 if visible; otherwise one extra query, capped).
 5. Pages (not inside a data source): included as page targets with title, id, parent chain. Children come from search results (`parent.page_id`).
 6. Merge `targets.yaml` descriptions (override) and Notion descriptions (default).
@@ -140,10 +140,9 @@ Supported property types for write: `title, rich_text, select, multi_select, sta
 ```json
 {
   "now": "2026-09-09T18:40:00+03:00", "tz": "Europe/Tallinn", "weekday": "вторник",
-  "operations": ["create", "update", "append", "search"],
   "targets": [
     {"key": "t1", "kind": "database", "name": "Покупки", "path": "Дом / Покупки",
-     "description": "Список покупок…",
+     "description": "Список покупок…", "ops": ["create", "search", "update"],
      "fields": [
        {"key": "t1.f1", "name": "Название", "type": "title", "required": true},
        {"key": "t1.f2", "name": "Магазин", "type": "select", "options": {"t1.f2.o1": "Rimi", "t1.f2.o2": "Prisma"}},
@@ -151,6 +150,7 @@ Supported property types for write: `title, rich_text, select, multi_select, sta
      ],
      "items": {"t1.i1": "Хлеб", "t1.i2": "Молоко (куплено)"}},
     {"key": "t2", "kind": "page", "name": "Идеи", "path": "Идеи", "description": "…",
+     "ops": ["append", "create", "search"],
      "children": {"t2.i1": "Отпуск 2027"}}
   ]
 }
@@ -171,7 +171,7 @@ Candidate
   target: enum(target keys)
   confidence: 0..1
   item: enum(item keys of that target) | null     update/append target item
-  item_candidates: [enum] | null                  when several items plausible
+  item_candidates: [enum]                         when several items plausible (max 8, else [])
   fields: {field_key: FieldValue}                 all writable fields of the target, always present
   content: string | null                          append / page body text
   search_query: string | null
@@ -185,6 +185,8 @@ FieldValue (discriminated by status)
 Field `value` typing: `title/rich_text/url` string; `number` number; `checkbox` bool; `date` `{start: ISO date or datetime, end: ISO | null}`; `select/status` enum(option keys); `multi_select/relation` list of enum(option keys).
 
 If grammar-enforced `oneOf` proves slow on the chosen model, fallback is a looser schema (strings instead of enums) with the same Pydantic validation in the app; the app behaviour is identical because semantic validation rejects unknown keys anyway.
+
+The semantic validator (Plan 2b) re-checks every key against the context, dedupes candidates by target, types values per field, and caps lengths — the grammar is a first line, not the only line.
 
 ### Prompt
 
@@ -268,7 +270,7 @@ Tables: `events` (one row per handled message, per spec §27), `sessions` (pendi
 
 ## 13. Model selection
 
-Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `qwen3:8b` (default, `think: false`), `qwen2.5:7b-instruct`, `llama3.1:8b`, `gemma3:4b` (fast fallback). `mistral-nemo:12b` and `gemma3:12b` only with CPU offload. `tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each and reports schema-validity rate, target accuracy, field accuracy, p50/p95 latency. `LLM_NUM_CTX=16384` default.
+Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `llama3.1:8b` (default; benchmark winner, see [BENCHMARK.md](BENCHMARK.md)), `qwen3:8b` (runner-up, `think: false`), `qwen2.5:7b-instruct`, `gemma3:4b` (fast fallback). `mistral-nemo:12b` and `gemma3:12b` only with CPU offload. `tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each and reports schema-validity rate, target accuracy, field accuracy, p50/p95 latency. `LLM_NUM_CTX=16384` default.
 
 ## 14. Security boundaries
 

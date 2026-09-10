@@ -41,7 +41,7 @@ Notes:
 
 ## What the bot does with access
 
-- Discovery calls `search` once per message (cached 60 s) and reads every visible database schema and its newest rows (`ITEMS_PER_TARGET`, default 50).
+- Discovery calls `search` once per message (cached 60 s) and reads every visible database schema and its newest rows (`ITEMS_PER_TARGET`, default 15).
 - Writes happen only through validated commands: create/update database rows, create sub-pages, append paragraphs, archive (for Undo). No deletes, no bulk operations.
 - The token never leaves the app process: it is not logged, not stored in SQLite, and never shown to the LLM.
 

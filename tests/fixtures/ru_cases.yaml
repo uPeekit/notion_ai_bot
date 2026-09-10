@@ -1,0 +1,69 @@
+# Classification: create
+- {id: buy_simple, text: "купи молоко в Рими", intent: create, target: Покупки,
+   fields: {Название: Молоко, Магазин: Rimi}, statuses: {Категория: not_mentioned, Куплено: not_mentioned}}
+- {id: buy_explicit_list, text: "добавь хлеб в покупки", intent: create, target: Покупки, fields: {Название: Хлеб}}
+- {id: buy_with_category, text: "в список покупок: молоток, это инструменты", intent: create, target: Покупки,
+   fields: {Название: Молоток, Категория: Инструменты}}
+- {id: buy_quantity, text: "купить 6 яиц", intent: create, target: Покупки, fields: {Количество: 6}}
+- {id: buy_shop_prisma, text: "надо взять сыр в присме", intent: create, target: Покупки, fields: {Название: Сыр, Магазин: Prisma}}
+- {id: buy_note, text: "купить кофе, лучше зерновой", intent: create, target: Покупки, fields: {Название: "*"}, statuses: {Заметка: [value, not_mentioned]}}
+- {id: todo_explicit, text: "создай задачу купить молоко", intent: create, target: Задачи, fields: {Задача: "*"}}
+- {id: todo_remember, text: "не забудь позвонить в банк", intent: create, target: Задачи, fields: {Задача: "*"}}
+- {id: todo_priority, text: "задача: подготовить отчёт, приоритет A", intent: create, target: Задачи,
+   fields: {Приоритет: A}}
+- {id: todo_priority_words, text: "срочно оплатить счета", intent: create, target: Задачи, fields: {Приоритет: A}}
+- {id: todo_project, text: "задача по работе: обновить резюме", intent: create, target: Задачи, fields: {Проект: Работа}}
+- {id: todo_tags, text: "задача сходить к врачу, теги здоровье", intent: create, target: Задачи, fields: {Теги: [здоровье]}}
+- {id: todo_link, text: "задача прочитать статью https://example.com/a", intent: create, target: Задачи,
+   fields: {Ссылка: "https://example.com/a"}}
+- {id: idea_page, text: "создай страницу отпуск 2028 в идеях", intent: create, target: Идеи, fields: {Заголовок: "*"}}
+# Ambiguity
+- {id: amb_bread, text: "добавь хлеб", intent: create, targets_any: [Покупки, Задачи], min_candidates: 2}
+- {id: amb_tickets, text: "билеты", intent_any: [create, search], targets_any: [Покупки, Задачи], min_candidates: 2}
+# Missing required / invalid values
+- {id: missing_priority, text: "добавь задачу подготовить документы", intent: create, target: Задачи,
+   statuses: {Приоритет: not_mentioned}}
+- {id: invalid_priority, text: "задача убрать гараж, приоритет срочный", intent: create, target: Задачи,
+   statuses: {Приоритет: [value, ambiguous, not_mentioned]}}
+- {id: invalid_shop, text: "купить рыбу в Селвере", intent: create, target: Покупки,
+   statuses: {Магазин: [not_mentioned, ambiguous]}}
+- {id: explicit_null, text: "задача выбросить ёлку, без срока", intent: create, target: Задачи,
+   statuses: {Срок: [explicit_null, not_mentioned]}}
+# Optional fields preserved
+- {id: optional_kept, text: "купить батарейки в Максиме, штук 10, хозтовары", intent: create, target: Покупки,
+   fields: {Магазин: Maxima, Количество: 10, Категория: Хозтовары}}
+# Temporal
+- {id: date_tomorrow, text: "напомни завтра позвонить врачу", intent: create, target: Задачи, fields: {Срок: "2026-09-10"}}
+- {id: date_day_after, text: "послезавтра сдать отчёт", intent: create, target: Задачи, fields: {Срок: "2026-09-11"}}
+- {id: date_friday, text: "в пятницу забрать посылку", intent: create, target: Задачи, fields: {Срок: "2026-09-11"}}
+- {id: date_next_monday, text: "в понедельник встреча с бухгалтером", intent: create, target: Задачи,
+   fields: {Срок: "2026-09-14"}}
+- {id: date_in_week, text: "через неделю продлить страховку", intent: create, target: Задачи, fields: {Срок: "2026-09-16"}}
+- {id: date_time, text: "завтра в 9:45 к зубному", intent: create, target: Задачи, fields: {Срок: "2026-09-10T09:45"}}
+- {id: date_next_week_vague, text: "на следующей неделе разобрать шкаф", intent: create, target: Задачи,
+   statuses: {Срок: [value, ambiguous, not_mentioned]}, max_confidence: {Срок: 0.85}}
+- {id: date_explicit, text: "15 октября заплатить за страховку", intent: create, target: Задачи, fields: {Срок: "2026-10-15"}}
+# Update
+- {id: update_bought, text: "отметь молоко купленным", intent: update, target: Покупки, item_candidates_min: 2}
+- {id: update_bought_exact, text: "овсяное молоко куплено", intent: update, target: Покупки, item: Молоко овсяное,
+   fields: {Куплено: true}}
+- {id: update_status_done, text: "документы подготовил", intent: update, target: Задачи, item: Подготовить документы,
+   fields: {Статус: Done}}
+- {id: update_due, text: "перенеси покупку билетов на пятницу", intent: update, target: Задачи, item: Купить билеты,
+   fields: {Срок: "2026-09-11"}}
+- {id: update_priority, text: "подготовить документы теперь приоритет A", intent: update, target: Задачи,
+   item: Подготовить документы, fields: {Приоритет: A}}
+- {id: update_not_found, text: "отметь кефир купленным", intent: update, target: Покупки, item_candidates_min: 0,
+   statuses: {Куплено: value}}
+- {id: update_shop, text: "яйца лучше взять в Prisma", intent: update, target: Покупки, item: Яйца, fields: {Магазин: Prisma}}
+# Append
+- {id: append_ideas, text: "в идеи: попробовать сыр с плесенью", intent: append, target: Идеи, content: "*"}
+- {id: append_trip, text: "допиши в отпуск 2027: взять палатку", intent: append, target: Идеи, item: Отпуск 2027, content: "*"}
+- {id: append_books, text: "запиши в книги: Пелевин, iPhuck 10", intent: append, target: Идеи, item: Книги, content: "*"}
+# Search
+- {id: search_shop, text: "что у меня в покупках на Rimi?", intent: search, target: Покупки, search_query: "*"}
+- {id: search_todo, text: "какие задачи по дому?", intent: search, target: Задачи, search_query: "*"}
+- {id: search_bought, text: "что уже куплено?", intent: search, target: Покупки}
+# Unknown
+- {id: unknown_chat, text: "привет, как дела?", intent: unknown}
+- {id: unknown_weather, text: "какая погода завтра", intent: unknown}
