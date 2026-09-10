@@ -152,6 +152,53 @@ async def test_undo_kinds(fake):
     assert fake.calls[-2:] == [("delete_block", "a"), ("delete_block", "b")]
 
 
+async def test_no_undo_when_created_page_has_no_id(fake):
+    async def no_id(parent, properties, children=None):
+        return {"properties": properties}
+
+    fake.create_page = no_id
+    r = await Executor(fake).run(CreateItem(data_source_id="ds", target_name="x", properties=[]))
+    assert r.undo is None
+
+
+async def test_no_undo_when_append_returns_no_block_ids(fake):
+    async def no_ids(block_id, children):
+        return {"results": [{}]}
+
+    fake.append_blocks = no_ids
+    r = await Executor(fake).run(
+        AppendBlocks(page_id="p", target_name="x", page_title="x", paragraphs=["a"])
+    )
+    assert r.undo is None and r.block_ids == []
+
+
+async def test_partial_capture_is_flagged(fake):
+    fake.pages["p1"] = {
+        "id": "p1",
+        "properties": {
+            "Формула": {
+                "id": "fx",
+                "type": "formula",
+                "formula": {"type": "number", "number": 1},
+            },
+            "Куплено": {"id": "done", "type": "checkbox", "checkbox": False},
+        },
+    }
+    r = await Executor(fake).run(
+        UpdateItem(
+            page_id="p1",
+            target_name="x",
+            item_title="y",
+            properties=[
+                pw("done", "Куплено", "checkbox", True),
+                pw("fx", "Формула", "formula", 2),
+            ],
+        )
+    )
+    assert r.undo.partial is True and r.undo.properties == {"done": {"checkbox": False}}
+    assert [w.name for w in r.written] == ["Куплено"]  # formula dropped by the mapper
+
+
 async def test_notion_errors_propagate(fake):
     async def boom(*a, **k):
         raise NotionError(400, "validation_error", "bad")
