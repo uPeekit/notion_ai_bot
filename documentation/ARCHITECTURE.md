@@ -122,7 +122,7 @@ Free text while a session is pending → LLM call with `conversation_context` = 
 
 1. `POST /v1/search` paginated, no filter → all pages and data sources visible to the integration.
 2. For each data source: `GET /v1/data_sources/{id}` → properties, title, description, parent database id.
-3. For each data source: `POST /v1/data_sources/{id}/query` with `sorts=[last_edited_time desc]`, `page_size=ITEMS_PER_TARGET` → items (id, title, status/checkbox if present).
+3. For each data source: `POST /v1/data_sources/{id}/query` with `sorts=[last_edited_time desc]`, `page_size=ITEMS_PER_TARGET` (default 15) → items (id, title, status/checkbox if present).
 4. Relation properties: options = items of the related data source (already fetched in step 3 if visible; otherwise one extra query, capped).
 5. Pages (not inside a data source): included as page targets with title, id, parent chain. Children come from search results (`parent.page_id`).
 6. Merge `targets.yaml` descriptions (override) and Notion descriptions (default).

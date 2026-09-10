@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/bot.sqlite")
     targets_file: Path = Path("data/targets.yaml")
     schema_cache_ttl_s: int = 60
-    items_per_target: int = Field(50, ge=1, le=100)
+    items_per_target: int = Field(15, ge=1, le=100)
     admin_ui_port: int = 8787
 
     policy_intent_min: float = Prob(0.85)

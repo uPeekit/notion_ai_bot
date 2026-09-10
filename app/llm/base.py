@@ -21,6 +21,16 @@ class LLMInvalidOutput(LLMError):
         self.raw = raw
 
 
+class LLMContextOverflow(LLMError):
+    """Ollama silently drops the head of the prompt once it exceeds num_ctx; the answer is
+    untrustworthy and must not be treated as valid output."""
+
+    def __init__(self, message: str, prompt_tokens: int, num_ctx: int) -> None:
+        super().__init__(message)
+        self.prompt_tokens = prompt_tokens
+        self.num_ctx = num_ctx
+
+
 @dataclass
 class LLMTrace:
     model: str
@@ -28,6 +38,10 @@ class LLMTrace:
     raw_response: str
     duration_ms: int
     attempts: int
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    done_reason: str | None = None
+    truncated: bool = False
 
 
 class LLMClient(Protocol):

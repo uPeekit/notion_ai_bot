@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from app.llm.base import LLMInvalidOutput, LLMUnavailable
+from app.llm.base import LLMContextOverflow, LLMInvalidOutput, LLMUnavailable
 from app.llm.context import ContextBuilder
 from app.llm.ollama import OllamaClient, wants_think_flag
 from app.llm.output_schema import build_schema
@@ -34,6 +34,7 @@ def make(handler, model="qwen3:8b"):
 def test_wants_think_flag():
     assert wants_think_flag("qwen3:8b") and wants_think_flag("deepseek-r1:7b")
     assert not wants_think_flag("qwen2.5:7b-instruct") and not wants_think_flag("gemma3:4b")
+    assert not wants_think_flag("qwen3-coder:30b")
 
 
 async def test_interpret_happy_path(ctx):
@@ -83,8 +84,10 @@ async def test_retry_once_on_invalid_then_success(ctx):
     async with make(handler) as c:
         interp, trace = await c.interpret("x", ctx, build_schema(ctx))
     assert trace.attempts == 2 and len(calls) == 2
-    assert calls[1][-2] == {"role": "assistant", "content": '{"intent": "bad"}'}
-    assert calls[1][-1]["role"] == "user" and "не прошёл проверку" in calls[1][-1]["content"]
+    assert len(calls[1]) == 3
+    assert calls[1][0]["role"] == "system" and calls[1][1]["role"] == "user"
+    assert calls[1][2]["role"] == "user" and "не прошёл проверку" in calls[1][2]["content"]
+    assert trace.messages == calls[1]
 
 
 async def test_invalid_twice_raises(ctx):
@@ -120,3 +123,87 @@ async def test_models(ctx):
 
     async with make(handler) as c:
         assert await c.models() == ["qwen3:8b", "gemma3:4b"]
+
+
+async def test_models_skips_entries_without_name(ctx):
+    def handler(req):
+        return httpx.Response(
+            200, json={"models": [{"name": "qwen3:8b"}, {"digest": "abc"}, {"name": "gemma3:4b"}]}
+        )
+
+    async with make(handler) as c:
+        assert await c.models() == ["qwen3:8b", "gemma3:4b"]
+
+
+async def test_context_overflow_raises(ctx):
+    def handler(req):
+        return httpx.Response(
+            200,
+            json={
+                "message": {"content": json.dumps(good_answer(ctx))},
+                "prompt_eval_count": 16300,
+            },
+        )
+
+    async with make(handler) as c:
+        with pytest.raises(LLMContextOverflow) as ei:
+            await c.interpret("x", ctx, build_schema(ctx))
+    assert ei.value.prompt_tokens == 16300 and ei.value.num_ctx == 16384
+
+
+async def test_done_reason_length_triggers_retry_then_success(ctx):
+    calls = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        calls.append(body["messages"])
+        if len(calls) == 1:
+            return httpx.Response(
+                200, json={"message": {"content": '{"intent"'}, "done_reason": "length"}
+            )
+        return httpx.Response(
+            200, json={"message": {"content": json.dumps(good_answer(ctx))}, "done_reason": "stop"}
+        )
+
+    async with make(handler) as c:
+        interp, trace = await c.interpret("x", ctx, build_schema(ctx))
+    assert trace.attempts == 2 and len(calls) == 2
+    assert len(calls[1]) == 3
+    assert "output truncated (num_predict)" in calls[1][2]["content"]
+
+
+async def test_trace_carries_token_counts(ctx):
+    def handler(req):
+        return httpx.Response(
+            200,
+            json={
+                "message": {"content": json.dumps(good_answer(ctx))},
+                "prompt_eval_count": 500,
+                "eval_count": 120,
+                "done_reason": "stop",
+            },
+        )
+
+    async with make(handler) as c:
+        interp, trace = await c.interpret("x", ctx, build_schema(ctx))
+    assert trace.prompt_tokens == 500 and trace.output_tokens == 120
+    assert trace.done_reason == "stop" and trace.truncated is False
+
+
+async def test_non_json_response_raises_unavailable(ctx):
+    def handler(req):
+        return httpx.Response(200, text="not-json-body")
+
+    async with make(handler) as c:
+        with pytest.raises(LLMUnavailable):
+            await c.interpret("x", ctx, build_schema(ctx))
+
+
+async def test_null_content_becomes_empty_raw(ctx):
+    def handler(req):
+        return httpx.Response(200, json={"message": {"content": None}})
+
+    async with make(handler) as c:
+        with pytest.raises(LLMInvalidOutput) as ei:
+            await c.interpret("x", ctx, build_schema(ctx))
+    assert ei.value.raw == ""

@@ -211,7 +211,7 @@ Secrets are never written. `llm_context` contains keys, not Notion ids.
 | `DB_PATH` | `data/bot.sqlite` | |
 | `TARGETS_FILE` | `data/targets.yaml` | |
 | `SCHEMA_CACHE_TTL_S` | `60` | |
-| `ITEMS_PER_TARGET` | `50` | |
+| `ITEMS_PER_TARGET` | `15` | |
 | `ADMIN_UI_PORT` | `8787` | `0` disables |
 | `POLICY_INTENT_MIN` | `0.85` | |
 | `POLICY_TARGET_MIN` | `0.85` | |
