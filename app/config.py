@@ -12,8 +12,8 @@ def Prob(default: float) -> float:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    telegram_bot_token: SecretStr
-    telegram_allowed_user_ids: str
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_allowed_user_ids: str = ""
     notion_token: SecretStr
     notion_version: str = "2025-09-03"
 
@@ -49,14 +49,21 @@ class Settings(BaseSettings):
 
     @field_validator("telegram_allowed_user_ids")
     @classmethod
-    def _non_empty_allowlist(cls, v: str) -> str:
-        ids = [p.strip() for p in v.split(",") if p.strip()]
-        if not ids:
-            raise ValueError("TELEGRAM_ALLOWED_USER_IDS must list at least one user id")
-        for p in ids:
+    def _allowlist_digits(cls, v: str) -> str:
+        for p in (x.strip() for x in v.split(",") if x.strip()):
             if not p.isdigit():
                 raise ValueError(f"bad user id: {p!r}")
         return v
+
+    def require_telegram(self) -> None:
+        """Raise a clear error when the bot itself is started without Telegram settings."""
+        missing = []
+        if not self.telegram_bot_token.get_secret_value():
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not self.allowed_user_ids:
+            missing.append("TELEGRAM_ALLOWED_USER_IDS")
+        if missing:
+            raise ValueError("missing in .env: " + ", ".join(missing))
 
     @cached_property
     def allowed_user_ids(self) -> frozenset[int]:

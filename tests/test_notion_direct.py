@@ -46,7 +46,7 @@ async def test_search_paginates_and_filters():
     assert calls[1]["start_cursor"] == "c2"
 
 
-async def test_query_data_source_uses_patch_and_body():
+async def test_query_data_source_uses_post_and_body():
     seen = {}
 
     def handler(req: httpx.Request):
@@ -59,7 +59,7 @@ async def test_query_data_source_uses_patch_and_body():
         res = await p.query_data_source("ds1", sorts=[{"timestamp": "last_edited_time",
                                                        "direction": "descending"}], page_size=7)
     assert res == [{"id": "p"}]
-    assert seen["method"] == "PATCH"
+    assert seen["method"] == "POST"
     assert seen["url"].endswith("/v1/data_sources/ds1/query")
     assert seen["body"] == {"sorts": [{"timestamp": "last_edited_time",
                                        "direction": "descending"}], "page_size": 7}

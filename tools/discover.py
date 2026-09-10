@@ -28,7 +28,12 @@ async def main() -> int:
             print(f"Notion error: {e.status} {e.code}", file=sys.stderr)
             return 4
         disco = Discovery(p, Descriptions(s.targets_file), items_per_target=s.items_per_target)
-        snap = await disco.refresh()
+        try:
+            snap = await disco.refresh()
+        except NotionError as e:
+            print(f"Notion error during discovery: {e.status} {e.code}: {e.message}",
+                  file=sys.stderr)
+            return 4
 
     print(f"{len(snap.targets)} targets (descriptions in {s.targets_file}):\n")
     for t in snap.targets:

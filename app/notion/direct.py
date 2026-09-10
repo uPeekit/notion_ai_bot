@@ -141,7 +141,7 @@ class DirectNotionProvider:
             body["filter"] = filter
         if sorts:
             body["sorts"] = sorts
-        data = await self._request("PATCH", f"/data_sources/{data_source_id}/query", body)
+        data = await self._request("POST", f"/data_sources/{data_source_id}/query", body)
         return data.get("results", [])
 
     async def get_page(self, page_id: str) -> dict:
