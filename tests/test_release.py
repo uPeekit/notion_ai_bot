@@ -39,6 +39,7 @@ def fake_repo(tmp_path):
         "RELEASE.md": "rel",
         ".python-version": "3.12\n",
         "apply_update.py": "print(1)",
+        "update.cmd": "@echo off",
         "app/__init__.py": "",
         "app/a.py": "A=1",
         "app/__pycache__/a.cpython-312.pyc": "junk",
@@ -60,6 +61,7 @@ def test_collect_files_includes_only_shippable(fake_repo):
     files = {str(p).replace("\\", "/") for p in release.collect_files(fake_repo)}
     assert "app/a.py" in files and "migrations/0001_initial.sql" in files
     assert "deploy/run.ps1" in files and "apply_update.py" in files and "uv.lock" in files
+    assert "update.cmd" in files
     assert ".python-version" in files
     assert not any(f.startswith(("tests/", "data/")) for f in files)
     assert ".env" not in files and "app/__pycache__/a.cpython-312.pyc" not in files
