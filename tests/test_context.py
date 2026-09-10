@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.llm.context import PAGE_TITLE_FIELD_ID, ContextBuilder
 from tools.sample_workspace import SAMPLE_NOW, sample_snapshot
 
@@ -79,6 +81,11 @@ def test_pending_and_now_default(monkeypatch):
         sample_snapshot(), now=datetime(2026, 1, 5, 12, tzinfo=ZoneInfo("UTC"))
     )
     assert ctx2.payload["weekday"] == "понедельник"
+
+
+def test_build_raises_on_naive_now():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ContextBuilder("Europe/Tallinn").build(sample_snapshot(), now=datetime(2026, 1, 5, 12))
 
 
 def test_json_is_compact_and_unicode():

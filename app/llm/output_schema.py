@@ -7,6 +7,8 @@ from app.llm.context import Context
 INTENTS = ["create", "update", "append", "search", "unknown"]
 STRING = {"type": "string"}
 NUMBER = {"type": "number"}
+CONFIDENCE = {"type": "number", "minimum": 0, "maximum": 1}
+MAX_ITEM_CANDIDATES = 8
 
 
 def _obj(props: dict, required: list[str] | None = None) -> dict:
@@ -51,7 +53,7 @@ def field_value_schema(ctx: Context, field_key: str) -> dict:
             _obj(
                 {
                     "status": {"const": "ambiguous"},
-                    "candidates": {"type": "array", "items": v},
+                    "candidates": {"type": "array", "items": v, "minItems": 2},
                     "source_text": dict(STRING),
                 }
             ),
@@ -59,7 +61,7 @@ def field_value_schema(ctx: Context, field_key: str) -> dict:
                 {
                     "status": {"const": "value"},
                     "value": v,
-                    "confidence": dict(NUMBER),
+                    "confidence": dict(CONFIDENCE),
                     "source_text": dict(STRING),
                 }
             ),
@@ -72,12 +74,14 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
     items = ctx.item_keys(target_key)
     item = _nullable({"enum": items}) if items else {"type": "null"}
     item_candidates = (
-        {"type": "array", "items": {"enum": items}} if items else {"type": "array", "maxItems": 0}
+        {"type": "array", "items": {"enum": items}, "maxItems": MAX_ITEM_CANDIDATES}
+        if items
+        else {"type": "array", "maxItems": 0}
     )
     return _obj(
         {
             "target": {"const": target_key},
-            "confidence": dict(NUMBER),
+            "confidence": dict(CONFIDENCE),
             "item": item,
             "item_candidates": item_candidates,
             "fields": _obj(fields),
@@ -88,9 +92,11 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
 
 
 def build_schema(ctx: Context) -> dict:
+    if not ctx.target_keys():
+        raise ValueError("no targets in context")
     return _obj(
         {
-            "intent": _obj({"value": {"enum": INTENTS}, "confidence": dict(NUMBER)}),
+            "intent": _obj({"value": {"enum": INTENTS}, "confidence": dict(CONFIDENCE)}),
             "candidates": {
                 "type": "array",
                 "minItems": 1,

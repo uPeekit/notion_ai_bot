@@ -71,6 +71,8 @@ class ContextBuilder:
     def build(
         self, snapshot: WorkspaceSnapshot, now: datetime | None = None, pending: dict | None = None
     ) -> Context:
+        if now is not None and now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
         now = (now or datetime.now(self._tz)).astimezone(self._tz)
         ctx = Context(payload={}, keys={}, now=now, pending=pending)
         targets = []

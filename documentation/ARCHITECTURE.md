@@ -140,10 +140,9 @@ Supported property types for write: `title, rich_text, select, multi_select, sta
 ```json
 {
   "now": "2026-09-09T18:40:00+03:00", "tz": "Europe/Tallinn", "weekday": "вторник",
-  "operations": ["create", "update", "append", "search"],
   "targets": [
     {"key": "t1", "kind": "database", "name": "Покупки", "path": "Дом / Покупки",
-     "description": "Список покупок…",
+     "description": "Список покупок…", "ops": ["create", "search", "update"],
      "fields": [
        {"key": "t1.f1", "name": "Название", "type": "title", "required": true},
        {"key": "t1.f2", "name": "Магазин", "type": "select", "options": {"t1.f2.o1": "Rimi", "t1.f2.o2": "Prisma"}},
@@ -151,6 +150,7 @@ Supported property types for write: `title, rich_text, select, multi_select, sta
      ],
      "items": {"t1.i1": "Хлеб", "t1.i2": "Молоко (куплено)"}},
     {"key": "t2", "kind": "page", "name": "Идеи", "path": "Идеи", "description": "…",
+     "ops": ["append", "create", "search"],
      "children": {"t2.i1": "Отпуск 2027"}}
   ]
 }
@@ -171,7 +171,7 @@ Candidate
   target: enum(target keys)
   confidence: 0..1
   item: enum(item keys of that target) | null     update/append target item
-  item_candidates: [enum] | null                  when several items plausible
+  item_candidates: [enum]                         when several items plausible (max 8, else [])
   fields: {field_key: FieldValue}                 all writable fields of the target, always present
   content: string | null                          append / page body text
   search_query: string | null
@@ -185,6 +185,8 @@ FieldValue (discriminated by status)
 Field `value` typing: `title/rich_text/url` string; `number` number; `checkbox` bool; `date` `{start: ISO date or datetime, end: ISO | null}`; `select/status` enum(option keys); `multi_select/relation` list of enum(option keys).
 
 If grammar-enforced `oneOf` proves slow on the chosen model, fallback is a looser schema (strings instead of enums) with the same Pydantic validation in the app; the app behaviour is identical because semantic validation rejects unknown keys anyway.
+
+The semantic validator (Plan 2b) re-checks every key against the context, dedupes candidates by target, types values per field, and caps lengths — the grammar is a first line, not the only line.
 
 ### Prompt
 

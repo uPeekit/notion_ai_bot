@@ -17,6 +17,17 @@ def test_schema_is_valid_draft7(ctx):
     Draft7Validator.check_schema(build_schema(ctx))
 
 
+def test_build_schema_raises_on_empty_snapshot():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.llm.context import Context
+
+    empty = Context(payload={}, keys={}, now=datetime.now(ZoneInfo("UTC")))
+    with pytest.raises(ValueError, match="no targets in context"):
+        build_schema(empty)
+
+
 def test_value_schemas_by_type(ctx):
     assert value_schema(ctx, "t2.f1") == {"type": "string"}  # title
     assert value_schema(ctx, "t2.f2") == {"enum": ["t2.f2.o1", "t2.f2.o2", "t2.f2.o3"]}  # select
@@ -92,6 +103,11 @@ def test_valid_response_passes_schema_and_pydantic(ctx):
         lambda r: r["candidates"][0].__setitem__("item", "t3.i1"),
         lambda r: r["candidates"][0].__setitem__("url", "http://x"),
         lambda r: r.__setitem__("candidates", []),
+        lambda r: r["candidates"][0]["fields"].__setitem__(
+            "t2.f4", {"status": "ambiguous", "candidates": [], "source_text": ""}
+        ),
+        lambda r: r["candidates"][0].__setitem__("confidence", 1.5),
+        lambda r: r["candidates"][0].__setitem__("item_candidates", ["t2.i1"] * 9),
     ],
 )
 def test_invalid_responses_fail_schema(ctx, mutate):
