@@ -13,7 +13,7 @@ ERROR_CODES = [
     "STT_EMPTY", "STT_FAILED", "DISCOVERY_FAILED", "LLM_UNAVAILABLE", "LLM_INVALID_OUTPUT",
     "INTENT_UNKNOWN", "SEM_UNKNOWN_KEY", "SEM_TYPE", "SEM_UNSUPPORTED_OP", "NOTION_4XX",
     "NOTION_5XX", "UNDO_EXPIRED", "UNDO_FAILED", "SESSION_EXPIRED", "nothing_to_write",
-    "item_not_found",
+    "item_not_found", "INTERNAL",
 ]
 
 # Superset of every placeholder name used across ERRORS/QUESTION/DONE_* templates. str.format
@@ -72,6 +72,14 @@ def test_button_labels_are_exact():
 
 
 def test_standalone_strings_are_nonempty():
-    for s in (texts.INBOX_SAVED, texts.INBOX_SAVED_EXPIRED, texts.INBOX_FAILED, texts.CANCELLED,
-              texts.UNDONE, texts.SEARCH_EMPTY, texts.SEARCH_HEADER, texts.UNTITLED):
+    for s in (texts.INBOX_SAVED_EXPIRED, texts.INBOX_FAILED, texts.CANCELLED, texts.UNDONE,
+              texts.ENTER_VALUE, texts.SEARCH_EMPTY, texts.SEARCH_HEADER, texts.UNTITLED):
         assert isinstance(s, str) and s.strip()
+
+
+def test_inbox_saved_names_the_target_it_actually_wrote_to():
+    # The inbox is whatever target the user flagged, and it can be called anything, so the
+    # confirmation names it (and links it) instead of hardcoding one name.
+    filled = texts.INBOX_SAVED.format(target_name="Заметки", url="https://notion.so/x")
+    assert "{" not in filled
+    assert "Заметки" in filled and "https://notion.so/x" in filled

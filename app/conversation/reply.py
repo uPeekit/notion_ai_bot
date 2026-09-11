@@ -72,6 +72,11 @@ def _value_label(v: Any) -> str:
         return texts.BOOL_YES if v else texts.BOOL_NO
     if isinstance(v, Option):
         return v.name
+    if isinstance(v, dict):
+        # ExecutionResult.written carries the JSON-safe value the command was built from
+        # (commands/builder.py runs every value through to_json_value), so an option arrives as
+        # {"id","name"} and a date as {"start","end"} — not as the typed Option/DateRange.
+        return _proposed_label(v)
     if isinstance(v, list):
         return ", ".join(_value_label(x) for x in v)
     if isinstance(v, DateRange):
@@ -92,7 +97,8 @@ def _proposed_label(v: Any) -> str:
         if "name" in v:
             return str(v["name"])
         if "start" in v:
-            return _date_range_label(v["start"], v.get("end"), v.get("granularity", "date"))
+            granularity = v.get("granularity") or ("datetime" if "T" in str(v["start"]) else "date")
+            return _date_range_label(v["start"], v.get("end"), granularity)
     return str(v)
 
 

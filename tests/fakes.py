@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import copy
+
+from app.interpretation.models import Interpretation
+from app.llm.base import LLMTrace
+from app.llm.context import Context
 from app.notion.errors import NotionError
+from app.notion.snapshot import WorkspaceSnapshot
 
 
 class FakeNotionProvider:
@@ -14,6 +20,8 @@ class FakeNotionProvider:
         self.pages: dict[str, dict] = {}
         self.calls: list[tuple] = []
         self.fail_search: Exception | None = None
+        self.fail_create_page: Exception | None = None
+        self.fail_append_blocks: Exception | None = None
 
     async def me(self) -> dict:
         return {"object": "user", "id": "bot"}
@@ -57,6 +65,8 @@ class FakeNotionProvider:
 
     async def create_page(self, parent, properties, children=None) -> dict:
         self.calls.append(("create_page", parent, properties, children))
+        if self.fail_create_page:
+            raise self.fail_create_page
         return {"id": "new-page", "url": "https://notion.so/new-page", "properties": properties}
 
     async def update_page(self, page_id, *, properties=None, archived=None) -> dict:
@@ -65,8 +75,65 @@ class FakeNotionProvider:
 
     async def append_blocks(self, block_id, children) -> dict:
         self.calls.append(("append_blocks", block_id, children))
+        if self.fail_append_blocks:
+            raise self.fail_append_blocks
         return {"results": [{"id": f"blk-{i}"} for i, _ in enumerate(children)]}
 
     async def delete_block(self, block_id) -> dict:
         self.calls.append(("delete_block", block_id))
         return {"id": block_id, "archived": True}
+
+
+class FakeLLM:
+    """Serves queued interpretations (or raises queued LLMErrors) instead of calling Ollama, and
+    records what it was asked: the prompt text, a deep copy of the context payload it was handed
+    (so a later request cannot mutate what an earlier assertion inspects) and the JSON schema.
+    `calls` is the assertion hook for "this path must not touch the LLM" — button answers."""
+
+    def __init__(self) -> None:
+        self.model = "fake-model"
+        self.calls = 0
+        self.seen: list[tuple[str, dict, dict]] = []
+        self._queue: list[Interpretation | Exception] = []
+
+    def queue(self, interp: Interpretation) -> None:
+        self._queue.append(interp)
+
+    def queue_error(self, exc: Exception) -> None:
+        self._queue.append(exc)
+
+    async def interpret(
+        self, text: str, context: Context, schema: dict
+    ) -> tuple[Interpretation, LLMTrace]:
+        self.calls += 1
+        self.seen.append((text, copy.deepcopy(context.payload), schema))
+        if not self._queue:
+            raise AssertionError("FakeLLM called with nothing queued")
+        item = self._queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item, LLMTrace(
+            model=self.model, messages=[{"role": "user", "content": text}],
+            raw_response=item.model_dump_json(), duration_ms=7, attempts=1,
+            prompt_tokens=123, output_tokens=45, done_reason="stop",
+        )
+
+    async def models(self) -> list[str]:
+        return [self.model]
+
+
+class FakeDiscovery:
+    """Serves one fixed WorkspaceSnapshot, or raises `fail`. Discovery's own caching, TTL and
+    stale-snapshot fallback are covered by test_discovery.py; what the orchestrator needs from
+    it is `await get()` plus `last` (the snapshot the inbox fallback writes against)."""
+
+    def __init__(self, snapshot: WorkspaceSnapshot) -> None:
+        self.snapshot = snapshot
+        self.fail: Exception | None = None
+        self.last: WorkspaceSnapshot | None = None
+
+    async def get(self) -> WorkspaceSnapshot:
+        if self.fail is not None:
+            raise self.fail
+        self.last = self.snapshot
+        return self.snapshot

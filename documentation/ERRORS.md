@@ -25,6 +25,7 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `UNDO_EXPIRED` | commands/executor | undo window passed | Отменить уже нельзя (прошло больше N минут). | none |
 | `UNDO_FAILED` | commands/executor | Notion refused undo | Не удалось отменить: <message>. | audit |
 | `SESSION_EXPIRED` | conversation/session | button pressed after TTL | Вопрос устарел. Повторите запрос. | drop session |
+| `INTERNAL` | conversation/orchestrator | unexpected exception on any path (the orchestrator never raises to the transport) | Не удалось обработать сообщение. | audit error, log exception |
 | `CONFIG_INVALID` | config | missing env / bad value | process exits with message | fix `.env` |
 
 ## Startup checks (`main.py`)

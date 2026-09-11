@@ -75,11 +75,14 @@ SEARCH_EMPTY = "Ничего не нашёл."
 
 # ---- standalone replies -----------------------------------------------------------------------
 
-INBOX_SAVED = "Сохранил в «Разное»."
+# The inbox target is whatever the user flagged in targets.yaml, so its name is filled in at
+# send time rather than baked into the sentence.
+INBOX_SAVED = "Сохранил в «{target_name}»: {url}"
 INBOX_SAVED_EXPIRED = "Вопрос устарел — сохранил сообщение в «Разное»."
 INBOX_FAILED = "Не удалось сохранить в «Разное»."
 CANCELLED = "Отменено."
 UNDONE = "↩️ Отменено."
+ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)
 
 # ---- errors (documentation/ERRORS.md), keyed by error code ------------------------------------
 
@@ -100,4 +103,16 @@ ERRORS: dict[str, str] = {
     "SESSION_EXPIRED": "Вопрос устарел. Повторите запрос.",
     "nothing_to_write": "Не понял, что именно изменить.",
     "item_not_found": "Не нашёл «{item_text}» в списке.",
+    "INTERNAL": "Не удалось обработать сообщение.",
 }
+
+# ---- LLM-facing keys --------------------------------------------------------------------------
+
+# Keys of the `pending` block the orchestrator adds to the request context when the next message
+# is a free-text answer to the question already on screen (app/llm/context.py puts it into the
+# payload verbatim). Russian because the whole context speaks Russian to the local model; these
+# are the only strings in this module the user never sees. The block carries names and question
+# text only — never a Notion id, never a context key.
+PENDING_QUESTION = "вопрос"
+PENDING_TARGET = "цель"
+PENDING_TEXT = "исходный_текст"

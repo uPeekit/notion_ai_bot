@@ -178,6 +178,18 @@ class SessionStore:
     def drop(self, chat_id: int) -> None:
         self._audit.delete_session(chat_id)
 
+    def pop_expired_one(self, chat_id: int, now: datetime) -> PendingSession | None:
+        """Delete and return one chat's session only if it has already expired. The orchestrator
+        asks this before `get`, which drops an expired row silently: the question is gone either
+        way, but its original text can still be rescued into the inbox instead of being lost."""
+        payload = self._audit.pop_expired_session(chat_id, now)
+        if payload is None:
+            return None
+        try:
+            return PendingSession.model_validate_json(payload)
+        except ValidationError:
+            return None
+
     def pop_expired(self, now: datetime) -> list[PendingSession]:
         """Return and delete every session whose expires_at <= now (the inbox sweeper).
 
@@ -189,11 +201,7 @@ class SessionStore:
         deletes nothing, and this method silently skips it instead of destroying live state."""
         out: list[PendingSession] = []
         for chat_id, _ in self._audit.expired_sessions(now):
-            payload = self._audit.pop_expired_session(chat_id, now)
-            if payload is None:
-                continue
-            try:
-                out.append(PendingSession.model_validate_json(payload))
-            except ValidationError:
-                continue
+            session = self.pop_expired_one(chat_id, now)
+            if session is not None:
+                out.append(session)
         return out
