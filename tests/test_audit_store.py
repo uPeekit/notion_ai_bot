@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -44,6 +45,56 @@ def test_session_replace_and_delete(store):
     assert store.get_session(7, now) == "b"
     store.delete_session(7)
     assert store.get_session(7, now) is None
+
+
+def test_expired_sessions_returns_only_rows_at_or_past_expiry(store):
+    now = datetime.now(UTC)
+    store.save_session(1, "expired", now - timedelta(seconds=1))
+    store.save_session(2, "exactly-now", now)
+    store.save_session(3, "future", now + timedelta(minutes=5))
+    rows = store.expired_sessions(now)
+    assert sorted(rows) == [(1, "expired"), (2, "exactly-now")]
+
+
+def test_expired_sessions_does_not_delete(store):
+    now = datetime.now(UTC)
+    store.save_session(1, "expired", now - timedelta(seconds=1))
+    store.expired_sessions(now)
+    assert store.get_session(1, now - timedelta(minutes=5)) == "expired"
+
+
+def test_pop_session_returns_payload_and_removes_row(store):
+    now = datetime.now(UTC)
+    store.save_session(5, '{"a":1}', now + timedelta(minutes=5))
+    assert store.pop_session(5) == '{"a":1}'
+    assert store.pop_session(5) is None
+    assert store.get_session(5, now) is None
+
+
+def test_pop_session_missing_returns_none(store):
+    assert store.pop_session(999) is None
+
+
+def test_expired_sessions_and_pop_session_thread_safe(store):
+    now = datetime.now(UTC)
+    for cid in range(20):
+        store.save_session(cid, f"payload-{cid}", now - timedelta(seconds=1))
+    errors: list[Exception] = []
+
+    def worker(cid: int) -> None:
+        try:
+            store.expired_sessions(now)
+            store.pop_session(cid)
+        except Exception as e:  # pragma: no cover - failure path
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(cid,)) for cid in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert store.expired_sessions(now) == []
 
 
 def test_execution_undo_window(store):
