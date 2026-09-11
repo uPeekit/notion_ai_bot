@@ -1,6 +1,5 @@
 from app.notion.snapshot import WRITABLE_TYPES, FieldType
-
-UNTITLED = "(без названия)"
+from app.texts import UNTITLED
 
 
 def plain_text(rich: list[dict]) -> str:
