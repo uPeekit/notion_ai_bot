@@ -67,6 +67,16 @@ def test_reverse_lookups():
     assert ctx.target_keys() == ["t1", "t2", "t3", "t4", "t5"]
 
 
+def test_reverse_key_lookups_by_notion_id():
+    ctx = build()
+    assert ctx.field_key("ds-buy", "shop") == "t2.f2"
+    assert ctx.option_key("ds-buy", "shop", "o-Rimi") == "t2.f2.o1"
+    assert ctx.item_key("ds-buy", "b-milk") == "t2.i2"
+    assert ctx.field_key("ds-buy", "nope") is None
+    assert ctx.option_key("ds-buy", "shop", "nope") is None
+    assert ctx.item_key("ds-buy", "nope") is None
+
+
 def test_items_cap_and_no_ids_or_urls_in_payload():
     ctx = build(items_per_target=2)
     assert list(ctx.payload["targets"][1]["items"]) == ["t2.i1", "t2.i2"]

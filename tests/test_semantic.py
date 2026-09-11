@@ -149,6 +149,14 @@ def test_status_explicit_null_dropped_with_issue():
     assert any(i.code == "SEM_STATUS_CLEAR" for i in r.issues)
 
 
+def test_item_text_carried_and_capped():
+    ctx, _ = ctx_and_snapshot()
+    r, _ = run(make_interp("update", cand(ctx, "t2", item_text="овсяное " * 700)))
+    assert r.best.item_text is not None and len(r.best.item_text) == 4000
+    r, _ = run(make_interp("update", cand(ctx, "t2", item_text=None)))
+    assert r.best.item_text is None
+
+
 def test_page_title_field_and_text_caps():
     ctx, _ = ctx_and_snapshot()
     r, _ = run(make_interp(

@@ -64,6 +64,7 @@ def test_valid_response_passes_schema_and_pydantic(ctx):
                 "confidence": 0.9,
                 "item": None,
                 "item_candidates": [],
+                "item_text": None,
                 "fields": {
                     "t2.f1": {
                         "status": "value",
@@ -90,6 +91,31 @@ def test_valid_response_passes_schema_and_pydantic(ctx):
     }
     jsonschema.validate(raw, schema)
     Interpretation.model_validate(raw)
+
+
+def test_item_text_accepted_and_required(ctx):
+    schema = build_schema(ctx)
+    raw = {
+        "intent": {"value": "update", "confidence": 0.95},
+        "candidates": [
+            {
+                "target": "t2",
+                "confidence": 0.9,
+                "item": None,
+                "item_candidates": [],
+                "item_text": "овсяное молоко",
+                "fields": {k: {"status": "not_mentioned"} for k in ctx.field_keys("t2")},
+                "content": None,
+                "search_query": None,
+            }
+        ],
+        "notes": "",
+    }
+    jsonschema.validate(raw, schema)
+    Interpretation.model_validate(raw)
+    del raw["candidates"][0]["item_text"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(raw, schema)
 
 
 @pytest.mark.parametrize(
@@ -120,6 +146,7 @@ def test_invalid_responses_fail_schema(ctx, mutate):
                 "confidence": 0.9,
                 "item": None,
                 "item_candidates": [],
+                "item_text": None,
                 "fields": {k: {"status": "not_mentioned"} for k in ctx.field_keys("t2")},
                 "content": None,
                 "search_query": None,

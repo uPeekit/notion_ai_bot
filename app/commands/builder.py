@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any
-
+from app.commands.jsonvalue import to_json_value
 from app.commands.models import (
     AppendBlocks,
     Command,
@@ -15,30 +13,13 @@ from app.commands.models import (
     UpdateItem,
 )
 from app.llm.context import PAGE_TITLE_FIELD_ID
-from app.notion.snapshot import Option
-from app.validation.semantic import DateRange, VCandidate, VField
+from app.validation.semantic import VCandidate, VField
 
 
 def paragraphs(text: str | None) -> list[str]:
     if not text:
         return []
     return [line.strip() for line in text.splitlines() if line.strip()]
-
-
-def _iso(d: date | datetime) -> str:
-    return d.isoformat()
-
-
-def to_json_value(v: Any) -> Any:
-    if v is None:
-        return None
-    if isinstance(v, Option):
-        return {"id": v.id, "name": v.name}
-    if isinstance(v, list):
-        return [to_json_value(x) for x in v]
-    if isinstance(v, DateRange):
-        return {"start": _iso(v.start), "end": _iso(v.end) if v.end else None}
-    return v
 
 
 def _writes(c: VCandidate) -> list[PropertyWrite]:

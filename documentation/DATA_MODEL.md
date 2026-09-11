@@ -199,7 +199,7 @@ RISK = {"create_item": "LOW", "create_page": "LOW", "append_blocks": "LOW",
         "search": "LOW", "update_item": "MEDIUM"}   # matches policy.RISK_BY_INTENT by intent
 ```
 
-`PropertyWrite.value` JSON shapes (built by `commands/builder.py:to_json_value`, consumed by `notion/mapper.py:property_payload`); `value=None` always means "clear this property" (dropped entirely for `status`, since Notion cannot clear a status — see §8 of ARCHITECTURE.md):
+`PropertyWrite.value` JSON shapes (built by `commands/jsonvalue.py:to_json_value`, reused by `validation/policy.py` for `Question.proposed` and consumed by `notion/mapper.py:property_payload`); `value=None` always means "clear this property" (dropped entirely for `status`, since Notion cannot clear a status — see §8 of ARCHITECTURE.md):
 
 | `type` | `value` shape |
 |---|---|

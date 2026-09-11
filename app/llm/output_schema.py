@@ -84,6 +84,7 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
             "confidence": dict(CONFIDENCE),
             "item": item,
             "item_candidates": item_candidates,
+            "item_text": _nullable(dict(STRING)),
             "fields": _obj(fields),
             "content": _nullable(dict(STRING)),
             "search_query": _nullable(dict(STRING)),

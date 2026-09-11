@@ -25,11 +25,12 @@ def amb(*cands: Any, src: str = "") -> dict:
 
 def cand(ctx: Context, target: str, conf: float = 0.9, *, item: str | None = None,
          item_candidates: list[str] | None = None, fields: dict | None = None,
-         content: str | None = None, search_query: str | None = None) -> dict:
+         content: str | None = None, search_query: str | None = None,
+         item_text: str | None = None) -> dict:
     base = {k: {"status": "not_mentioned"} for k in ctx.field_keys(target)}
     base.update(fields or {})
     return {"target": target, "confidence": conf, "item": item,
-            "item_candidates": item_candidates or [], "fields": base,
+            "item_candidates": item_candidates or [], "item_text": item_text, "fields": base,
             "content": content, "search_query": search_query}
 
 

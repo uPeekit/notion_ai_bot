@@ -58,6 +58,7 @@ class VCandidate:
     confidence: float
     item: Item | None
     item_candidates: list[Item]
+    item_text: str | None
     fields: dict[str, VField]
     content: str | None
     search_query: str | None
@@ -236,9 +237,10 @@ class SemanticValidator:
 
         content = cand.content.strip()[:MAX_TEXT] if cand.content else None
         query = cand.search_query.strip()[:MAX_TEXT] if cand.search_query else None
+        item_text = cand.item_text.strip()[:MAX_TEXT] if cand.item_text else None
         return VCandidate(
-            cand.target, target, cand.confidence, item, item_candidates, fields,
-            content or None, query or None,
+            cand.target, target, cand.confidence, item, item_candidates, item_text or None,
+            fields, content or None, query or None,
         )
 
     @staticmethod

@@ -53,7 +53,8 @@ def test_intent_confidence_boundary():
     low = make_interp("create", cand(ctx, "t2", 0.95, fields={"t2.f1": val("x")}), intent_conf=0.84)
     assert decide(ok)[0].kind == "EXECUTE"
     d, _ = decide(low)
-    assert d.kind == "CLARIFY" and d.questions[0].type == "target"
+    # single candidate + only-low-intent-confidence -> intent_confirm, not a one-option target ask
+    assert d.kind == "CLARIFY" and d.questions[0].type == "intent_confirm"
 
 
 def test_required_field_missing_asks_with_options():
@@ -93,7 +94,8 @@ def test_date_confidence_boundary(conf, expect):
     assert d.kind == expect
     if expect == "CLARIFY":
         q = d.questions[0]
-        assert q.type == "date" and q.proposed.start.isoformat() == "2026-09-14"
+        assert q.type == "date"
+        assert q.proposed == {"start": "2026-09-14", "end": None, "granularity": "date"}
 
 
 @pytest.mark.parametrize("conf,expect", [(0.75, "EXECUTE"), (0.74, "CLARIFY")])
@@ -103,7 +105,8 @@ def test_field_confidence_boundary(conf, expect):
         "t2.f1": val("x"), "t2.f2": val("t2.f2.o1", conf)})))
     assert d.kind == expect
     if expect == "CLARIFY":
-        assert d.questions[0].type == "field_confirm" and d.questions[0].proposed.name == "Rimi"
+        assert d.questions[0].type == "field_confirm"
+        assert d.questions[0].proposed == {"id": "o-Rimi", "name": "Rimi"}
 
 
 def test_update_item_resolution():
@@ -153,3 +156,47 @@ def test_search_executes_without_item():
     ctx, _ = ctx_and_snapshot()
     d, _ = decide(make_interp("search", cand(ctx, "t2", 0.95, search_query="Rimi")))
     assert d.kind == "EXECUTE"
+
+
+def test_question_json_safe_and_stable_id():
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("create", cand(ctx, "t3", 0.95, fields={"t3.f1": val("Документы")})))
+    q = d.questions[0]
+    assert q.type == "field_required" and q.id == "field_required:t3.f2"
+    assert q.model_dump_json()
+
+    d, _ = decide(make_interp("create", cand(ctx, "t3", 0.95, fields={
+        "t3.f1": val("x"), "t3.f2": val("t3.f2.o1"),
+        "t3.f3": val({"start": "2026-09-14", "end": None}, 0.5)})))
+    date_q = next(q for q in d.questions if q.type == "date")
+    assert date_q.model_dump_json()
+
+    d, _ = decide(make_interp("create", cand(ctx, "t2", 0.95, fields={
+        "t2.f1": val("x"), "t2.f2": val("t2.f2.o1", 0.5)})))
+    fc_q = next(q for q in d.questions if q.type == "field_confirm")
+    assert fc_q.model_dump_json()
+
+
+def test_item_not_found_question_carries_item_text():
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("update", cand(ctx, "t2", 0.95, fields={"t2.f5": val(True)},
+                                              item_text="овсяное молоко 2")))
+    assert d.kind == "REJECT" and d.questions[0].type == "item_not_found"
+    assert d.questions[0].proposed == "овсяное молоко 2"
+
+
+def test_intent_confirm_single_candidate_low_intent():
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("create", cand(ctx, "t2", 0.95, fields={"t2.f1": val("x")}),
+                              intent_conf=0.5))
+    assert d.kind == "CLARIFY"
+    q = d.questions[0]
+    assert q.type == "intent_confirm" and q.target_key == "t2" and q.proposed == "create"
+
+    d, _ = decide(make_interp(
+        "create",
+        cand(ctx, "t2", 0.95, fields={"t2.f1": val("x")}),
+        cand(ctx, "t3", 0.90, fields={"t3.f1": val("x"), "t3.f2": val("t3.f2.o1")}),
+        intent_conf=0.5,
+    ))
+    assert d.kind == "CLARIFY" and d.questions[0].type == "target"

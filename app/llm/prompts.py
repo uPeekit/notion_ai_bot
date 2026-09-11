@@ -33,7 +33,9 @@ append — дописать текст на страницу; search — най�
    not_mentioned — в сообщении об этом ничего нет.
 4. Для update и append выбери item из items/children выбранной цели. Подходит несколько — \
 item=null и \
-перечисли item_candidates. Не подходит ничего — item=null и пустой item_candidates.
+перечисли item_candidates. Не подходит ничего — item=null и пустой item_candidates. Если ни один \
+элемент не подходит, верни item=null, пустой item_candidates и item_text — фрагмент сообщения, \
+которым пользователь назвал элемент.
 5. Текст для append или тело новой подстраницы — в content. Поисковая фраза — в search_query.
 
 Правила:

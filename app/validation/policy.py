@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.commands.jsonvalue import to_json_value
 from app.config import Settings
-from app.validation.semantic import ValidationResult, VCandidate, VField
+from app.validation.semantic import DateRange, ValidationResult, VCandidate, VField
 
 Kind = Literal["EXECUTE", "CLARIFY", "REJECT"]
 Risk = Literal["LOW", "MEDIUM"]
-QType = Literal["target", "item", "item_not_found", "field_required", "field_ambiguous",
-                "field_confirm", "date", "content_required", "nothing_to_write"]
+QType = Literal["target", "intent_confirm", "item", "item_not_found", "field_required",
+                "field_ambiguous", "field_confirm", "date", "content_required",
+                "nothing_to_write"]
 RISK_BY_INTENT: dict[str, Risk] = {"create": "LOW", "append": "LOW", "search": "LOW",
                                    "update": "MEDIUM"}
 _ORDER: dict[str, int] = {t: i for i, t in enumerate(
-    ["target", "item", "item_not_found", "field_required", "field_ambiguous", "date",
-     "field_confirm", "content_required", "nothing_to_write"])}
+    ["target", "intent_confirm", "item", "item_not_found", "field_required", "field_ambiguous",
+     "date", "field_confirm", "content_required", "nothing_to_write"])}
 
 
 @dataclass(frozen=True)
@@ -33,20 +38,40 @@ class Thresholds:
                    s.policy_field_min, s.policy_date_min)
 
 
-@dataclass(frozen=True)
-class QOption:
+class QOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     key: str
     label: str
 
 
-@dataclass
-class Question:
+class Question(BaseModel):
+    """A JSON-safe clarification question; a session can persist these across a restart or a
+    context rebuild (Plan 3)."""
+
+    model_config = ConfigDict(extra="forbid")
     type: QType
     target_key: str | None = None
     field_key: str | None = None
     field_name: str | None = None
-    options: list[QOption] = field(default_factory=list)
+    options: list[QOption] = Field(default_factory=list)
     proposed: Any = None
+
+    @property
+    def id(self) -> str:
+        """Stable across a context rebuild: identifies *what* is being asked, not which request."""
+        return f"{self.type}:{self.field_key or self.target_key or ''}"
+
+
+def _proposed_json(v: Any) -> Any:
+    """JSON-safe form of a typed field value for Question.proposed."""
+    if isinstance(v, DateRange):
+        granularity = "datetime" if isinstance(v.start, datetime) else "date"
+        return {
+            "start": v.start.isoformat(),
+            "end": v.end.isoformat() if v.end else None,
+            "granularity": granularity,
+        }
+    return to_json_value(v)
 
 
 @dataclass
@@ -80,28 +105,41 @@ class Policy:
         qs: list[Question] = []
 
         second = r.second
-        if (r.intent_confidence < self.t.intent_min or best.confidence < self.t.target_min
-                or (second is not None
-                    and round(best.confidence - second.confidence, 9) < self.t.target_margin)):
-            qs.append(Question("target", best.key,
-                                options=[QOption(c.key, c.target.name) for c in r.candidates]))
+        low_intent = r.intent_confidence < self.t.intent_min
+        low_target = best.confidence < self.t.target_min
+        low_margin = (second is not None
+                      and round(best.confidence - second.confidence, 9) < self.t.target_margin)
+        if low_intent or low_target or low_margin:
+            if low_intent and not low_target and not low_margin and len(r.candidates) == 1:
+                qs.append(Question(type="intent_confirm", target_key=best.key,
+                                    proposed=r.intent))
+            else:
+                qs.append(Question(
+                    type="target", target_key=best.key,
+                    options=[QOption(key=c.key, label=c.target.name) for c in r.candidates],
+                ))
 
         if r.intent == "update" and best.item is None:
             if best.item_candidates:
-                qs.append(Question("item", best.key,
-                                    options=[QOption(self._item_key(best, i), i.title)
-                                             for i in best.item_candidates]))
+                qs.append(Question(
+                    type="item", target_key=best.key,
+                    options=[QOption(key=self._item_key(best, i), label=i.title)
+                             for i in best.item_candidates],
+                ))
             else:
-                q = Question("item_not_found", best.key)
+                q = Question(type="item_not_found", target_key=best.key,
+                              proposed=best.item_text)
                 return Decision("REJECT", best, [q], ["item not found in target"], risk)
         elif r.intent == "update":
             if not any(f.status in ("value", "explicit_null") for f in best.fields.values()):
-                q = Question("nothing_to_write", best.key)
+                q = Question(type="nothing_to_write", target_key=best.key)
                 return Decision("REJECT", best, [q], ["nothing to write"], risk)
         if r.intent == "append" and best.item is None and best.item_candidates:
-            qs.append(Question("item", best.key,
-                                options=[QOption(self._item_key(best, i), i.title)
-                                         for i in best.item_candidates]))
+            qs.append(Question(
+                type="item", target_key=best.key,
+                options=[QOption(key=self._item_key(best, i), label=i.title)
+                         for i in best.item_candidates],
+            ))
 
         for fk, f in best.fields.items():
             if (r.intent == "create" and f.field.required
@@ -110,13 +148,15 @@ class Policy:
             elif f.status == "ambiguous":
                 qs.append(self._field_q("field_ambiguous", best, fk, f))
             elif f.status == "value" and f.field.type == "date" and f.confidence < self.t.date_min:
-                qs.append(Question("date", best.key, fk, f.field.name, proposed=f.value))
+                qs.append(Question(type="date", target_key=best.key, field_key=fk,
+                                    field_name=f.field.name, proposed=_proposed_json(f.value)))
             elif (f.status == "value" and f.field.type != "date"
                     and f.confidence < self.t.field_min):
-                qs.append(Question("field_confirm", best.key, fk, f.field.name, proposed=f.value))
+                qs.append(Question(type="field_confirm", target_key=best.key, field_key=fk,
+                                    field_name=f.field.name, proposed=_proposed_json(f.value)))
 
         if r.intent == "append" and not best.content:
-            qs.append(Question("content_required", best.key))
+            qs.append(Question(type="content_required", target_key=best.key))
 
         if qs:
             qs.sort(key=lambda q: _ORDER[q.type])
@@ -130,9 +170,12 @@ class Policy:
     @staticmethod
     def _field_q(qtype: QType, c: VCandidate, fk: str, f: VField) -> Question:
         if qtype == "field_ambiguous":
-            options = [QOption(f"{fk}#{i}", _label(v)) for i, v in enumerate(f.candidates)]
+            options = [QOption(key=f"{fk}#{i}", label=_label(v))
+                       for i, v in enumerate(f.candidates)]
         elif f.field.options:
-            options = [QOption(f"{fk}.o{i + 1}", o.name) for i, o in enumerate(f.field.options)]
+            options = [QOption(key=f"{fk}.o{i + 1}", label=o.name)
+                       for i, o in enumerate(f.field.options)]
         else:
             options = []
-        return Question(qtype, c.key, fk, f.field.name, options)
+        return Question(type=qtype, target_key=c.key, field_key=fk, field_name=f.field.name,
+                         options=options)

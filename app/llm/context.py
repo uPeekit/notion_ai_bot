@@ -87,6 +87,26 @@ class Context:
     def item_keys(self, target_key: str) -> list[str]:
         return list(self.items_by_target.get(target_key, []))
 
+    def field_key(self, target_id: str, field_id: str) -> str | None:
+        """Reverse lookup: Notion field id -> context key (for Plan 3, after rebuild)."""
+        for k, r in self.keys.items():
+            if r.kind == "field" and r.target_id == target_id and r.field_id == field_id:
+                return k
+        return None
+
+    def option_key(self, target_id: str, field_id: str, option_id: str) -> str | None:
+        for k, r in self.keys.items():
+            if (r.kind == "option" and r.target_id == target_id and r.field_id == field_id
+                    and r.option_id == option_id):
+                return k
+        return None
+
+    def item_key(self, target_id: str, item_id: str) -> str | None:
+        for k, r in self.keys.items():
+            if r.kind == "item" and r.target_id == target_id and r.item_id == item_id:
+                return k
+        return None
+
 
 class ContextBuilder:
     def __init__(self, timezone: str = "Europe/Tallinn", items_per_target: int = 50) -> None:
