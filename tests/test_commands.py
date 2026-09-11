@@ -67,3 +67,13 @@ def test_create_page_and_append_and_search():
     assert cmd.query == "Rimi"
     c = best("search", cand(ctx, "t2"))
     assert build_command(c, "search", "что в покупках").query == "что в покупках"
+
+
+def test_search_filters_from_validated_fields():
+    ctx, _ = ctx_and_snapshot()
+    c = best("search", cand(ctx, "t2", fields={"t2.f2": val("t2.f2.o1")}))
+    cmd = build_command(c, "search", "что в покупках на Rimi")
+    assert len(cmd.filters) == 1
+    assert cmd.filters[0].property_name == "Магазин"
+    assert cmd.filters[0].value == {"id": "o-Rimi", "name": "Rimi"}
+    assert cmd.query == ""

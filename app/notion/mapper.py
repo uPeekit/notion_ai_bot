@@ -62,9 +62,30 @@ def create_page_payload(cmd: CreatePage) -> tuple[dict, dict, list[dict]]:
 
 
 def search_filter(cmd: Search) -> dict | None:
-    if not cmd.data_source_id or not cmd.title_property:
+    """Notion data-source query filter, addressing properties by name. None means unfiltered
+    (workspace search, or a data-source query with no narrowing conditions)."""
+    if not cmd.data_source_id:
         return None
-    return {"property": cmd.title_property, "title": {"contains": cmd.query}}
+    conditions: list[dict] = []
+    for f in cmd.filters:
+        v = f.value
+        if f.type in ("select", "status"):
+            conditions.append({"property": f.property_name, f.type: {"equals": v["name"]}})
+        elif f.type == "multi_select":
+            conditions += [{"property": f.property_name, "multi_select": {"contains": x["name"]}}
+                           for x in (v or [])]
+        elif f.type == "relation":
+            conditions += [{"property": f.property_name, "relation": {"contains": x["id"]}}
+                           for x in (v or [])]
+        elif f.type == "checkbox":
+            conditions.append({"property": f.property_name, "checkbox": {"equals": bool(v)}})
+    if cmd.query and cmd.title_property:
+        conditions.append({"property": cmd.title_property, "title": {"contains": cmd.query}})
+    if not conditions:
+        return None
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"and": conditions}
 
 
 def read_to_write(prop: dict) -> dict | None:

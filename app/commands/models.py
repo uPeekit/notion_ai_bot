@@ -53,6 +53,7 @@ class Search(Strict):
     target_name: str
     title_property: str | None
     query: str
+    filters: list[PropertyWrite] = []
 
 
 Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search

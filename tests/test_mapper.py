@@ -66,13 +66,56 @@ def test_paragraph_blocks_split_long_text():
     assert paragraph_blocks([]) == []
 
 
-def test_search_filter():
+def test_search_filter_title_only_unchanged_shape():
     cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название",
                 query="Rimi")
     assert search_filter(cmd) == {"property": "Название", "title": {"contains": "Rimi"}}
     assert search_filter(
         Search(data_source_id=None, target_name="Идеи", title_property=None, query="x")
     ) is None
+
+
+def test_search_filter_no_conditions_is_none():
+    cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название", query="")
+    assert search_filter(cmd) is None
+
+
+def test_search_filter_select_only():
+    cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название", query="",
+                filters=[pw("shop", "Магазин", "select", {"id": "o1", "name": "Rimi"})])
+    assert search_filter(cmd) == {"property": "Магазин", "select": {"equals": "Rimi"}}
+
+
+def test_search_filter_select_and_title_combine_with_and():
+    cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название",
+                query="Rimi",
+                filters=[pw("shop", "Магазин", "select", {"id": "o1", "name": "Rimi"})])
+    assert search_filter(cmd) == {"and": [
+        {"property": "Магазин", "select": {"equals": "Rimi"}},
+        {"property": "Название", "title": {"contains": "Rimi"}},
+    ]}
+
+
+def test_search_filter_multi_select_two_values():
+    cmd = Search(data_source_id="ds", target_name="Задачи", title_property="Задача", query="",
+                filters=[pw("tags", "Теги", "multi_select",
+                            [{"id": "a", "name": "дом"}, {"id": "b", "name": "работа"}])])
+    assert search_filter(cmd) == {"and": [
+        {"property": "Теги", "multi_select": {"contains": "дом"}},
+        {"property": "Теги", "multi_select": {"contains": "работа"}},
+    ]}
+
+
+def test_search_filter_relation_uses_page_id():
+    cmd = Search(data_source_id="ds", target_name="Задачи", title_property="Задача", query="",
+                filters=[pw("project", "Проект", "relation", [{"id": "p-home", "name": "Дом"}])])
+    assert search_filter(cmd) == {"property": "Проект", "relation": {"contains": "p-home"}}
+
+
+def test_search_filter_checkbox():
+    cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название", query="",
+                filters=[pw("done", "Куплено", "checkbox", True)])
+    assert search_filter(cmd) == {"property": "Куплено", "checkbox": {"equals": True}}
 
 
 def test_read_to_write_roundtrip_shapes():
