@@ -22,6 +22,8 @@ BTN_ADD_NEW = "Добавить как новое"
 
 BOOL_YES = "Да"
 BOOL_NO = "Нет"
+FIELD_CLEARED = "очищено"  # a Written.value of None: the field was explicitly cleared (e.g.
+                            # "убери магазин у молока"), not missing/undefined
 UNTITLED = "(без названия)"  # title fallback for a page with no title text; shared with
                               # app.notion.props.page_title
 

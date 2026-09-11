@@ -105,6 +105,22 @@ def test_format_execution_append_falls_back_to_target_url():
     assert text == "✅ Дописано: Идеи — Книги\nОткрыть: https://notion.so/p4"
 
 
+def test_format_execution_cleared_field_is_not_rendered_as_python_none():
+    # "убери магазин у молока": an explicit_null select/status/date clear still produces a
+    # Written entry, but with value=None (commands/builder.py + notion/mapper.py) — this must
+    # not fall through to str(None) == "None".
+    cmd = UpdateItem(
+        page_id="p5", target_name="Покупки", item_title="Молоко",
+        properties=[PropertyWrite(property_id="shop", property_name="Магазин", type="select",
+                                  value=None)],
+    )
+    result = ExecutionResult(command=cmd, page_id="p5", url="https://notion.so/p5",
+                             written=[Written("Магазин", None)])
+    text = format_execution(result, target_url=None)
+    assert text == "✅ Обновлено: Покупки — Молоко\n• Магазин: очищено\nОткрыть: https://notion.so/p5"
+    assert "None" not in text
+
+
 # ---- format_search ---------------------------------------------------------------------------
 
 def test_format_search_empty():

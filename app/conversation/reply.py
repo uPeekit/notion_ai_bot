@@ -62,7 +62,12 @@ def _date_range_label(start: str, end: str | None, granularity: str) -> str:
 
 
 def _value_label(v: Any) -> str:
-    """Renders a typed Written.value (as stored on ExecutionResult) for a `• field: value` line."""
+    """Renders a typed Written.value (as stored on ExecutionResult) for a `• field: value` line.
+    None means the field was cleared (explicit_null): select/status/date clears still produce a
+    Written entry with value=None (see commands/builder.py and notion/mapper.py), so this must
+    not fall through to str(None) == "None"."""
+    if v is None:
+        return texts.FIELD_CLEARED
     if isinstance(v, bool):
         return texts.BOOL_YES if v else texts.BOOL_NO
     if isinstance(v, Option):
