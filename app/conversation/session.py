@@ -135,11 +135,18 @@ def session_from_decision(
     chat_id: int, event_id: int, text: str, result: ValidationResult, decision: Decision,
     options: list[AnswerOption], *, now: datetime, ttl_s: int, asked: list[str],
 ) -> PendingSession:
-    """Flatten a CLARIFY Decision into a PendingSession. `options` is the answer table for
-    decision.questions[0] (Task 3's resolver.options_for(...)); `asked` is carried forward by the
-    orchestrator across round-trips, not computed here. Generates a fresh `token`."""
-    if decision.kind != "CLARIFY" or not decision.questions:
-        raise ValueError("session_from_decision requires a CLARIFY decision with a question")
+    """Flatten a Decision that carries a candidate and at least one Question into a
+    PendingSession — a CLARIFY, or the item_not_found/nothing_to_write REJECT cases (both carry
+    the candidate and a single Question on purpose: DATA_MODEL.md §4, so Plan 3 can act on them
+    without re-running the LLM, e.g. an "add new" answer for item_not_found). An EXECUTE decision
+    has nothing to ask and still raises. `options` is the answer table for decision.questions[0]
+    (Task 3's resolver.options_for(...)); `asked` is carried forward by the orchestrator across
+    round-trips, not computed here. Generates a fresh `token`."""
+    if decision.candidate is None or not decision.questions:
+        raise ValueError(
+            "session_from_decision requires a decision with a candidate and a question "
+            "(CLARIFY, or the item_not_found/nothing_to_write REJECT cases)"
+        )
     return PendingSession(
         chat_id=chat_id, event_id=event_id, token=secrets.token_hex(4), original_text=text,
         intent=result.intent, intent_confidence=result.intent_confidence,

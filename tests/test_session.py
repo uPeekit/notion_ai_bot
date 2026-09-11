@@ -189,6 +189,37 @@ def test_best_returns_first_candidate():
     assert s.best is s.candidates[0]
 
 
+def test_nothing_to_write_reject_persists_and_round_trips():
+    """nothing_to_write is a REJECT, not a CLARIFY, but DATA_MODEL.md §4 has it carry the
+    candidate and a single Question on purpose so Plan 3 can act on it without re-running the
+    LLM (here: the orchestrator will just offer free text). session_from_decision must accept
+    it."""
+    decision, result, _ = decide(
+        make_interp("update", cand(ctx_and_snapshot()[0], "t2", 0.95, item="t2.i2"))
+    )
+    assert decision.kind == "REJECT" and decision.questions[0].type == "nothing_to_write"
+    s = session_from_decision(
+        chat_id=1, event_id=1, text="обнови молоко", result=result, decision=decision,
+        options=[], now=NOW, ttl_s=600, asked=[],
+    )
+    assert s.question.type == "nothing_to_write"
+    restored = PendingSession.model_validate_json(s.model_dump_json())
+    assert restored == s
+
+
+def test_execute_decision_still_raises():
+    ctx, _ = ctx_and_snapshot()
+    decision, result, _ = decide(
+        make_interp("create", cand(ctx, "t2", 0.95, fields={"t2.f1": val("Молоко")}))
+    )
+    assert decision.kind == "EXECUTE"
+    with pytest.raises(ValueError):
+        session_from_decision(
+            chat_id=1, event_id=1, text="х", result=result, decision=decision,
+            options=[], now=NOW, ttl_s=600, asked=[],
+        )
+
+
 def test_extra_field_forbidden_on_every_model():
     with pytest.raises(ValidationError):
         PendingField(field_id="x", name="n", type="select", status="value", bogus=1)
