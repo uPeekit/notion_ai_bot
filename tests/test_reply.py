@@ -75,6 +75,48 @@ def test_format_execution_create_item_three_fields():
     )
 
 
+def test_format_execution_renders_json_shaped_values():
+    """What the executor actually stores: commands/builder.py runs every value through
+    to_json_value, so a select arrives as {"id","name"} and a date as {"start","end"} — never as
+    the typed Option/DateRange. Rendering those with str() would print the raw dict at the user."""
+    cmd = UpdateItem(
+        page_id="p9", target_name="Задачи", item_title="Отчёт",
+        properties=[
+            PropertyWrite(property_id="prio", property_name="Приоритет", type="select",
+                          value={"id": "o-A", "name": "A"}),
+            PropertyWrite(property_id="due", property_name="Срок", type="date",
+                          value={"start": "2026-09-14", "end": None}),
+            PropertyWrite(property_id="tags", property_name="Теги", type="multi_select",
+                          value=[{"id": "o-1", "name": "дом"}, {"id": "o-2", "name": "работа"}]),
+        ],
+    )
+    result = ExecutionResult(
+        command=cmd, page_id="p9", url="https://notion.so/p9",
+        written=[Written("Приоритет", {"id": "o-A", "name": "A"}),
+                 Written("Срок", {"start": "2026-09-14", "end": None}),
+                 Written("Теги", [{"id": "o-1", "name": "дом"}, {"id": "o-2", "name": "работа"}])],
+    )
+    text = format_execution(result, target_url=None)
+    assert text == (
+        "✅ Обновлено: Задачи — Отчёт\n"
+        "• Приоритет: A\n"
+        "• Срок: 14.09.2026\n"
+        "• Теги: дом, работа\n"
+        "Открыть: https://notion.so/p9"
+    )
+
+
+def test_format_execution_renders_a_json_datetime_range():
+    cmd = UpdateItem(page_id="p10", target_name="Задачи", item_title="Созвон", properties=[])
+    result = ExecutionResult(
+        command=cmd, page_id="p10", url=None,
+        written=[Written("Срок", {"start": "2026-09-14T10:00:00", "end": "2026-09-14T11:00:00"})],
+    )
+    # to_json_value drops the granularity marker Policy._proposed_json adds, so it is inferred.
+    assert "• Срок: 14.09.2026 10:00 – 14.09.2026 11:00" in format_execution(result,
+                                                                             target_url=None)
+
+
 def test_format_execution_update_one_field():
     cmd = UpdateItem(
         page_id="p2", target_name="Покупки", item_title="Молоко",

@@ -72,14 +72,17 @@ def test_button_labels_are_exact():
 
 
 def test_standalone_strings_are_nonempty():
-    for s in (texts.INBOX_SAVED_EXPIRED, texts.INBOX_FAILED, texts.CANCELLED, texts.UNDONE,
-              texts.ENTER_VALUE, texts.SEARCH_EMPTY, texts.SEARCH_HEADER, texts.UNTITLED):
+    for s in (texts.CANCELLED, texts.UNDONE, texts.ENTER_VALUE, texts.SEARCH_EMPTY,
+              texts.SEARCH_HEADER, texts.UNTITLED):
         assert isinstance(s, str) and s.strip()
 
 
-def test_inbox_saved_names_the_target_it_actually_wrote_to():
-    # The inbox is whatever target the user flagged, and it can be called anything, so the
-    # confirmation names it (and links it) instead of hardcoding one name.
-    filled = texts.INBOX_SAVED.format(target_name="Заметки", url="https://notion.so/x")
-    assert "{" not in filled
-    assert "Заметки" in filled and "https://notion.so/x" in filled
+def test_inbox_templates_name_the_target_they_actually_used():
+    # The inbox is whatever target the user flagged, and it can be called anything, so every
+    # inbox sentence names it (and INBOX_SAVED links it) instead of hardcoding one name.
+    for template in (texts.INBOX_SAVED, texts.INBOX_SAVED_EXPIRED, texts.INBOX_FAILED):
+        filled = template.format(target_name="Заметки", url="https://notion.so/x")
+        assert "{" not in filled
+        assert "Заметки" in filled
+    assert "https://notion.so/x" in texts.INBOX_SAVED.format(target_name="Заметки",
+                                                             url="https://notion.so/x")

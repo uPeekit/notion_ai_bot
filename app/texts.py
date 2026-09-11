@@ -75,11 +75,11 @@ SEARCH_EMPTY = "Ничего не нашёл."
 
 # ---- standalone replies -----------------------------------------------------------------------
 
-# The inbox target is whatever the user flagged in targets.yaml, so its name is filled in at
-# send time rather than baked into the sentence.
+# The inbox target is whatever the user flagged in targets.yaml, so all three of these name it
+# at send time rather than baking one name into the sentence.
 INBOX_SAVED = "Сохранил в «{target_name}»: {url}"
-INBOX_SAVED_EXPIRED = "Вопрос устарел — сохранил сообщение в «Разное»."
-INBOX_FAILED = "Не удалось сохранить в «Разное»."
+INBOX_SAVED_EXPIRED = "Вопрос устарел — сохранил сообщение в «{target_name}»."
+INBOX_FAILED = "Не удалось сохранить в «{target_name}»."
 CANCELLED = "Отменено."
 UNDONE = "↩️ Отменено."
 ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)

@@ -18,6 +18,10 @@ Three rules hold on every path through this module:
     interpretation from the stored session (Task 3), so a clarification round-trip costs one
     Notion snapshot and nothing else.
 
+Callback payloads are `a:<token>:<option_id>` (an answer), `u:<execution_id>` (undo) and
+`i:<event_id>` (save that message's own text to the inbox — the BTN_INBOX offer attached to a
+reply that saved nothing, where there is no question and therefore no session token to answer).
+
 The inbox is the safety net, not a shortcut: it catches messages the pipeline would otherwise
 drop (LLM down, rejected interpretation, a question the user never answered), never a question
 the bot could have asked, and never when Notion itself is unreachable — there would be nothing
@@ -323,6 +327,8 @@ class Orchestrator:
         prefix, _, rest = data.partition(":")
         if prefix == "u" and rest.isdigit():
             return await self._undo(turn, int(rest))
+        if prefix == "i" and rest.isdigit():
+            return await self._inbox_event(turn, int(rest))
         token, _, option_id = rest.partition(":")
         if prefix != "a" or not option_id:
             log.warning("unknown callback payload in event %s", turn.event_id)
@@ -341,8 +347,10 @@ class Orchestrator:
         if verb == "inbox":
             self._sessions.drop(turn.chat_id)
             turn.audit(decision=_kind("INBOX"))
-            saved = await self._to_inbox(turn, session.original_text, None, forced=True)
-            return saved if saved is not None else Reply(texts.INBOX_FAILED)
+            reply, _ = await self._to_inbox(turn, session.original_text, None, forced=True)
+            # None only when the inbox disappeared (mode switched off, flag removed) between
+            # rendering the button and pressing it: there is no target left to name.
+            return reply if reply is not None else self._plain(turn, "SESSION_EXPIRED")
         if verb == "free_text":
             turn.audit(decision=_kind("FREE_TEXT"))
             return Reply(texts.ENTER_VALUE)  # the session stays: the next message answers it
@@ -397,26 +405,58 @@ class Orchestrator:
 
     async def _to_inbox(
         self, turn: _Turn, text: str, code: str | None, *, forced: bool = False, **fmt: Any
-    ) -> Reply | None:
-        """Persist `text` to the flagged inbox and report it, or None when there is no inbox to
-        write to. Direct: no LLM, no validator, no policy, and no second fallback — a failed
-        write degrades to INBOX_FAILED rather than retrying."""
+    ) -> tuple[Reply | None, bool]:
+        """Persist `text` to the flagged inbox and report it. Returns (reply, saved): a reply of
+        None means there was no inbox to write to at all and the caller should say something
+        else; `saved` is False when the write itself failed, which is what decides whether the
+        caller offers the BTN_INBOX button. Direct: no LLM, no validator, no policy, and no
+        second fallback — a failed write degrades to INBOX_FAILED rather than retrying."""
         target = self._inbox_target(forced=forced)
         if target is None:
-            return None
+            return None, False
         prefix = f"{_error(code, **fmt)} " if code else ""
         written = await self._rescue(turn, text, target)
         if written is None:
-            return Reply(prefix + texts.INBOX_FAILED)
+            return Reply(prefix + texts.INBOX_FAILED.format(target_name=target.name)), False
         result, execution_id = written
-        saved = texts.INBOX_SAVED.format(target_name=target.name,
-                                         url=result.url or target.url)
-        return Reply(prefix + saved, _undo_buttons(execution_id), undo_id=execution_id)
+        done = texts.INBOX_SAVED.format(target_name=target.name, url=result.url or target.url)
+        return Reply(prefix + done, _undo_buttons(execution_id), undo_id=execution_id), True
 
     async def _inbox_or_error(self, turn: _Turn, text: str, code: str, **fmt: Any) -> Reply:
+        """The error exits all end here: save what the user said if the inbox is on, and offer
+        to save it otherwise (or when the save failed) rather than dropping the message."""
         turn.audit(error=code, decision=json.dumps({"kind": "ERROR", "code": code}))
-        saved = await self._to_inbox(turn, text, code, **fmt)
-        return saved if saved is not None else Reply(_error(code, **fmt))
+        reply, saved = await self._to_inbox(turn, text, code, **fmt)
+        if saved:
+            return reply if reply is not None else Reply(_error(code, **fmt))
+        return replace(reply if reply is not None else Reply(_error(code, **fmt)),
+                       buttons=self._inbox_offer(turn))
+
+    def _inbox_offer(self, turn: _Turn) -> list[list[Button]]:
+        """The BTN_INBOX offer on a reply that saved nothing. It carries this event's id rather
+        than a session token because a rejected message has no question and so no session;
+        pressing it replays the event's own text through `_inbox_event`. Absent when there is no
+        inbox to press it for."""
+        if self._inbox_target(forced=True) is None:
+            return []
+        return [[Button(f"i:{turn.event_id}", texts.BTN_INBOX)]]
+
+    async def _inbox_event(self, turn: _Turn, event_id: int) -> Reply:
+        """Answer to the BTN_INBOX offer: save that event's own text now. Refused for another
+        chat's event, or one older than a pending question would have been allowed to live
+        (SESSION_TTL_SECONDS) — the button is a prompt reply, not an open-ended handle on the
+        audit log."""
+        row = self._store.get_event(event_id)
+        if row is None or row["chat_id"] != turn.chat_id:
+            return self._plain(turn, "SESSION_EXPIRED")
+        text = (row["raw_input"] or row["transcription"] or "").strip()
+        age = turn.now - datetime.fromisoformat(row["ts"])
+        if not text or age > timedelta(seconds=self._s.session_ttl_s):
+            return self._plain(turn, "SESSION_EXPIRED")
+        turn.audit(decision=_kind("INBOX"))
+        reply, _ = await self._to_inbox(turn, text, None, forced=True)
+        # No inbox any more: repeat what the original reply said instead of saving.
+        return reply if reply is not None else Reply(_error(row["error"] or GENERIC_REJECT))
 
     async def _rescue(
         self, turn: _Turn, text: str, target: Target | None = None
@@ -439,10 +479,12 @@ class Orchestrator:
     async def _expired_prefix(self, turn: _Turn, expired: PendingSession) -> str:
         """A question nobody answered in time: its text goes to the inbox and the user is told
         so, on top of whatever the message they just sent produces."""
-        if self._inbox_target(forced=False) is None:
+        target = self._inbox_target(forced=False)
+        if target is None:
             return ""
-        written = await self._rescue(turn, expired.original_text)
-        return texts.INBOX_SAVED_EXPIRED if written is not None else texts.INBOX_FAILED
+        written = await self._rescue(turn, expired.original_text, target)
+        template = texts.INBOX_SAVED_EXPIRED if written is not None else texts.INBOX_FAILED
+        return template.format(target_name=target.name)
 
     # ---- audit -------------------------------------------------------------------------------
 

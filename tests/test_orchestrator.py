@@ -32,9 +32,12 @@ from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
 from tests.fakes import FakeDiscovery, FakeLLM, FakeNotionProvider
 from tests.helpers import amb, cand, make_interp, val
-from tools.sample_workspace import SAMPLE_NOW, sample_snapshot
+from tools.sample_workspace import sample_snapshot
 
-NOW = SAMPLE_NOW.astimezone(UTC)
+# The audit store stamps events with the real wall clock, and the i:<event_id> payload's
+# freshness check compares that stamp against the injected clock — so the test clock starts from
+# the real now and moves forward with `Clock.advance`. Context keys do not depend on it.
+NOW = datetime.now(UTC)
 CHAT, USER = 42, 7
 TOKEN = "ntn-test-token"
 
@@ -527,13 +530,65 @@ async def test_rejected_message_is_appended_to_the_inbox_with_an_undo_button(bot
     closed_events(bot, ["text", "callback"])
 
 
-async def test_inbox_mode_button_does_not_save_on_a_rejection(make):
+async def test_inbox_mode_button_does_not_save_on_a_rejection_but_offers_it(make):
     bot = make(inbox_mode="button")
     bot.llm.queue(not_a_request(bot))
     reply = await bot.orch.handle_text(CHAT, USER, "как дела?")
 
     assert reply.text == texts.ERRORS["INTENT_UNKNOWN"]
-    assert reply.buttons == []
+    assert notion_calls(bot, "append_blocks") == []
+    (event,) = closed_events(bot, ["text"])
+    assert button_ids(reply) == [f"i:{event['id']}"]
+    assert [b.label for row in reply.buttons for b in row] == [texts.BTN_INBOX]
+
+
+async def test_inbox_offer_saves_the_event_text_when_pressed(make):
+    bot = make(inbox_mode="button")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+
+    reply = await bot.orch.handle_callback(CHAT, USER, button_ids(rejected)[0])
+    saved = texts.INBOX_SAVED.format(target_name="Идеи", url="https://notion.so/pg-ideas")
+    assert saved in reply.text
+    appended = notion_calls(bot, "append_blocks")[0]
+    assert appended[1] == "pg-ideas"
+    assert "как дела?" in json.dumps(appended[2], ensure_ascii=False)
+    assert reply.undo_id is not None
+    closed_events(bot, ["text", "callback"])
+
+
+async def test_inbox_offer_of_another_chat_is_refused(make):
+    bot = make(inbox_mode="button")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+
+    reply = await bot.orch.handle_callback(CHAT + 1, USER, button_ids(rejected)[0])
+    assert reply.text == texts.ERRORS["SESSION_EXPIRED"]
+    assert notion_calls(bot, "append_blocks") == []
+
+
+async def test_inbox_offer_expires_with_the_session_ttl(make):
+    bot = make(inbox_mode="button")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+    # well past SESSION_TTL_SECONDS: the events row is stamped by the store's own wall clock, so
+    # the margin has to swallow however long the suite took to get here
+    bot.clock.advance(2 * 900)
+
+    reply = await bot.orch.handle_callback(CHAT, USER, button_ids(rejected)[0])
+    assert reply.text == texts.ERRORS["SESSION_EXPIRED"]
+    assert notion_calls(bot, "append_blocks") == []
+
+
+async def test_inbox_offer_is_refused_when_the_mode_is_off(make):
+    bot = make(inbox_mode="off")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+    assert rejected.buttons == []
+
+    (event,) = closed_events(bot, ["text"])
+    reply = await bot.orch.handle_callback(CHAT, USER, f"i:{event['id']}")
+    assert reply.text == texts.ERRORS["INTENT_UNKNOWN"]  # what the rejection itself said
     assert notion_calls(bot, "append_blocks") == []
 
 
@@ -572,20 +627,22 @@ async def test_no_flagged_inbox_target_rejects_plainly(make):
     reply = await bot.orch.handle_text(CHAT, USER, "как дела?")
 
     assert reply.text == texts.ERRORS["INTENT_UNKNOWN"]
-    assert reply.undo_id is None
+    assert reply.undo_id is None and reply.buttons == []  # nothing to offer
     assert notion_calls(bot, "append_blocks") == []
 
 
-async def test_failed_inbox_write_degrades_to_a_message(bot):
+async def test_failed_inbox_write_degrades_to_a_message_and_offers_the_button(bot):
     bot.notion.fail_append_blocks = NotionError(500, "server_error", "boom")
     bot.llm.queue(not_a_request(bot))
     reply = await bot.orch.handle_text(CHAT, USER, "как дела?")
 
-    assert reply.text == f"{texts.ERRORS['INTENT_UNKNOWN']} {texts.INBOX_FAILED}"
+    failed = texts.INBOX_FAILED.format(target_name="Идеи")
+    assert reply.text == f"{texts.ERRORS['INTENT_UNKNOWN']} {failed}"
     assert reply.undo_id is None
     assert rows(bot, "executions") == []
     (event,) = closed_events(bot, ["text"])
     assert event["error"] == "INTENT_UNKNOWN"
+    assert button_ids(reply) == [f"i:{event['id']}"]  # the user can still retry the save
 
 
 async def test_page_inbox_target_records_one_execution_per_save(bot):
@@ -606,7 +663,7 @@ async def test_expired_session_goes_to_the_inbox_and_the_new_message_is_handled(
     bot.llm.queue(buy_milk(bot))
     reply = await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
 
-    assert reply.text.startswith(texts.INBOX_SAVED_EXPIRED)
+    assert reply.text.startswith(texts.INBOX_SAVED_EXPIRED.format(target_name="Идеи"))
     assert "Молоко" in reply.text  # the new message was still handled
     appended = notion_calls(bot, "append_blocks")[0]
     assert "добавь задачу подготовить документы" in json.dumps(appended[2], ensure_ascii=False)
