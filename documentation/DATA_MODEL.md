@@ -107,6 +107,70 @@ The JSON schema sent to Ollama is generated from these models and then specialis
 
 ## 4. Resolved interpretation (after clarification)
 
+`Question`/`QOption`/`Decision` are real code (`validation/policy.py`), produced by `Policy.evaluate(ValidationResult) -> Decision`:
+
+```python
+QType = Literal["target", "intent_confirm", "item", "item_not_found", "field_required",
+                "field_ambiguous", "field_confirm", "date", "content_required",
+                "nothing_to_write"]
+
+class QOption(BaseModel):               # extra="forbid"; JSON-safe, session-persistable
+    key: str                            # format depends on question type, see table below
+    label: str
+
+class Question(BaseModel):              # extra="forbid"; JSON-safe, session-persistable
+    type: QType
+    target_key: str | None = None       # candidate key the question concerns, e.g. "t3"
+    field_key: str | None = None        # set for field_required / field_ambiguous / field_confirm / date
+    field_name: str | None = None
+    options: list[QOption] = []         # empty for field_confirm, date, item_not_found, content_required, intent_confirm, nothing_to_write
+    proposed: Any = None                # JSON-safe: date -> {start, end, granularity}; option value -> {id, name} (jsonvalue.to_json_value); intent_confirm -> the intent string; item_not_found -> Candidate.item_text
+
+    @property
+    def id(self) -> str:                # f"{type}:{field_key or target_key or ''}" — stable within one context generation; embeds positional context keys, so it does NOT survive a rediscovery (see table below)
+        ...
+
+@dataclass
+class Decision:
+    kind: Literal["EXECUTE", "CLARIFY", "REJECT"]
+    candidate: VCandidate | None         # set for EXECUTE, CLARIFY, and the item_not_found/nothing_to_write REJECTs; else None
+    questions: list[Question]            # non-empty for CLARIFY; exactly one Question for the item_not_found/nothing_to_write REJECT cases; else []
+    reasons: list[str]                   # REJECT: issue codes/messages, ["no valid candidates"], ["item not found in target"], or ["nothing to write"]; CLARIFY: question types in ask order
+    risk: Literal["LOW", "MEDIUM"] | None  # RISK_BY_INTENT[intent]; None only when REJECT has no candidate
+```
+
+`QOption.key` format by question type (built in `policy.py`):
+
+| Question type | Key format | Example |
+|---|---|---|
+| `target` | candidate key (the target key itself) | `t3` |
+| `item` | `<target_key>.item:<page id>` | `t3.item:2f1c…a9` |
+| `field_required`, when field has non-empty `options` | `<field_key>.o<1-based index>` | `t3.f2.o1` |
+| `field_ambiguous` | `<field_key>#<0-based index>` | `t3.f2#0` |
+| `field_confirm`, `date`, `item_not_found`, `content_required`, `intent_confirm`, `nothing_to_write` | no options; answer is free text or a confirm/other action | — |
+
+Question order (ties within one `Decision.questions` broken by this order, one asked at a time): `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write`.
+
+Special cases, both REJECT with the candidate and a single question carried (so Plan 3 can act without re-running the LLM):
+- `update` intent with no resolvable item and no `item_candidates`: `Decision("REJECT", best, [Question("item_not_found", ..., proposed=best.item_text)], ["item not found in target"], risk)`.
+- `update` intent with a resolved item but no field `status` in `("value", "explicit_null", "ambiguous")`: `Decision("REJECT", best, [Question("nothing_to_write", ...)], ["nothing to write"], risk)`. (An `ambiguous` field still needs a `field_ambiguous` CLARIFY round-trip — it is not "nothing to write", since resolving it produces a real value.)
+
+`intent_confirm` replaces a one-option `target` question when the *only* reason to ask is `intent.confidence < POLICY_INTENT_MIN` and there is exactly one candidate (`proposed` carries the guessed intent string).
+
+### Answer keys across a context rebuild
+
+`Question.id` is stable only within one context generation, not across a rebuild (it embeds positional context keys). The per-question-type answer is likewise keyed into the *old* context and cannot be replayed after discovery re-runs; Plan 3 must persist the value below instead, then re-resolve it against the fresh `Context` (via `Context.field_key`/`option_key`/`item_key`, §1 above):
+
+| Question type | What must be persisted instead of the context key |
+|---|---|
+| `target` | `Target.id` |
+| `item` | the item's page id |
+| `field_required` | `(field_id, option_id)` for option types, else the typed value |
+| `field_ambiguous` | the typed value itself (the one the user picked, not its context key) |
+| `date`, `field_confirm` | the JSON `proposed` value (already Notion-id-based, not key-based) |
+
+`PendingSession` below is a **Plan 3 placeholder** (no code yet); `Resolution` remains sketched, but `question` now names the real type:
+
 ```python
 class Resolution(BaseModel):
     target_key: str | None
@@ -119,29 +183,81 @@ class PendingSession(BaseModel):
     original_text: str
     interpretation: Interpretation
     resolution: Resolution
-    question: Question                  # type, prompt, options[(label, callback_data)]
+    question: Question                  # validation.policy.Question (see above)
     created_at: datetime
     expires_at: datetime
 ```
 
-## 5. Commands (`commands/models.py`)
+## 5. Commands (`commands/models.py`, `commands/executor.py`)
 
 ```python
-class CreateItem(BaseModel):
-    action: Literal["create_item"]; data_source_id: str; properties: dict[str, PropertyValue]
-class UpdateItem(BaseModel):
-    action: Literal["update_item"]; page_id: str; properties: dict[str, PropertyValue]
-class CreatePage(BaseModel):
-    action: Literal["create_page"]; parent_page_id: str; title: str; body: list[str]
-class AppendBlocks(BaseModel):
-    action: Literal["append_blocks"]; page_id: str; paragraphs: list[str]
-class Search(BaseModel):
-    action: Literal["search"]; data_source_id: str | None; query: str
+class PropertyWrite(BaseModel):         # extra="forbid"
+    property_id: str
+    property_name: str
+    type: str
+    value: Any = None                   # None = clear the property
 
-PropertyValue = TitleV | RichTextV | SelectV | MultiSelectV | StatusV | DateV | CheckboxV | NumberV | UrlV | RelationV
-# each carries Notion property id + typed value; mapper.py turns them into Notion JSON
+class CreateItem(BaseModel):
+    action: Literal["create_item"] = "create_item"
+    data_source_id: str; target_name: str; properties: list[PropertyWrite]
+class UpdateItem(BaseModel):
+    action: Literal["update_item"] = "update_item"
+    page_id: str; target_name: str; item_title: str; properties: list[PropertyWrite]
+class CreatePage(BaseModel):
+    action: Literal["create_page"] = "create_page"
+    parent_page_id: str; target_name: str; title: str; body: list[str] = []
+class AppendBlocks(BaseModel):
+    action: Literal["append_blocks"] = "append_blocks"
+    page_id: str; target_name: str; page_title: str; paragraphs: list[str]
+class Search(BaseModel):
+    action: Literal["search"] = "search"
+    data_source_id: str | None; target_name: str; title_property: str | None; query: str
+    filters: list[PropertyWrite] = []   # from validated fields with status=value; see below
+
 Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
+# Risk is keyed by intent, not by command: see validation/policy.py:RISK_BY_INTENT.
 ```
+
+`PropertyWrite.value` JSON shapes (built by `commands/jsonvalue.py:to_json_value`, reused by `validation/policy.py` for `Question.proposed` and consumed by `notion/mapper.py:property_payload`); `value=None` always means "clear this property" (dropped entirely for `status`, since Notion cannot clear a status — see §8 of ARCHITECTURE.md):
+
+| `type` | `value` shape |
+|---|---|
+| `title`, `rich_text` | `str` (mapper splits into 2000-char rich-text runs) |
+| `select`, `status` | `{"id": str, "name": str}` or `None` |
+| `multi_select`, `relation` | `list[{"id": str, "name": str}]` |
+| `date` | `{"start": ISO str, "end": ISO str \| None}` or `None` |
+| `checkbox` | `bool` |
+| `number` | `int \| float` |
+| `url` | `str` |
+
+`Search.filters` (`commands/builder.py:_search_filters`): one `PropertyWrite` per validated field
+with status `value` whose type is `select`, `status`, `multi_select`, `relation` or `checkbox`
+(same `PropertyWrite` shape as above). `notion/mapper.py:search_filter` turns these into a Notion
+data-source query filter, addressed by property **name**: `select`/`status` → `{"property": name,
+"<type>": {"equals": option_name}}`; `multi_select`/`relation` → one `contains` condition per
+selected value (`relation` by page id, `multi_select` by option name); `checkbox` → `{"property":
+name, "checkbox": {"equals": bool}}`; plus, when `query` is non-empty and `title_property` is set,
+a `title` `contains` condition. Zero conditions → `None` (unfiltered); one → that condition; more
+→ `{"and": [...]}`. A malformed filter value is skipped rather than raised (same defensive stance
+as `property_payload`, §5 note above).
+
+`Search` results are capped at `executor.SEARCH_LIMIT` (20) hits regardless of source (data-source query or global search).
+
+`UndoRecord` (`commands/executor.py`, pydantic):
+
+```python
+class UndoRecord(BaseModel):
+    kind: Literal["archive", "restore", "delete_blocks"]
+    page_id: str | None = None
+    properties: dict | None = None      # restore: property_id -> the shape property_payload RETURNS
+                                         # (what update_page's properties dict expects), not the
+                                         # PropertyWrite.value shape above
+    block_ids: list[str] = []           # delete_blocks
+    partial: bool = False               # restore: True when some updated properties could not be
+                                         # captured before the write (record is still usable)
+```
+
+Undo by command: `CreateItem`/`CreatePage` → `archive` (`page_id`); `UpdateItem` → `restore` (`page_id` + `properties` captured from the page *before* the write, via `mapper.read_to_write`); `AppendBlocks` → `delete_blocks` (`block_ids` of the blocks just created); `Search` produces no `UndoRecord`.
 
 ## 6. SQLite (`data/bot.sqlite`)
 

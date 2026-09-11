@@ -213,44 +213,56 @@ Clarification question types (each has a button layout in `keyboards.py`):
 | Type | Trigger | Buttons |
 |---|---|---|
 | `target` | target margin < threshold | one per candidate target + Отмена |
-| `item` | `item_candidates` set or item missing for update/append | one per candidate item (max 8) + Отмена |
+| `intent_confirm` | only trigger is `intent.confidence < POLICY_INTENT_MIN`, exactly one candidate | подтвердить намерение ✓ / отмена |
+| `item` | update: item missing or several candidates; append: several candidates (no item means append to the page itself) | one per candidate item (max 8) + Отмена |
 | `field_required` | required field `not_mentioned` | options for select/status/relation; free-text prompt for others |
 | `field_ambiguous` | field status `ambiguous` | one per candidate value |
 | `date` | date confidence < `POLICY_DATE_MIN` | proposed date ✓ / other date (free text) |
+| `nothing_to_write` | update: item resolved but no field `value`/`explicit_null`/`ambiguous` | — (REJECT, not a clarification round-trip) |
 
-One question per message. Several open issues are asked in order: target → item → required fields → ambiguous fields → low-confidence date.
+One question per message. Several open issues are asked in the `_ORDER` from `policy.py`: `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write` (the last two of these — `item_not_found`, `nothing_to_write` — are REJECT-only single questions, never part of a multi-question CLARIFY).
 
 ## 8. Policy engine
 
-Deterministic, thresholds from settings:
+Deterministic (`validation/policy.py`). `Thresholds.from_settings` reads `POLICY_INTENT_MIN`, `POLICY_TARGET_MIN`, `POLICY_TARGET_MARGIN`, `POLICY_FIELD_MIN`, `POLICY_DATE_MIN` from `Settings` (§7 of DATA_MODEL.md); no threshold is hardcoded in the policy itself.
 
 ```text
-REJECT if intent = unknown
-      or target not in snapshot, or field not writable, or value type invalid
-      or (update|append) and item not in target's items after clarification
-CLARIFY if intent.confidence < POLICY_INTENT_MIN
+REJECT if intent = unknown, or no candidate survived semantic validation (SemanticValidator issues)
+      or (update) and item not in target's items and no item_candidates      # carries the candidate + an item_not_found Question, see below
+      or (update) and item resolved but no field status = value/explicit_null/ambiguous # carries the candidate + a nothing_to_write Question
+CLARIFY if intent.confidence < POLICY_INTENT_MIN      # intent_confirm instead of target when this is the only trigger and there is exactly one candidate
       or best.confidence < POLICY_TARGET_MIN
       or (best.confidence - second.confidence) < POLICY_TARGET_MARGIN   (only when second exists)
-      or any required field not_mentioned / ambiguous
-      or any provided field confidence < POLICY_FIELD_MIN
-      or any date value confidence < POLICY_DATE_MIN
-      or update|append with item null and item_candidates non-empty
+      or (update|append) with item null and item_candidates non-empty
+      or (create) with a required field not_mentioned / explicit_null
+      or any field status = ambiguous
+      or a date-typed field value with confidence < POLICY_DATE_MIN
+      or any other field value with confidence < POLICY_FIELD_MIN
+      or (append) with no content
 EXECUTE otherwise
 ```
 
-Risk classes: `create`, `append`, `search` = LOW; `update` = MEDIUM. Both auto-execute in MVP. Undo available for `create` (archive page), `update` (restore previous property values), `append` (delete appended blocks). Undo button expires after `UNDO_WINDOW_SECONDS`.
+Question order when several apply (one asked per message, `_ORDER` in `policy.py`): `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write`.
+
+`update` with no resolvable item is a REJECT, not a CLARIFY, when there are no `item_candidates` to pick from — but unlike other REJECTs it still carries `Decision.candidate` (the resolved target/fields) and one `Question("item_not_found", ...)`, purely so Plan 3 can offer "add as new item" without re-running the LLM; MVP has no handler for that question type yet.
+
+An `explicit_null` on a `status`-type field is dropped before it reaches the policy: `SemanticValidator` turns it back into `not_mentioned` and appends a `SEM_STATUS_CLEAR` issue (warning-level, not user-visible — the Notion API has no way to clear a status property), so the field is simply left unwritten rather than blocking or clarifying.
+
+Risk classes: `RISK_BY_INTENT` = `create`, `append`, `search` → LOW; `update` → MEDIUM. `Decision.risk` records this on every EXECUTE/CLARIFY (and on the `item_not_found` REJECT) for the audit log; both LOW and MEDIUM auto-execute in MVP with no extra confirmation step. Undo available for `create` (archive page), `update` (restore previous property values), `append` (delete appended blocks). Undo button expires after `UNDO_WINDOW_SECONDS`.
 
 ## 9. Commands and Notion mapping
 
 | Command | Fields | Notion call |
 |---|---|---|
-| `CreateItem` | data_source_id, properties | `POST /v1/pages` parent `data_source_id` |
-| `UpdateItem` | page_id, properties | `PATCH /v1/pages/{id}` |
-| `CreatePage` | parent_page_id, title, body | `POST /v1/pages` parent `page_id` + paragraph blocks |
-| `AppendBlocks` | page_id, paragraphs | `PATCH /v1/blocks/{id}/children` |
-| `Search` | data_source_id or None, query | `POST /v1/data_sources/{id}/query` title filter, or `POST /v1/search` |
+| `CreateItem` | data_source_id, target_name, properties | `POST /v1/pages` parent `data_source_id` |
+| `UpdateItem` | page_id, target_name, item_title, properties | `PATCH /v1/pages/{id}` |
+| `CreatePage` | parent_page_id, target_name, title, body | `POST /v1/pages` parent `page_id` + paragraph blocks |
+| `AppendBlocks` | page_id, target_name, page_title, paragraphs | `PATCH /v1/blocks/{id}/children` |
+| `Search` | data_source_id or None, target_name, title_property or None, query, filters | `POST /v1/data_sources/{id}/query` compound filter, or `POST /v1/search` |
 | `ArchivePage` (undo) | page_id | `PATCH /v1/pages/{id}` `archived: true` |
 | `DeleteBlocks` (undo) | block_ids | `DELETE /v1/blocks/{id}` |
+
+`Search.filters` is built from the validated fields with status `value` (select/status/multi_select/relation/checkbox — see DATA_MODEL.md §5); `mapper.py:search_filter` composes them into one Notion filter object: `select`/`status` → `equals`, `multi_select`/`relation` → one `contains` per value, `checkbox` → `equals`, plus an optional title `contains` from `query`. Zero conditions → unfiltered; more than one → `{"and": [...]}`.
 
 Commands hold Notion ids resolved by the app from keys. `mapper.py` is the only place that builds Notion JSON. LLM output never reaches it.
 

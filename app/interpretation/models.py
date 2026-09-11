@@ -52,6 +52,7 @@ class Candidate(Strict):
     confidence: float = Field(ge=0.0, le=1.0)
     item: str | None = None
     item_candidates: list[str] = Field(default_factory=list)
+    item_text: str | None = None
     fields: dict[str, FieldValue] = Field(default_factory=dict)
     content: str | None = None
     search_query: str | None = None

@@ -11,6 +11,7 @@ class FakeNotionProvider:
         self.data_sources: dict[str, dict] = {}
         self.databases: dict[str, dict] = {}
         self.items: dict[str, list[dict]] = {}
+        self.pages: dict[str, dict] = {}
         self.calls: list[tuple] = []
         self.fail_search: Exception | None = None
 
@@ -52,7 +53,7 @@ class FakeNotionProvider:
 
     async def get_page(self, page_id: str) -> dict:
         self.calls.append(("get_page", page_id))
-        return {"id": page_id}
+        return self.pages.get(page_id, {"id": page_id, "properties": {}})
 
     async def create_page(self, parent, properties, children=None) -> dict:
         self.calls.append(("create_page", parent, properties, children))
