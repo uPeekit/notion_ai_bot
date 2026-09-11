@@ -40,6 +40,17 @@ QUESTION: dict[QType, str] = {
     "nothing_to_write": "Не понял, что именно изменить.",
 }
 
+# Target-naming variants of four of the templates above, for when the caller knows the target's
+# name (FLOWS.md's wording names it, e.g. "...в «Покупки»"). A separate template — rather than
+# an optional segment inside QUESTION[q.type] — keeps the target-less default free of dangling
+# quotes or empty «» when no name is available.
+QUESTION_WITH_TARGET: dict[QType, str] = {
+    "item": "Какой элемент в «{target_name}»?",
+    "field_required": "{target_name}: какое значение указать для поля «{field_name}»?",
+    "content_required": "Что написать в «{target_name}»?",
+    "nothing_to_write": "Не понял, что именно изменить в «{target_name}».",
+}
+
 # Question.proposed for intent_confirm carries the raw intent value ("create"/"update"/
 # "append"/"search"); this maps it to a Russian verb phrase for the question text.
 INTENT_LABELS: dict[str, str] = {

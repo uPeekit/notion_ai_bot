@@ -91,21 +91,23 @@ def _proposed_label(v: Any) -> str:
     return str(v)
 
 
-def _question_text(q: Question) -> str:
+def _question_text(q: Question, target_name: str | None) -> str:
     template = texts.QUESTION[q.type]
+    if target_name is not None and q.type in texts.QUESTION_WITH_TARGET:
+        template = texts.QUESTION_WITH_TARGET[q.type]
+    kwargs: dict[str, Any] = {"target_name": target_name, "field_name": q.field_name}
     if q.type == "intent_confirm":
-        return template.format(intent=texts.INTENT_LABELS.get(q.proposed, str(q.proposed)))
-    if q.type in ("date", "field_confirm"):
-        return template.format(field_name=q.field_name, value=_proposed_label(q.proposed))
-    if q.type in ("field_required", "field_ambiguous"):
-        return template.format(field_name=q.field_name)
-    if q.type == "item_not_found":
-        return template.format(item_text=q.proposed)
-    return template
+        kwargs["intent"] = texts.INTENT_LABELS.get(q.proposed, str(q.proposed))
+    elif q.type in ("date", "field_confirm"):
+        kwargs["value"] = _proposed_label(q.proposed)
+    elif q.type == "item_not_found":
+        kwargs["item_text"] = q.proposed
+    return template.format(**kwargs)
 
 
 def format_question(
-    q: Question, options: Sequence[tuple[str, str]], token: str, *, inbox: bool
+    q: Question, options: Sequence[tuple[str, str]], token: str, *, inbox: bool,
+    target_name: str | None = None,
 ) -> Reply:
     rows = [[Button(f"a:{token}:{opt_id}", label)] for opt_id, label in options]
     trailing = [Button(f"a:{token}:{eid}", elabel) for eid, elabel in _EXTRAS[q.type]]
@@ -113,7 +115,7 @@ def format_question(
     if inbox:
         trailing.append(Button(f"a:{token}:inbox", texts.BTN_INBOX))
     rows.append(trailing)
-    return Reply(text=_question_text(q), buttons=rows)
+    return Reply(text=_question_text(q, target_name), buttons=rows)
 
 
 def _title_property_name(cmd: CreateItem) -> str | None:

@@ -38,9 +38,22 @@ def test_every_documented_error_code_has_a_message():
 
 
 def test_no_unsubstituted_placeholders_after_formatting():
-    for name, value in list(texts.QUESTION.items()) + list(texts.ERRORS.items()):
+    templates = (
+        list(texts.QUESTION.items()) + list(texts.QUESTION_WITH_TARGET.items())
+        + list(texts.ERRORS.items())
+    )
+    for name, value in templates:
         formatted = value.format(**ALL_KWARGS)
         assert "{" not in formatted, f"{name!r} left an unfilled placeholder: {formatted!r}"
+
+
+def test_question_with_target_covers_exactly_the_documented_types():
+    # The FLOWS.md wording that names the target ("...в «Покупки»"); the other question types
+    # either don't mention the target (target, item_not_found, date, field_confirm,
+    # intent_confirm) or resolve it entirely through their option buttons (field_ambiguous).
+    assert set(texts.QUESTION_WITH_TARGET) == {
+        "item", "field_required", "content_required", "nothing_to_write",
+    }
 
 
 def test_done_templates_format_cleanly():

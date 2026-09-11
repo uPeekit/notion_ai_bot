@@ -196,3 +196,51 @@ def test_format_question_content_required():
     assert reply.text == "Что написать?"
     assert reply.buttons == [[Button(f"a:{TOKEN}:cancel", "Отмена")]]
     _assert_ids_ok(reply)
+
+
+# ---- target_name: with and without, for every question type that names the target -----------
+# (FLOWS.md wording for these reads "...в «Покупки»"; the target-less default must render with
+# no dangling quotes or empty «» when target_name is omitted.)
+
+def test_format_question_item_with_and_without_target_name():
+    q = Question(type="item", target_key="t2")
+    options = [("t2.item:i7", "Молоко 2 л"), ("t2.item:i9", "Молоко овсяное")]
+    without = format_question(q, options, TOKEN, inbox=False)
+    assert without.text == "Какой элемент?"
+    with_target = format_question(q, options, TOKEN, inbox=False, target_name="Покупки")
+    assert with_target.text == "Какой элемент в «Покупки»?"
+    # target_name only changes the text, not the button rows
+    assert with_target.buttons == without.buttons
+
+
+def test_format_question_field_required_with_and_without_target_name():
+    q = Question(type="field_required", target_key="t3", field_key="t3.f6", field_name="Теги")
+    without = format_question(q, [], TOKEN, inbox=False)
+    assert without.text == "Какое значение указать для поля «Теги»?"
+    with_target = format_question(q, [], TOKEN, inbox=False, target_name="Задачи")
+    assert with_target.text == "Задачи: какое значение указать для поля «Теги»?"
+
+
+def test_format_question_content_required_with_and_without_target_name():
+    q = Question(type="content_required", target_key="t5")
+    without = format_question(q, [], TOKEN, inbox=False)
+    assert without.text == "Что написать?"
+    with_target = format_question(q, [], TOKEN, inbox=False, target_name="Идеи")
+    assert with_target.text == "Что написать в «Идеи»?"
+
+
+def test_format_question_nothing_to_write_with_and_without_target_name():
+    q = Question(type="nothing_to_write", target_key="t2")
+    without = format_question(q, [], TOKEN, inbox=False)
+    assert without.text == "Не понял, что именно изменить."
+    with_target = format_question(q, [], TOKEN, inbox=False, target_name="Покупки")
+    assert with_target.text == "Не понял, что именно изменить в «Покупки»."
+
+
+def test_format_question_target_name_ignored_for_types_without_a_with_target_variant():
+    # date has no QUESTION_WITH_TARGET entry: passing target_name must not change its text or
+    # raise (it's simply an unused format kwarg).
+    q = Question(type="date", target_key="t3", field_key="t3.f3", field_name="Срок",
+                proposed={"start": "2026-09-14", "end": None, "granularity": "date"})
+    reply = format_question(q, [], TOKEN, inbox=False, target_name="Задачи")
+    assert reply.text == "Дата «Срок»: 14.09.2026. Верно?"
