@@ -172,10 +172,17 @@ class SessionStore:
         self._audit.delete_session(chat_id)
 
     def pop_expired(self, now: datetime) -> list[PendingSession]:
-        """Return and delete every session whose expires_at <= now (the inbox sweeper)."""
+        """Return and delete every session whose expires_at <= now (the inbox sweeper).
+
+        expired_sessions(now) only discovers candidates; the actual delete goes through
+        pop_expired_session(chat_id, now), which re-checks expiry under the same lock
+        acquisition as the delete. That closes the TOCTOU window between the scan and the
+        delete: if a session is renewed (save_session with a later expires_at) after the scan
+        but before its turn to be popped, pop_expired_session finds it no longer expired,
+        deletes nothing, and this method silently skips it instead of destroying live state."""
         out: list[PendingSession] = []
         for chat_id, _ in self._audit.expired_sessions(now):
-            payload = self._audit.pop_session(chat_id)
+            payload = self._audit.pop_expired_session(chat_id, now)
             if payload is None:
                 continue
             try:

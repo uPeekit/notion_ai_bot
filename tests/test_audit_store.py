@@ -75,6 +75,29 @@ def test_pop_session_missing_returns_none(store):
     assert store.pop_session(999) is None
 
 
+def test_pop_expired_session_deletes_when_still_expired(store):
+    now = datetime.now(UTC)
+    store.save_session(1, "stale", now - timedelta(seconds=1))
+    assert store.pop_expired_session(1, now) == "stale"
+    assert store.get_session(1, now - timedelta(minutes=5)) is None
+
+
+def test_pop_expired_session_does_not_delete_a_renewal_past_now(store):
+    """The TOCTOU guard: a row that looked expired at scan time but was renewed with a later
+    expires_at before the delete must survive, with its renewed payload intact."""
+    now = datetime.now(UTC)
+    store.save_session(1, "stale", now - timedelta(seconds=1))
+    # Simulate a concurrent renewal landing after the scan but before the delete.
+    store.save_session(1, "renewed", now + timedelta(minutes=5))
+    assert store.pop_expired_session(1, now) is None
+    assert store.get_session(1, now) == "renewed"
+
+
+def test_pop_expired_session_missing_returns_none(store):
+    now = datetime.now(UTC)
+    assert store.pop_expired_session(999, now) is None
+
+
 def test_expired_sessions_and_pop_session_thread_safe(store):
     now = datetime.now(UTC)
     for cid in range(20):

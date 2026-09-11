@@ -121,6 +121,23 @@ class AuditStore:
             self._conn.commit()
             return row["payload"]
 
+    def pop_expired_session(self, chat_id: int, now: datetime) -> str | None:
+        """Delete and return one session's payload only if it is still expired at `now`, with
+        the expiry re-check and the delete under one lock acquisition. Guards a sweeper that
+        scanned candidates earlier (via expired_sessions) against a concurrent save_session that
+        renewed the row in the meantime: if the row is missing, or was renewed to an expires_at
+        past `now` since it was last observed, this returns None and leaves the row untouched."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM sessions WHERE chat_id = ? AND expires_at <= ?",
+                (chat_id, _iso(now)),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return row["payload"]
+
     # executions
     def add_execution(
         self, event_id: int, chat_id: int, reply_message_id: int | None, undo: str,

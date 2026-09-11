@@ -145,6 +145,37 @@ def test_pop_expired_returns_only_expired_sessions(store):
     assert store.get_session(2, NOW) is not None
 
 
+def test_pop_expired_does_not_swallow_a_session_renewed_between_scan_and_delete(store):
+    """TOCTOU guard: pop_expired first scans (expired_sessions), then deletes per row
+    (pop_expired_session). If a save_session renewal for the same chat_id lands in that gap —
+    plausible in a store built for concurrent access (RLock, check_same_thread=False) — the
+    renewed, still-live session must survive and remain readable, not be swallowed by a delete
+    that was decided against a stale scan result. Deterministic simulation: monkeypatch
+    expired_sessions so the renewal happens, as a side effect, right after the scan it feeds."""
+    ss = SessionStore(store)
+    stale = _field_required_session(chat_id=1)
+    store.save_session(1, stale.model_dump_json(), NOW - timedelta(seconds=1))
+    real_expired_sessions = store.expired_sessions
+    renewed = _field_required_session(chat_id=1, asked=["field_required:t3.f2"])
+
+    def scan_then_race_a_renewal(now):
+        rows = real_expired_sessions(now)
+        ss.save(renewed)  # same call the orchestrator makes on a real answer
+        return rows
+
+    store.expired_sessions = scan_then_race_a_renewal
+    try:
+        popped = ss.pop_expired(NOW)
+    finally:
+        store.expired_sessions = real_expired_sessions
+
+    assert popped == []  # the stale scan result must not delete the now-live session
+    restored = ss.get(1, NOW)
+    assert restored == renewed
+    assert restored.expires_at > NOW
+    assert restored.asked == ["field_required:t3.f2"]
+
+
 def test_is_exhausted_after_three_answers():
     s = _field_required_session(asked=["a", "b"])
     assert not s.is_exhausted
