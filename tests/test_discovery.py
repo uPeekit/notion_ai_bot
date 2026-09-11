@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -168,3 +169,32 @@ async def test_missing_relation_target_gives_empty_options(disco, fake):
     fake.search_results = [r for r in fake.search_results if r["id"] != "ds-shops"]
     snap = await disco.refresh()
     assert snap.target("ds-buy").field("rel").options == []
+
+
+async def test_inbox_flag_from_yaml_sets_is_inbox(fake, tmp_path):
+    d = Descriptions(tmp_path / "t.yaml")
+    d.save({"ds-buy": TargetMeta(inbox=True)})
+    disco = Discovery(fake, d, items_per_target=10, ttl_s=60)
+    snap = await disco.refresh()
+    assert snap.target("ds-buy").is_inbox is True
+    assert snap.target("ds-shops").is_inbox is False
+
+
+async def test_inbox_target_id_override_wins_over_yaml_flag(fake, tmp_path):
+    d = Descriptions(tmp_path / "t.yaml")
+    d.save({"ds-buy": TargetMeta(inbox=True)})
+    disco = Discovery(fake, d, items_per_target=10, ttl_s=60, inbox_target_id="ds-shops")
+    snap = await disco.refresh()
+    assert snap.target("ds-shops").is_inbox is True
+    assert snap.target("ds-buy").is_inbox is False
+
+
+async def test_two_flagged_targets_lowest_id_wins_with_warning(fake, tmp_path, caplog):
+    d = Descriptions(tmp_path / "t.yaml")
+    d.save({"ds-buy": TargetMeta(inbox=True), "ds-shops": TargetMeta(inbox=True)})
+    disco = Discovery(fake, d, items_per_target=10, ttl_s=60)
+    with caplog.at_level(logging.WARNING):
+        snap = await disco.refresh()
+    assert snap.target("ds-buy").is_inbox is True  # "ds-buy" < "ds-shops"
+    assert snap.target("ds-shops").is_inbox is False
+    assert "inbox" in caplog.text.lower()

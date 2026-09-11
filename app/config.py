@@ -1,5 +1,6 @@
 from functools import cached_property
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,6 +47,12 @@ class Settings(BaseSettings):
     session_ttl_s: int = 900
     undo_window_s: int = 300
     log_level: str = "INFO"
+
+    # auto: save on every unresolvable path and offer the button; button: only on button press;
+    # off: no inbox, no button.
+    inbox_mode: Literal["auto", "button", "off"] = "auto"
+    # Notion page/data-source id that overrides the targets.yaml `inbox: true` flag.
+    inbox_target_id: str = ""
 
     @field_validator("telegram_allowed_user_ids")
     @classmethod
