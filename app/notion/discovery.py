@@ -276,6 +276,11 @@ class Discovery:
         the lowest id wins and the rest lose the flag (logged, since it usually means a stale
         entry from a deleted/renamed target)."""
         if inbox_target_id:
+            if not any(t.id == inbox_target_id for t in targets):
+                log.warning(
+                    "INBOX_TARGET_ID %r matches no discovered target; inbox is disabled",
+                    inbox_target_id,
+                )
             return [replace(t, is_inbox=t.id == inbox_target_id) for t in targets]
         flagged = sorted(t.id for t in targets if t.is_inbox)
         if len(flagged) <= 1:

@@ -103,3 +103,17 @@ def test_database_without_title_property_raises_value_error():
     no_title = replace(db, fields=[f for f in db.fields if f.type != "title"])
     with pytest.raises(ValueError):
         inbox_command(no_title, "молоко", note=None, now=NOW, tz=TZ)
+
+
+# ---- empty text never mints a blank artifact ----------------------------------------------
+
+def test_empty_text_on_page_target_raises_value_error():
+    page = _page()
+    with pytest.raises(ValueError):
+        inbox_command(page, "   ", note=None, now=NOW, tz=TZ)
+
+
+def test_empty_text_on_database_target_raises_value_error():
+    db = _db()
+    with pytest.raises(ValueError):
+        inbox_command(db, "", note=None, now=NOW, tz=TZ)

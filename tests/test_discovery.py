@@ -189,6 +189,20 @@ async def test_inbox_target_id_override_wins_over_yaml_flag(fake, tmp_path):
     assert snap.target("ds-buy").is_inbox is False
 
 
+async def test_inbox_target_id_matching_nothing_disables_inbox_with_warning(
+    fake, tmp_path, caplog
+):
+    d = Descriptions(tmp_path / "t.yaml")
+    d.save({"ds-buy": TargetMeta(inbox=True)})
+    disco = Discovery(fake, d, items_per_target=10, ttl_s=60, inbox_target_id="no-such-id")
+    with caplog.at_level(logging.WARNING):
+        snap = await disco.refresh()
+    assert snap.target("ds-buy").is_inbox is False
+    assert all(not t.is_inbox for t in snap.targets)
+    assert "no-such-id" in caplog.text
+    assert "disabled" in caplog.text.lower()
+
+
 async def test_two_flagged_targets_lowest_id_wins_with_warning(fake, tmp_path, caplog):
     d = Descriptions(tmp_path / "t.yaml")
     d.save({"ds-buy": TargetMeta(inbox=True), "ds-shops": TargetMeta(inbox=True)})

@@ -3,7 +3,7 @@ user flagged as the inbox — the safety net for a message the bot could not oth
 (the user checks it later and moves things themselves). Task 5's orchestrator decides *when*
 to call this; this module only builds the Command.
 
-inbox.py is a leaf: it imports app.texts, app.commands.* and app.notion.snapshot, but never
+inbox.py is a leaf: it may import app.texts, app.commands.* and app.notion.snapshot, but never
 app.conversation.reply/session/resolver — those are callers, not dependencies, and importing
 any of them here would be a cycle.
 
@@ -36,10 +36,13 @@ def inbox_command(
     target: Target, text: str, *, note: str | None, now: datetime, tz: str
 ) -> Command:
     """Builds the Command that persists `text` (plus an optional short `note`) to the flagged
-    inbox target: AppendBlocks for a page, CreateItem for a database. Never invents a target —
-    a database inbox with no title property raises ValueError; the caller (Task 5) catches it
-    and degrades to a plain error reply rather than silently dropping the message."""
+    inbox target: AppendBlocks for a page, CreateItem for a database. Never invents a target or
+    a blank artifact — a database inbox with no title property, or text that is empty after
+    stripping, raises ValueError; the caller (Task 5) catches it and degrades to a plain error
+    reply rather than silently dropping the message or minting an empty Notion row."""
     body = text.strip()[:MAX_TEXT]
+    if not body:
+        raise ValueError("inbox text is empty")
     trimmed_note = note.strip()[:MAX_NOTE] if note else None
 
     if target.kind == "database":
