@@ -110,29 +110,32 @@ The JSON schema sent to Ollama is generated from these models and then specialis
 `Question`/`QOption`/`Decision` are real code (`validation/policy.py`), produced by `Policy.evaluate(ValidationResult) -> Decision`:
 
 ```python
-QType = Literal["target", "item", "item_not_found", "field_required", "field_ambiguous",
-                "field_confirm", "date", "content_required"]
+QType = Literal["target", "intent_confirm", "item", "item_not_found", "field_required",
+                "field_ambiguous", "field_confirm", "date", "content_required",
+                "nothing_to_write"]
 
-@dataclass(frozen=True)
-class QOption:
+class QOption(BaseModel):               # extra="forbid"; JSON-safe, session-persistable
     key: str                            # format depends on question type, see table below
     label: str
 
-@dataclass
-class Question:
+class Question(BaseModel):              # extra="forbid"; JSON-safe, session-persistable
     type: QType
     target_key: str | None = None       # candidate key the question concerns, e.g. "t3"
     field_key: str | None = None        # set for field_required / field_ambiguous / field_confirm / date
     field_name: str | None = None
-    options: list[QOption] = []         # empty for field_confirm, date, item_not_found, content_required
-    proposed: Any = None                # date / field_confirm: the low-confidence typed value to confirm
+    options: list[QOption] = []         # empty for field_confirm, date, item_not_found, content_required, intent_confirm, nothing_to_write
+    proposed: Any = None                # JSON-safe: date -> {start, end, granularity}; option value -> {id, name} (jsonvalue.to_json_value); intent_confirm -> the intent string; item_not_found -> Candidate.item_text
+
+    @property
+    def id(self) -> str:                # f"{type}:{field_key or target_key or ''}" — stable across a context rebuild (see table below)
+        ...
 
 @dataclass
 class Decision:
     kind: Literal["EXECUTE", "CLARIFY", "REJECT"]
-    candidate: VCandidate | None         # set for EXECUTE, CLARIFY, and the item_not_found REJECT; else None
-    questions: list[Question]            # non-empty for CLARIFY; exactly one Question("item_not_found", ...) for that REJECT case; else []
-    reasons: list[str]                   # REJECT: issue codes/messages, ["no valid candidates"], or ["item not found in target"] for the item_not_found case; CLARIFY: question types in ask order
+    candidate: VCandidate | None         # set for EXECUTE, CLARIFY, and the item_not_found/nothing_to_write REJECTs; else None
+    questions: list[Question]            # non-empty for CLARIFY; exactly one Question for the item_not_found/nothing_to_write REJECT cases; else []
+    reasons: list[str]                   # REJECT: issue codes/messages, ["no valid candidates"], ["item not found in target"], or ["nothing to write"]; CLARIFY: question types in ask order
     risk: Literal["LOW", "MEDIUM"] | None  # RISK_BY_INTENT[intent]; None only when REJECT has no candidate
 ```
 
@@ -144,11 +147,27 @@ class Decision:
 | `item` | `<target_key>.item:<page id>` | `t3.item:2f1c…a9` |
 | `field_required`, when field has non-empty `options` | `<field_key>.o<1-based index>` | `t3.f2.o1` |
 | `field_ambiguous` | `<field_key>#<0-based index>` | `t3.f2#0` |
-| `field_confirm`, `date`, `item_not_found`, `content_required` | no options; answer is free text or a confirm/other action | — |
+| `field_confirm`, `date`, `item_not_found`, `content_required`, `intent_confirm`, `nothing_to_write` | no options; answer is free text or a confirm/other action | — |
 
-Question order (ties within one `Decision.questions` broken by this order, one asked at a time): `target → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required`.
+Question order (ties within one `Decision.questions` broken by this order, one asked at a time): `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write`.
 
-Special case: `update` intent with no resolvable item and no `item_candidates` does not ask a question — it returns `Decision("REJECT", best, [Question("item_not_found", ...)], ["item not found in target"], risk)`. The candidate and a single `item_not_found` question are carried on the REJECT so Plan 3 can offer "create instead" without re-running the LLM.
+Special cases, both REJECT with the candidate and a single question carried (so Plan 3 can act without re-running the LLM):
+- `update` intent with no resolvable item and no `item_candidates`: `Decision("REJECT", best, [Question("item_not_found", ..., proposed=best.item_text)], ["item not found in target"], risk)`.
+- `update` intent with a resolved item but no field `status` in `("value", "explicit_null")`: `Decision("REJECT", best, [Question("nothing_to_write", ...)], ["nothing to write"], risk)`.
+
+`intent_confirm` replaces a one-option `target` question when the *only* reason to ask is `intent.confidence < POLICY_INTENT_MIN` and there is exactly one candidate (`proposed` carries the guessed intent string).
+
+### Answer keys across a context rebuild
+
+`Question.id` is stable across a context rebuild (it names the *question*, not a request). The per-question-type answer, though, is keyed into the *old* context and cannot be replayed after discovery re-runs; Plan 3 must persist the value below instead, then re-resolve it against the fresh `Context` (via `Context.field_key`/`option_key`/`item_key`, §1 above):
+
+| Question type | What must be persisted instead of the context key |
+|---|---|
+| `target` | `Target.id` |
+| `item` | the item's page id |
+| `field_required` | `(field_id, option_id)` for option types, else the typed value |
+| `field_ambiguous` | the typed value itself (the one the user picked, not its context key) |
+| `date`, `field_confirm` | the JSON `proposed` value (already Notion-id-based, not key-based) |
 
 `PendingSession` below is a **Plan 3 placeholder** (no code yet); `Resolution` remains sketched, but `question` now names the real type:
 
@@ -195,8 +214,7 @@ class Search(BaseModel):
     data_source_id: str | None; target_name: str; title_property: str | None; query: str
 
 Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
-RISK = {"create_item": "LOW", "create_page": "LOW", "append_blocks": "LOW",
-        "search": "LOW", "update_item": "MEDIUM"}   # matches policy.RISK_BY_INTENT by intent
+# Risk is keyed by intent, not by command: see validation/policy.py:RISK_BY_INTENT.
 ```
 
 `PropertyWrite.value` JSON shapes (built by `commands/jsonvalue.py:to_json_value`, reused by `validation/policy.py` for `Question.proposed` and consumed by `notion/mapper.py:property_payload`); `value=None` always means "clear this property" (dropped entirely for `status`, since Notion cannot clear a status — see §8 of ARCHITECTURE.md):

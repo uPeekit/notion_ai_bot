@@ -17,23 +17,28 @@ def _rich(text: str) -> list[dict]:
 def property_payload(p: PropertyWrite) -> dict | None:
     v: Any = p.value
     t = p.type
-    if t in ("title", "rich_text"):
-        return {t: _rich(v or "")}
-    if t == "select":
-        return {"select": {"id": v["id"]} if v else None}
-    if t == "status":
-        return {"status": {"id": v["id"]}} if v else None
-    if t in ("multi_select", "relation"):
-        return {t: [{"id": x["id"]} for x in (v or [])]}
-    if t == "date":
-        return {"date": {"start": v["start"], "end": v.get("end")} if v else None}
-    if t == "checkbox":
-        return {"checkbox": bool(v)}
-    if t == "number":
-        return {"number": v}
-    if t == "url":
-        return {"url": v}
-    return None
+    try:
+        if t in ("title", "rich_text"):
+            return {t: _rich(v or "")}
+        if t == "select":
+            return {"select": {"id": v["id"]} if v else None}
+        if t == "status":
+            return {"status": {"id": v["id"]}} if v else None
+        if t in ("multi_select", "relation"):
+            return {t: [{"id": x["id"]} for x in (v or [])]}
+        if t == "date":
+            return {"date": {"start": v["start"], "end": v.get("end")} if v else None}
+        if t == "checkbox":
+            return {"checkbox": bool(v)}
+        if t == "number":
+            return {"number": v}
+        if t == "url":
+            return {"url": v}
+        return None
+    except (TypeError, KeyError):
+        # A command rebuilt from the audit log may carry a malformed PropertyWrite (e.g. a select
+        # whose value is a bare string); drop the property rather than crash the executor.
+        return None
 
 
 def properties_payload(props: list[PropertyWrite]) -> dict:

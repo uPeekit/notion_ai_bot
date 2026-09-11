@@ -149,6 +149,28 @@ def test_status_explicit_null_dropped_with_issue():
     assert any(i.code == "SEM_STATUS_CLEAR" for i in r.issues)
 
 
+def test_date_range_granularity_must_match():
+    ctx, _ = ctx_and_snapshot()
+    mismatched = [
+        {"start": "2026-09-10", "end": "2026-09-10T10:00"},   # date -> datetime
+        {"start": "2026-09-10T10:00", "end": "2026-09-11"},   # datetime -> date
+    ]
+    for raw in mismatched:
+        r, _ = run(make_interp(
+            "create", cand(ctx, "t3", fields={"t3.f1": val("x"), "t3.f3": val(raw)})
+        ))
+        assert r.rejected and any(i.code == "SEM_TYPE" for i in r.issues), raw
+    matched = [
+        {"start": "2026-09-10", "end": "2026-09-11"},
+        {"start": "2026-09-10T09:00", "end": "2026-09-10T10:00"},
+    ]
+    for raw in matched:
+        r, _ = run(make_interp(
+            "create", cand(ctx, "t3", fields={"t3.f1": val("x"), "t3.f3": val(raw)})
+        ))
+        assert not r.rejected, raw
+
+
 def test_item_text_carried_and_capped():
     ctx, _ = ctx_and_snapshot()
     r, _ = run(make_interp("update", cand(ctx, "t2", item_text="овсяное " * 700)))

@@ -42,6 +42,11 @@ def test_property_payloads():
     assert property_payload(pw("u", "Ссылка", "url", None)) == {"url": None}
 
 
+def test_property_payload_malformed_value_returns_none():
+    assert property_payload(pw("s", "Магазин", "select", "Rimi")) is None
+    assert property_payload(pw("d", "Срок", "date", "2026-09-11")) is None
+
+
 def test_properties_payload_keys_by_id_and_skips_none():
     props = [pw("s", "Статус", "status", None), pw("t", "Название", "title", "x")]
     assert list(properties_payload(props)) == ["t"]

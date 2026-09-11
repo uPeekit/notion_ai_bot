@@ -57,5 +57,3 @@ class Search(Strict):
 
 
 Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
-RISK: dict[str, str] = {"create_item": "LOW", "create_page": "LOW", "append_blocks": "LOW",
-                        "search": "LOW", "update_item": "MEDIUM"}

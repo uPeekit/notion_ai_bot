@@ -134,6 +134,8 @@ def typed_value(ctx: Context, field_key: str, ftype: str, raw: Any) -> Any:
         start = _parse_when(raw.get("start"), ctx)
         end = _parse_when(raw["end"], ctx) if raw.get("end") else None
         if end is not None:
+            if isinstance(start, datetime) != isinstance(end, datetime):
+                raise TypeError_("start and end must have matching granularity")
             a, b = _cmp_key(start), _cmp_key(end)
             if (a.tzinfo is None) != (b.tzinfo is None):
                 a, b = a.replace(tzinfo=None), b.replace(tzinfo=None)

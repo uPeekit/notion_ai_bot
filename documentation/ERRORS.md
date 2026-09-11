@@ -17,7 +17,8 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `SEM_TYPE` | validation/semantic | value type mismatch (e.g. date not ISO) | Не удалось разобрать значение «…». | REJECT |
 | `SEM_STATUS_CLEAR` | validation/semantic | `explicit_null` on a `status` field (Notion API cannot clear a status) | — (not user-visible) | field dropped (left unwritten), warning logged |
 | `SEM_UNSUPPORTED_OP` | validation/semantic | operation not in target.operations | Эта операция недоступна для «…». | REJECT |
-| `SEM_READONLY_FIELD` | validation/semantic | write to readonly property | field dropped, warning appended to reply | continue |
+| `SEM_READONLY_FIELD` | reserved, unreachable | readonly fields never get a context key (`ContextBuilder._fields` skips `not f.writable`), so the LLM can never name one | — | none |
+| `nothing_to_write` | validation/policy | `update` with a resolved item but no field `value`/`explicit_null` | Не понял, что именно изменить. | REJECT, carries the candidate + a `Question("nothing_to_write", ...)` |
 | `NOTION_4XX` | notion/direct | validation error from Notion | Notion отклонил операцию: <message>. | REJECT after execute attempt; audit |
 | `NOTION_429` | notion/direct | rate limited | none until exhausted | retry ×3 with Retry-After |
 | `NOTION_5XX` | notion/direct | server error | Notion временно недоступен. | retry ×2 with backoff |
