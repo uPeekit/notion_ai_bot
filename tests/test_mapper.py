@@ -96,6 +96,14 @@ def test_read_to_write_roundtrip_shapes():
     assert read_to_write({"type": "rich_text", "rich_text": []}) == {"rich_text": []}
 
 
+def test_read_to_write_has_more_truncated_property_returns_none():
+    assert read_to_write(
+        {"type": "relation", "relation": [{"id": "a"}], "has_more": True}
+    ) is None
+    assert read_to_write({"type": "relation", "relation": [{"id": "a"}]}) == {
+        "relation": [{"id": "a"}]}
+
+
 def test_read_to_write_status_unset_is_skipped():
     assert read_to_write({"type": "status", "status": None}) is None
     assert read_to_write({"type": "select", "select": None}) == {"select": None}

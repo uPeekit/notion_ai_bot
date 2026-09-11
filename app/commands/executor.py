@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.commands.models import AppendBlocks, Command, CreateItem, CreatePage, Search, UpdateItem
 from app.notion import props
+from app.notion.errors import NotionError
 from app.notion.mapper import (
     create_item_payload,
     create_page_payload,
@@ -98,11 +99,15 @@ class Executor:
                     for p in cmd.properties
                     if p.property_id in payload
                 ],
-                undo=UndoRecord(
-                    kind="restore",
-                    page_id=cmd.page_id,
-                    properties=previous,
-                    partial=bool(set(payload) - previous.keys()),
+                undo=(
+                    UndoRecord(
+                        kind="restore",
+                        page_id=cmd.page_id,
+                        properties=previous,
+                        partial=bool(set(payload) - previous.keys()),
+                    )
+                    if previous
+                    else None
                 ),
             )
         if isinstance(cmd, CreatePage):
@@ -151,4 +156,8 @@ class Executor:
             await self._p.update_page(rec.page_id, properties=rec.properties or {})
         elif rec.kind == "delete_blocks":
             for bid in rec.block_ids:
-                await self._p.delete_block(bid)
+                # Undo may be pressed twice; a block already deleted must not abort the rest.
+                try:
+                    await self._p.delete_block(bid)
+                except NotionError:
+                    continue

@@ -117,6 +117,16 @@ def test_update_item_resolution():
     assert d.questions[0].type == "item_not_found"
 
 
+def test_noop_update_rejected():
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("update", cand(ctx, "t2", 0.95, item="t2.i2")))
+    assert d.kind == "REJECT" and d.candidate is not None
+    assert d.questions[0].type == "nothing_to_write" and d.reasons == ["nothing to write"]
+    d, _ = decide(make_interp("update", cand(ctx, "t2", 0.95, item="t2.i2",
+                                              fields={"t2.f5": val(True)})))
+    assert d.kind == "EXECUTE"
+
+
 def test_append_to_page_itself_and_content_required():
     ctx, _ = ctx_and_snapshot()
     d, _ = decide(make_interp("append", cand(ctx, "t5", 0.95, content="текст")))

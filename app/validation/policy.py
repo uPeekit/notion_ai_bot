@@ -11,12 +11,12 @@ from app.validation.semantic import ValidationResult, VCandidate, VField
 Kind = Literal["EXECUTE", "CLARIFY", "REJECT"]
 Risk = Literal["LOW", "MEDIUM"]
 QType = Literal["target", "item", "item_not_found", "field_required", "field_ambiguous",
-                "field_confirm", "date", "content_required"]
+                "field_confirm", "date", "content_required", "nothing_to_write"]
 RISK_BY_INTENT: dict[str, Risk] = {"create": "LOW", "append": "LOW", "search": "LOW",
                                    "update": "MEDIUM"}
 _ORDER: dict[str, int] = {t: i for i, t in enumerate(
     ["target", "item", "item_not_found", "field_required", "field_ambiguous", "date",
-     "field_confirm", "content_required"])}
+     "field_confirm", "content_required", "nothing_to_write"])}
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,10 @@ class Policy:
             else:
                 q = Question("item_not_found", best.key)
                 return Decision("REJECT", best, [q], ["item not found in target"], risk)
+        elif r.intent == "update":
+            if not any(f.status in ("value", "explicit_null") for f in best.fields.values()):
+                q = Question("nothing_to_write", best.key)
+                return Decision("REJECT", best, [q], ["nothing to write"], risk)
         if r.intent == "append" and best.item is None and best.item_candidates:
             qs.append(Question("item", best.key,
                                 options=[QOption(self._item_key(best, i), i.title)

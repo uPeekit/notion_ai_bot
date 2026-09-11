@@ -92,6 +92,33 @@ async def test_update_item_records_previous_values(fake):
     )
 
 
+async def test_restore_undo_none_when_nothing_captured(fake):
+    fake.pages["p1"] = {"id": "p1", "url": "https://notion.so/p1", "properties": {}}
+    r = await Executor(fake).run(
+        UpdateItem(
+            page_id="p1",
+            target_name="x",
+            item_title="y",
+            properties=[pw("done", "Куплено", "checkbox", True)],
+        )
+    )
+    assert r.undo is None
+
+
+async def test_undo_delete_blocks_survives_already_deleted(fake):
+    calls: list[str] = []
+
+    async def flaky(block_id):
+        calls.append(block_id)
+        if block_id == "a":
+            raise NotionError(404, "object_not_found", "x")
+        return {"id": block_id}
+
+    fake.delete_block = flaky
+    await Executor(fake).undo(UndoRecord(kind="delete_blocks", block_ids=["a", "b"]))
+    assert calls == ["a", "b"]
+
+
 async def test_create_page_and_append(fake):
     ex = Executor(fake)
     r = await ex.run(

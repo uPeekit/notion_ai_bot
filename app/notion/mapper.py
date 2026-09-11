@@ -69,6 +69,11 @@ def search_filter(cmd: Search) -> dict | None:
 
 def read_to_write(prop: dict) -> dict | None:
     """Turn a property from a page *read* into the payload that restores it (for undo)."""
+    if prop.get("has_more"):
+        # Notion caps relation (and long rich_text) arrays on a page read and flags has_more;
+        # restoring the truncated list would delete the rest, so drop it from `previous` instead
+        # (the record becomes partial=True, an honest signal rather than silent data loss).
+        return None
     t = prop.get("type")
     v = prop.get(t) if t else None
     if t in ("title", "rich_text"):
