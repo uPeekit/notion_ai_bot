@@ -58,7 +58,10 @@ class Question(BaseModel):
 
     @property
     def id(self) -> str:
-        """Stable across a context rebuild: identifies *what* is being asked, not which request."""
+        """Stable within one context generation (identifies *what* is being asked, not which
+        request). It embeds positional context keys, so it does NOT survive a rediscovery —
+        after a context rebuild, re-resolve the answer through Context.field_key/option_key/
+        item_key instead of comparing ids across generations."""
         return f"{self.type}:{self.field_key or self.target_key or ''}"
 
 
@@ -131,7 +134,8 @@ class Policy:
                               proposed=best.item_text)
                 return Decision("REJECT", best, [q], ["item not found in target"], risk)
         elif r.intent == "update":
-            if not any(f.status in ("value", "explicit_null") for f in best.fields.values()):
+            if not any(f.status in ("value", "explicit_null", "ambiguous")
+                       for f in best.fields.values()):
                 q = Question(type="nothing_to_write", target_key=best.key)
                 return Decision("REJECT", best, [q], ["nothing to write"], risk)
         if r.intent == "append" and best.item is None and best.item_candidates:

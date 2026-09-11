@@ -130,6 +130,19 @@ def test_noop_update_rejected():
     assert d.kind == "EXECUTE"
 
 
+def test_ambiguous_only_update_clarifies():
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("update", cand(ctx, "t2", 0.95, item="t2.i2",
+                                             fields={"t2.f2": amb("t2.f2.o1", "t2.f2.o2")})))
+    assert d.kind == "CLARIFY" and d.questions[0].type == "field_ambiguous"
+
+
+def test_update_with_nothing_at_all_still_rejects():
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("update", cand(ctx, "t2", 0.95, item="t2.i2")))
+    assert d.kind == "REJECT" and d.questions[0].type == "nothing_to_write"
+
+
 def test_append_to_page_itself_and_content_required():
     ctx, _ = ctx_and_snapshot()
     d, _ = decide(make_interp("append", cand(ctx, "t5", 0.95, content="текст")))

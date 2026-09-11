@@ -127,7 +127,7 @@ class Question(BaseModel):              # extra="forbid"; JSON-safe, session-per
     proposed: Any = None                # JSON-safe: date -> {start, end, granularity}; option value -> {id, name} (jsonvalue.to_json_value); intent_confirm -> the intent string; item_not_found -> Candidate.item_text
 
     @property
-    def id(self) -> str:                # f"{type}:{field_key or target_key or ''}" — stable across a context rebuild (see table below)
+    def id(self) -> str:                # f"{type}:{field_key or target_key or ''}" — stable within one context generation; embeds positional context keys, so it does NOT survive a rediscovery (see table below)
         ...
 
 @dataclass
@@ -153,13 +153,13 @@ Question order (ties within one `Decision.questions` broken by this order, one a
 
 Special cases, both REJECT with the candidate and a single question carried (so Plan 3 can act without re-running the LLM):
 - `update` intent with no resolvable item and no `item_candidates`: `Decision("REJECT", best, [Question("item_not_found", ..., proposed=best.item_text)], ["item not found in target"], risk)`.
-- `update` intent with a resolved item but no field `status` in `("value", "explicit_null")`: `Decision("REJECT", best, [Question("nothing_to_write", ...)], ["nothing to write"], risk)`.
+- `update` intent with a resolved item but no field `status` in `("value", "explicit_null", "ambiguous")`: `Decision("REJECT", best, [Question("nothing_to_write", ...)], ["nothing to write"], risk)`. (An `ambiguous` field still needs a `field_ambiguous` CLARIFY round-trip — it is not "nothing to write", since resolving it produces a real value.)
 
 `intent_confirm` replaces a one-option `target` question when the *only* reason to ask is `intent.confidence < POLICY_INTENT_MIN` and there is exactly one candidate (`proposed` carries the guessed intent string).
 
 ### Answer keys across a context rebuild
 
-`Question.id` is stable across a context rebuild (it names the *question*, not a request). The per-question-type answer, though, is keyed into the *old* context and cannot be replayed after discovery re-runs; Plan 3 must persist the value below instead, then re-resolve it against the fresh `Context` (via `Context.field_key`/`option_key`/`item_key`, §1 above):
+`Question.id` is stable only within one context generation, not across a rebuild (it embeds positional context keys). The per-question-type answer is likewise keyed into the *old* context and cannot be replayed after discovery re-runs; Plan 3 must persist the value below instead, then re-resolve it against the fresh `Context` (via `Context.field_key`/`option_key`/`item_key`, §1 above):
 
 | Question type | What must be persisted instead of the context key |
 |---|---|
@@ -212,6 +212,7 @@ class AppendBlocks(BaseModel):
 class Search(BaseModel):
     action: Literal["search"] = "search"
     data_source_id: str | None; target_name: str; title_property: str | None; query: str
+    filters: list[PropertyWrite] = []   # from validated fields with status=value; see below
 
 Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
 # Risk is keyed by intent, not by command: see validation/policy.py:RISK_BY_INTENT.
@@ -228,6 +229,17 @@ Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
 | `checkbox` | `bool` |
 | `number` | `int \| float` |
 | `url` | `str` |
+
+`Search.filters` (`commands/builder.py:_search_filters`): one `PropertyWrite` per validated field
+with status `value` whose type is `select`, `status`, `multi_select`, `relation` or `checkbox`
+(same `PropertyWrite` shape as above). `notion/mapper.py:search_filter` turns these into a Notion
+data-source query filter, addressed by property **name**: `select`/`status` → `{"property": name,
+"<type>": {"equals": option_name}}`; `multi_select`/`relation` → one `contains` condition per
+selected value (`relation` by page id, `multi_select` by option name); `checkbox` → `{"property":
+name, "checkbox": {"equals": bool}}`; plus, when `query` is non-empty and `title_property` is set,
+a `title` `contains` condition. Zero conditions → `None` (unfiltered); one → that condition; more
+→ `{"and": [...]}`. A malformed filter value is skipped rather than raised (same defensive stance
+as `property_payload`, §5 note above).
 
 `Search` results are capped at `executor.SEARCH_LIMIT` (20) hits regardless of source (data-source query or global search).
 

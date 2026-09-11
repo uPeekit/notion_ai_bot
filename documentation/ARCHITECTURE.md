@@ -218,7 +218,7 @@ Clarification question types (each has a button layout in `keyboards.py`):
 | `field_required` | required field `not_mentioned` | options for select/status/relation; free-text prompt for others |
 | `field_ambiguous` | field status `ambiguous` | one per candidate value |
 | `date` | date confidence < `POLICY_DATE_MIN` | proposed date ✓ / other date (free text) |
-| `nothing_to_write` | update: item resolved but no field `value`/`explicit_null` | — (REJECT, not a clarification round-trip) |
+| `nothing_to_write` | update: item resolved but no field `value`/`explicit_null`/`ambiguous` | — (REJECT, not a clarification round-trip) |
 
 One question per message. Several open issues are asked in the `_ORDER` from `policy.py`: `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write` (the last two of these — `item_not_found`, `nothing_to_write` — are REJECT-only single questions, never part of a multi-question CLARIFY).
 
@@ -229,7 +229,7 @@ Deterministic (`validation/policy.py`). `Thresholds.from_settings` reads `POLICY
 ```text
 REJECT if intent = unknown, or no candidate survived semantic validation (SemanticValidator issues)
       or (update) and item not in target's items and no item_candidates      # carries the candidate + an item_not_found Question, see below
-      or (update) and item resolved but no field status = value/explicit_null # carries the candidate + a nothing_to_write Question
+      or (update) and item resolved but no field status = value/explicit_null/ambiguous # carries the candidate + a nothing_to_write Question
 CLARIFY if intent.confidence < POLICY_INTENT_MIN      # intent_confirm instead of target when this is the only trigger and there is exactly one candidate
       or best.confidence < POLICY_TARGET_MIN
       or (best.confidence - second.confidence) < POLICY_TARGET_MARGIN   (only when second exists)
@@ -258,9 +258,11 @@ Risk classes: `RISK_BY_INTENT` = `create`, `append`, `search` → LOW; `update` 
 | `UpdateItem` | page_id, target_name, item_title, properties | `PATCH /v1/pages/{id}` |
 | `CreatePage` | parent_page_id, target_name, title, body | `POST /v1/pages` parent `page_id` + paragraph blocks |
 | `AppendBlocks` | page_id, target_name, page_title, paragraphs | `PATCH /v1/blocks/{id}/children` |
-| `Search` | data_source_id or None, target_name, title_property or None, query | `POST /v1/data_sources/{id}/query` title filter, or `POST /v1/search` |
+| `Search` | data_source_id or None, target_name, title_property or None, query, filters | `POST /v1/data_sources/{id}/query` compound filter, or `POST /v1/search` |
 | `ArchivePage` (undo) | page_id | `PATCH /v1/pages/{id}` `archived: true` |
 | `DeleteBlocks` (undo) | block_ids | `DELETE /v1/blocks/{id}` |
+
+`Search.filters` is built from the validated fields with status `value` (select/status/multi_select/relation/checkbox — see DATA_MODEL.md §5); `mapper.py:search_filter` composes them into one Notion filter object: `select`/`status` → `equals`, `multi_select`/`relation` → one `contains` per value, `checkbox` → `equals`, plus an optional title `contains` from `query`. Zero conditions → unfiltered; more than one → `{"and": [...]}`.
 
 Commands hold Notion ids resolved by the app from keys. `mapper.py` is the only place that builds Notion JSON. LLM output never reaches it.
 

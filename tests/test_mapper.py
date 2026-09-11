@@ -117,6 +117,19 @@ def test_search_filter_relation_uses_page_id():
     assert search_filter(cmd) == {"property": "Проект", "relation": {"contains": "p-home"}}
 
 
+def test_search_filter_malformed_filter_is_skipped_not_fatal():
+    cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название", query="",
+                filters=[
+                    pw("shop", "Магазин", "select", {"id": "o1", "name": "Rimi"}),
+                    pw("cat", "Категория", "select", "Еда"),  # malformed: bare string, not a dict
+                    pw("done", "Куплено", "checkbox", True),
+                ])
+    assert search_filter(cmd) == {"and": [
+        {"property": "Магазин", "select": {"equals": "Rimi"}},
+        {"property": "Куплено", "checkbox": {"equals": True}},
+    ]}
+
+
 def test_search_filter_checkbox():
     cmd = Search(data_source_id="ds", target_name="Покупки", title_property="Название", query="",
                 filters=[pw("done", "Куплено", "checkbox", True)])

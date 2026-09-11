@@ -73,17 +73,25 @@ def search_filter(cmd: Search) -> dict | None:
         return None
     conditions: list[dict] = []
     for f in cmd.filters:
-        v = f.value
-        if f.type in ("select", "status"):
-            conditions.append({"property": f.property_name, f.type: {"equals": v["name"]}})
-        elif f.type == "multi_select":
-            conditions += [{"property": f.property_name, "multi_select": {"contains": x["name"]}}
-                           for x in (v or [])]
-        elif f.type == "relation":
-            conditions += [{"property": f.property_name, "relation": {"contains": x["id"]}}
-                           for x in (v or [])]
-        elif f.type == "checkbox":
-            conditions.append({"property": f.property_name, "checkbox": {"equals": bool(v)}})
+        try:
+            v = f.value
+            if f.type in ("select", "status"):
+                conditions.append({"property": f.property_name, f.type: {"equals": v["name"]}})
+            elif f.type == "multi_select":
+                conditions += [
+                    {"property": f.property_name, "multi_select": {"contains": x["name"]}}
+                    for x in (v or [])
+                ]
+            elif f.type == "relation":
+                conditions += [{"property": f.property_name, "relation": {"contains": x["id"]}}
+                               for x in (v or [])]
+            elif f.type == "checkbox":
+                conditions.append({"property": f.property_name, "checkbox": {"equals": bool(v)}})
+        except (TypeError, KeyError):
+            # A Search rebuilt from the audit log may carry a malformed filter value; skip that
+            # one filter rather than raise out of the executor (same failure mode D2 hardened
+            # property_payload against).
+            continue
     if cmd.query and cmd.title_property:
         conditions.append({"property": cmd.title_property, "title": {"contains": cmd.query}})
     if not conditions:
