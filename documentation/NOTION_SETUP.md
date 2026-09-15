@@ -48,3 +48,12 @@ Notes:
 ## Descriptions for the LLM
 
 After the first `tools.discover` run, `data/targets.yaml` lists every visible target. Add a one-line `description` per database/page (what goes there, how you phrase it) and set `required: true` on fields the bot must always ask for. Notion's own database description is used when yours is empty.
+
+## Inbox target (fallback for what the bot can't resolve)
+
+Anything the pipeline cannot classify, or fails to write, is appended to one Notion page or database instead of being silently lost — a message the LLM couldn't parse, a rejected interpretation, a clarification nobody answered in time, and so on (see ERRORS.md's "Inbox fallback").
+
+1. Create an ordinary page or database for it, e.g. «Разное», and make sure the bot's integration can see it (share it, or share a parent page, the same way as every other target above).
+2. Flag it as the inbox. Today: edit `data/targets.yaml` and add `inbox: true` under that target's entry (see DATA_MODEL.md §2), or set `INBOX_TARGET_ID=<page or data source id>` in `.env` — the env override wins outright over the yaml flag, and logs a WARNING if it matches nothing. A future admin page (Plan 3b) will let you pick it by clicking instead.
+3. It stays an ordinary target for the LLM — nothing in the prompt marks it special — so the model has no way to prefer it over classifying properly; it only ever receives what the pipeline itself routed there.
+4. `INBOX_MODE` in `.env` controls how eagerly it's used: `auto` (default) saves immediately on every fallback path, with the usual `[Отменить]` on success or a `[В разное]` retry offer if the save itself failed; `button` never saves on its own — it only offers `[В разное]`, saving when the user presses it; `off` turns the whole fallback off (no save, no button).

@@ -24,9 +24,23 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `NOTION_5XX` | notion/direct | server error | Notion временно недоступен. | retry ×2 with backoff |
 | `UNDO_EXPIRED` | commands/executor | undo window passed | Отменить уже нельзя (прошло больше N минут). | none |
 | `UNDO_FAILED` | commands/executor | Notion refused undo | Не удалось отменить: <message>. | audit |
-| `SESSION_EXPIRED` | conversation/session | button pressed after TTL | Вопрос устарел. Повторите запрос. | drop session |
+| `SESSION_EXPIRED` | conversation/session | button pressed after TTL, or a stale/mismatched callback token, or an unknown callback prefix | Вопрос устарел. Повторите запрос. | drop session |
 | `INTERNAL` | conversation/orchestrator | unexpected exception on any path (the orchestrator never raises to the transport) | Не удалось обработать сообщение. | audit error, log exception |
 | `CONFIG_INVALID` | config | missing env / bad value | process exits with message | fix `.env` |
+| `INBOX_SAVED` | conversation/orchestrator (`_to_inbox`) | the inbox fallback wrote successfully | Сохранил в «{target}»: {url} | informational only — not an `events.error` value; the reply carries an Undo button like any other write |
+| `INBOX_FAILED` | conversation/orchestrator (`_to_inbox`, `_sweep`, expired-session rescue) | an inbox target is flagged but the fallback write itself failed (Notion error, or a database inbox with no title property) | Не удалось сохранить в «{target}». | audited as `events.error`; the original failure's message, if any, still prefixes this one |
+| `INBOX_NOT_CONFIGURED` | conversation/orchestrator (`_inbox_target`) | `INBOX_MODE=off`, or mode `button` outside a button press, or no target flagged and no `INBOX_TARGET_ID` override | — (no reply of its own; the original error/REJECT message stands alone, with no `[В разное]` offer) | not an audited code — documents why the inbox never engages; flag a target in `targets.yaml` or set `INBOX_TARGET_ID` |
+
+## Inbox fallback
+
+Rather than dropping a message the pipeline could not resolve, the orchestrator appends it to the
+one Notion target the user flagged as the inbox (`targets.yaml` `inbox: true`, or the
+`INBOX_TARGET_ID` override). Codes that fall back: `LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, every
+REJECT (`INTENT_UNKNOWN`, `SEM_UNKNOWN_KEY`, `SEM_TYPE`, `SEM_UNSUPPORTED_OP`, `nothing_to_write`,
+`item_not_found` once its own question goes unanswered), `NOTION_4XX`/`NOTION_5XX` on execute, an
+expired unanswered session, the `[В разное]` button, and a clarification budget (`MAX_QUESTIONS`)
+that ran out without a resolution. Explicitly not: `DISCOVERY_FAILED` (there is nothing to write
+to), and never after a successful write. See ARCHITECTURE.md §4/§7.
 
 ## Startup checks (`main.py`)
 

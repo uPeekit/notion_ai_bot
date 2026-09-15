@@ -31,7 +31,12 @@ All bot replies in Russian. Buttons in `[brackets]`.
 
 1. Bot asked F3 step 3.
 2. User (voice): «высокий, и срок пятница»
-3. LLM re-run with pending context. Prompt says: user answers question about field Приоритет for candidate t2; merge new info. Returns Приоритет=A (0.9), Срок=2026-09-11 (0.9).
+3. A live session for this chat makes the message a free-text answer. The orchestrator adds a
+   `pending` block to the LLM context — `{"вопрос": "<the question text as shown>", "цель":
+   "<target name or empty>", "исходный_текст": "<the original request>"}`, names only, never a
+   Notion id or context key — and prompts with `original_text + "\n" + new_text`. `MAX_QUESTIONS`
+   does not apply here: a free-text answer is indistinguishable from a fresh request and is never
+   refused for it. LLM returns Приоритет=A (0.9), Срок=2026-09-11 (0.9).
 4. Validate → EXECUTE. Session cleared.
 
 ## F5. Unrelated message while a question is pending
@@ -57,8 +62,14 @@ All bot replies in Russian. Buttons in `[brackets]`.
 ## F8. Update, item not found
 
 1. «отметь кефир купленным», no such item in context.
-2. LLM: item null, item_candidates []. Policy → REJECT.
-3. Bot: `Не нашёл «кефир» в Покупки. Добавить как новый?` `[Добавить] [Отмена]` (offer converts to create with title from search text; optional convenience, not an LLM call).
+2. LLM: item null, item_candidates []. Policy → REJECT, but carries the candidate and one
+   `Question("item_not_found", proposed="кефир")` so the conversation layer can answer it without
+   re-running the LLM.
+3. Bot: `Не нашёл «кефир» в списке.` `[Добавить как новое] [Отмена]` (plus `[В разное]` when an
+   inbox target is available).
+4. `[Добавить как новое]` → `apply_answer` flips the intent to `create`, sets the title field to
+   the unmatched text («кефир»), drops the stale item id → re-validate → EXECUTE, same reply shape
+   as F1 (`✅ Добавлено: Покупки — Кефир` + `[Открыть] [Отменить]`) — no second LLM call.
 
 ## F9. Append to page
 
@@ -111,3 +122,23 @@ All bot replies in Russian. Buttons in `[brackets]`.
 ## F16. Unauthorized user
 
 Any update from a user id outside `TELEGRAM_ALLOWED_USER_IDS` is ignored (no reply) and logged at WARNING without message content.
+
+## F17. Не понял → в разное
+
+1. «расскажи анекдот» — nothing here maps to an intent.
+2. LLM: `intent.value == "unknown"` → `SemanticValidator` issue `INTENT_UNKNOWN` → Policy → REJECT with no candidate. `_dispatch` has nothing to ask about, so it falls straight to the inbox fallback — the same path a REJECT with no candidate, an invalid/unavailable LLM response, a Notion error during execute, or an exhausted clarification budget (`MAX_QUESTIONS`) all take. Never a bare discovery failure (nothing to write to), never after a successful write.
+3. Mode `auto`, inbox flagged on «Разное»: bot replies `Не понял, что нужно сделать в Notion. Сохранил в «Разное»: <url>` `[Отменить]` (one message — the error and the save share one line, joined by a space).
+4. Mode `button` (or the save itself failed): bot replies the plain error alone, `Не понял, что нужно сделать в Notion.`, with `[В разное]` attached; pressing it replays this event's own text (`i:<event_id>`) into the same save.
+
+## F18. Вопрос устарел → в разное
+
+1. Bot asked a CLARIFY question (e.g. F3 step 3) and the user does not answer within `SESSION_TTL_S` (900 s default).
+2. The user later sends an unrelated message, e.g. «купи молоко». Before touching the (now stale) session, the orchestrator checks whether it already expired, rescues its `original_text` to the inbox target, then handles the new message normally.
+3. Mode `auto`, inbox flagged on «Разное»: bot replies with the rescue line on its own line, followed by the reply to the new message:
+   ```
+   Вопрос устарел — сохранил сообщение в «Разное».
+   ✅ Добавлено: Покупки — Молоко
+   Открыть: https://notion.so/…
+   ```
+4. If nobody sends a follow-up message at all, the sweeper (`Orchestrator.flush_expired_sessions`, scheduled by Plan 3b) rescues the same text on its own; there is no reply to show since there is no chat turn to attach it to.
+5. Mode `button`: the expired session's text is dropped silently — an accepted limitation of that mode, since there is no button left to press. Mode `off`: same, always. Only `auto` (the default) rescues it without the user asking.

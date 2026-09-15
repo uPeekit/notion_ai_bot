@@ -27,7 +27,7 @@ Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 |---|---|---|---|---|
 | T-010 | `notion/snapshot.py` dataclasses; `interpretation/models.py` Pydantic models incl. discriminated `FieldValue` | T-004 | M | round-trip JSON tests; invalid status rejected |
 | T-011 | `audit/store.py` SQLite schema + repository (events, sessions, executions), migrations | T-004 | M | tests on temp db: insert/read/expire |
-| T-012 | `texts.py` Russian strings; `telegram/keyboards.py` builders | T-004 | S | snapshot tests of keyboards |
+| T-012 | `texts.py` Russian strings; `telegram/keyboards.py` builders **(`texts.py` done, Plan 3a Task 1 — every question/execution/inbox/error template; `telegram/keyboards.py` itself deferred to Plan 3b, its job done for now by `conversation/reply.py`'s transport-neutral `Button`/`Reply`)** | T-004 | S | snapshot tests of keyboards |
 | T-013 | `notion/provider.py` protocol + `notion/direct.py` httpx client: search, get data source, query, create page, update page, append blocks, delete block, users/me; retries on 429/5xx | T-004 | L | tests with `httpx.MockTransport` for each call and retry path |
 | T-014 | `notion/descriptions.py` targets.yaml read/merge/write | T-010 | S | tests: new ids added, existing descriptions preserved |
 | T-015 | `notion/discovery.py` → `WorkspaceSnapshot` (pages tree, data sources, items, relation options, descriptions) with TTL cache | T-013, T-014 | L | tests with fixture JSON of a fake workspace; `tools/discover.py` prints tree against real Notion |
@@ -57,18 +57,20 @@ Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 
 | ID | Task | Depends | Cx | Acceptance |
 |---|---|---|---|---|
-| T-040 | `conversation/session.py` + `resolver.py`: PendingSession persistence, apply button answers, expiry | T-031, T-011 | M | FSM tests for F2, F3, F7, F12, expiry |
-| T-041 | `conversation/orchestrator.py`: full pipeline text → reply model (`Reply(text, keyboard, undo_id)`), free-text-while-pending handling (F4, F5), search reply formatting | T-040, T-034, T-022 | L | end-to-end tests with FakeLLM + FakeNotion for F1–F12, F14 |
+| T-040 | `conversation/session.py` + `resolver.py`: PendingSession persistence, apply button answers, expiry **(done, Plan 3a Tasks 2–3)** | T-031, T-011 | M | FSM tests for F2, F3, F7, F12, expiry |
+| T-041 | `conversation/orchestrator.py`: full pipeline text → reply model (`Reply(text, keyboard, undo_id)`), free-text-while-pending handling (F4, F5), search reply formatting **(done, Plan 3a Task 5 — `handle_text`/`handle_callback`/`undo`/`cancel`/`flush_expired_sessions`)** | T-040, T-034, T-022 | L | end-to-end tests with FakeLLM + FakeNotion for F1–F12, F14 |
 | T-042 | `telegram/auth.py`, `telegram/handlers.py`: text, voice (download), callbacks, commands `/start /help /refresh /targets /undo /cancel`; wiring in `main.py` with startup checks | T-041 | L | handler tests with PTB test utilities; manual run |
 | T-043 | `speech/base.py`, `speech/whisper_local.py`, lazy load, device auto-detect, CUDA→CPU fallback | T-004 | M | unit test with mocked model; manual test with a real voice note |
 | T-044 | Voice path in orchestrator, transcript to audit (F13) | T-042, T-043 | S | e2e test with fake STT |
+
+**Scope addition (Plan 3a):** the inbox fallback was not in this plan's original task list — `conversation/inbox.py`, `INBOX_MODE`/`INBOX_TARGET_ID` in `config.py`, `TargetMeta.inbox`/`Target.is_inbox` and `Discovery._resolve_inbox`, and `AuditStore.expired_sessions`/`pop_session`/`pop_expired_session`. Added alongside T-040/T-041 so a message the pipeline can't resolve is appended to a user-flagged target instead of being dropped. See ARCHITECTURE.md §1/§4/§7, DATA_MODEL.md §2/§7, NOTION_SETUP.md "Inbox target".
 
 ## Phase 5 — Admin and polish
 
 | ID | Task | Depends | Cx | Acceptance |
 |---|---|---|---|---|
 | T-050 | `admin/server.py` + `page.html`: tree view, description/required editing, save → yaml + cache invalidation | T-014, T-015 | M | HTTP tests; manual browser check |
-| T-051 | Audit completeness: every pipeline exit writes one `events` row with decision and durations | T-041 | S | tests assert row per flow |
+| T-051 | Audit completeness: every pipeline exit writes one `events` row with decision and durations **(orchestrator side done, Plan 3a Task 5 — `_turn`/`_open`/`_finish` guarantee exactly one closed row per handled message on every exit, error paths included; Telegram-layer `message_id`/`reply_message_id` wiring still pending on T-042)** | T-041 | S | tests assert row per flow |
 | T-052 | Structured logging, `event_id` correlation, no-secrets check | T-042 | S | grep test on log output of a run with fake tokens |
 | T-053 | README: usage, commands, tuning thresholds, remote Ollama/Whisper | T-042 | S | reviewed |
 
