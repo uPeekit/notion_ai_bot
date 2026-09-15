@@ -9,22 +9,27 @@ All bot replies in Russian. Buttons in `[brackets]`.
 3. Snapshot fetched (or cached). LLM: intent create 0.97; candidates: Покупки 0.95 {Название: Молоко, Магазин: Rimi}, Задачи 0.60.
 4. Policy: margin 0.35 ≥ 0.10, fields valid → EXECUTE.
 5. Notion `POST /v1/pages`.
-6. Bot: `✅ Покупки: Молоко · Магазин: Rimi` + `[Открыть]` (Notion URL) `[Отменить]`. Reply text reflects the properties actually written, read back from the Notion response.
-7. `[Отменить]` within 5 min → page archived → `↩️ Отменено`.
+6. Bot (`format_execution` on a `CreateItem` result — `DONE_CREATE_ITEM` header naming the target and the title value, one `• name: value` bullet per other written property, then `DONE_LINK` as a plain text line, not a button):
+   ```
+   ✅ Добавлено: Покупки — Молоко
+   • Магазин: Rimi
+   Открыть: <url>
+   ```
+   `[Отменить]` (the only button — "Открыть" is a text line the client may auto-link, never a `Button`). The bullet/header values are the properties the app itself sent (`cmd.properties`), not a re-read of Notion's response; only `page_id`/`url` come back from Notion.
+7. `[Отменить]` within 5 min → page archived → `↩️ Отменено.`
 
 ## F2. Create, target ambiguous
 
 1. «добавь хлеб»
 2. LLM: Покупки 0.88, Задачи 0.82. Margin 0.06 < 0.10 → CLARIFY(target).
-3. Bot: `Куда добавить «хлеб»?` `[Покупки] [Задачи] [Отмена]`
-4. `[Покупки]` → Resolver sets target=t1, uses that candidate's fields → validate → EXECUTE → F1 step 6.
+3. Bot: `Уточните, к какой записи это относится.` `[Покупки] [Задачи] [Отмена]` (+ `[В разное]` when an inbox target is available). The `target` question has no target-name variant — it's the one asking which target — so this text never changes with the candidate.
+4. `[Покупки]` → `apply_answer` narrows the session to the chosen candidate (confidence forced to 1.0) → `result_from_session` re-validates → EXECUTE → F1 step 6.
 
 ## F3. Create, required field missing
 
 1. «добавь задачу подготовить документы» — Задачи has required Приоритет (marked in targets.yaml).
 2. Policy: required field not_mentioned → CLARIFY(field_required).
-3. Bot: `Задачи: «Подготовить документы». Какой приоритет?` `[A] [B] [C] [Пропустить] [Отмена]`
-   `[Пропустить]` is shown only when the field is not the title; it stores explicit_null and the policy still rejects if the field is required. For required fields the button is hidden.
+3. Bot: `Задачи: какое значение указать для поля «Приоритет»?` `[A] [B] [C] [Отмена]` (+ `[В разное]`) — `field_required` is one of the four question types with a target-naming variant, so the target is always named when it's known. `[A]`/`[B]`/`[C]` stand in for the field's own Notion select/status option names (whatever the user actually named them), not fixed text. There is no "skip" button: `field_required` only fires for a `create`-intent required field, and the app has no button that stores `explicit_null` for it — a required field can only be answered, by button (when it has options) or by free text otherwise.
 4. `[A]` → validate → EXECUTE.
 
 ## F4. Free-text answer to a button question
@@ -42,22 +47,29 @@ All bot replies in Russian. Buttons in `[brackets]`.
 ## F5. Unrelated message while a question is pending
 
 1. Bot asked F2 step 3.
-2. User: «запиши идею: попробовать новый маршрут».
-3. LLM sees pending question; returns candidate for Идеи (page) intent append, and a flag that the pending question is unanswered (candidate target ≠ pending targets). Orchestrator drops the old session, replies `Предыдущий вопрос отменён.` then handles the new interpretation normally.
+2. User: «запиши идею: попробовать новый маршрут» — unrelated to the pending target question.
+3. The orchestrator does not distinguish "an answer" from "an unrelated message": both are handled exactly like F4 — the same `pending` block is added to the context and the LLM is prompted with `session.original_text + "\n" + new_text` in one call. There is no separate branch that detects the message is unrelated and no meta-reply telling the user so (no such string exists in `texts.py`); the fresh interpretation simply replaces the session outright and whatever `Policy` decides for it (EXECUTE/CLARIFY/REJECT) becomes the only reply.
+4. Here the model reads the new sentence as a complete request on its own — intent `append`, target Идеи — and Policy → EXECUTE. Bot replies as in F9 (`✅ Дописано: Идеи — Идеи` + `Открыть: <url>` + `[Отменить]`); the old target question and its session are simply gone, dropped as a side effect of the EXECUTE branch.
 
 ## F6. Update by reference
 
 1. «отметь молоко купленным»
 2. Context includes items t1.i7 «Молоко». LLM: intent update 0.95; candidate t1, item t1.i7, fields {Куплено: true}.
 3. Policy → EXECUTE. `PATCH /v1/pages/{id}`; previous value recorded for undo.
-4. Bot: `✅ Покупки: Молоко · Куплено: да` `[Открыть] [Отменить]`.
+4. Bot (`DONE_UPDATE` header naming the target and the item's own title; unlike a create, every written property becomes a bullet, the title included):
+   ```
+   ✅ Обновлено: Покупки — Молоко
+   • Куплено: Да
+   Открыть: <url>
+   ```
+   `[Отменить]`.
 
 ## F7. Update, item ambiguous
 
 1. «отметь молоко купленным», items contain «Молоко 2 л» and «Молоко овсяное».
 2. LLM: item null, item_candidates [t1.i7, t1.i9] → CLARIFY(item).
-3. Bot: `Какой элемент?` `[Молоко 2 л] [Молоко овсяное] [Отмена]`.
-4. Pick → EXECUTE.
+3. Bot: `Какой элемент в «Покупки»?` `[Молоко 2 л] [Молоко овсяное] [Отмена]` (+ `[В разное]`) — `item` is one of the four question types with a target-naming variant, and the target is always known by this point, so the plain `Какой элемент?` wording never actually appears.
+4. Pick → EXECUTE (F6-style reply).
 
 ## F8. Update, item not found
 
@@ -69,33 +81,58 @@ All bot replies in Russian. Buttons in `[brackets]`.
    inbox target is available).
 4. `[Добавить как новое]` → `apply_answer` flips the intent to `create`, sets the title field to
    the unmatched text («кефир»), drops the stale item id → re-validate → EXECUTE, same reply shape
-   as F1 (`✅ Добавлено: Покупки — Кефир` + `[Открыть] [Отменить]`) — no second LLM call.
+   as F1:
+   ```
+   ✅ Добавлено: Покупки — Кефир
+   Открыть: <url>
+   ```
+   `[Отменить]` — no second LLM call.
 
 ## F9. Append to page
 
 1. «в идеи: попробовать сыр с плесенью»
 2. LLM: intent append; target t2 (page Идеи), item null (append to page itself), content «Попробовать сыр с плесенью».
 3. EXECUTE `PATCH /v1/blocks/{page_id}/children` paragraph. Undo = delete created block ids.
-4. Bot: `✅ Идеи: добавлен абзац` `[Открыть] [Отменить]`.
+4. Bot (`DONE_APPEND`; `AppendBlocks` never produces bullets — the paragraph text itself isn't echoed back, only the fact that something was written):
+   ```
+   ✅ Дописано: Идеи — Идеи
+   Открыть: <url>
+   ```
+   `[Отменить]`. The target name and the "item" title are both the page's own name when appending to the page itself (`AppendBlocks.target_name`/`page_title` are the same `t.name`) — the repetition is what the code actually produces, not a typo.
 
 ## F10. Create sub-page
 
 1. «создай страницу отпуск 2027 в идеях, там будет план поездки»
 2. LLM: intent create; target t2 kind page; fields {title: «Отпуск 2027»}; content «План поездки».
 3. EXECUTE `POST /v1/pages` parent page_id + paragraph. Undo = archive.
+4. Bot (`DONE_CREATE_PAGE`; `CreatePage` never produces bullets either):
+   ```
+   ✅ Создано: Идеи — Отпуск 2027
+   Открыть: <url>
+   ```
+   `[Отменить]`.
 
 ## F11. Search
 
 1. «что у меня в покупках на Rimi?»
 2. LLM: intent search; target t1; search_query «Rimi» (or field filter Магазин=Rimi when expressible).
-3. App queries data source (title contains, or select equals when the LLM set a field value). Reply: numbered titles with links, max 20.
+3. App queries data source (title contains, or select equals when the LLM set a field value). `format_search` renders at most 20 hits, one per line, no buttons at all (a `Search` never produces an `UndoRecord`, so there is nothing to undo):
+   ```
+   Нашёл:
+   1. <title> — <url>
+   2. <title> — <url>
+   ```
+   Zero hits: `Ничего не нашёл.` instead.
 
 ## F12. Date low confidence
 
 1. «сделать отчёт к понедельнику» on a Saturday.
 2. LLM: Срок 2026-09-14 confidence 0.7 < 0.80 → CLARIFY(date).
-3. Bot: `Срок — понедельник, 14 сентября?` `[Да] [Другая дата] [Без срока] [Отмена]`.
-4. `[Другая дата]` → bot asks for free text; next message handled as F4.
+3. Bot: `Дата «Срок»: 14.09.2026. Верно?` `[Да] [Другое] [Отмена]` (+ `[В разное]`) — these are the
+   real `date`-question extras (`reply._EXTRAS["date"]`: confirm/other) plus cancel/inbox; there is
+   no third "skip the date" button.
+4. `[Другое]` → `apply_answer` returns the `"free_text"` verb, bot replies `Введите значение.`
+   (`ENTER_VALUE`); the next message is handled as F4.
 
 ## F13. Voice transcription failure
 
@@ -106,11 +143,11 @@ All bot replies in Russian. Buttons in `[brackets]`.
 
 | Failure | Bot reply | Audit |
 |---|---|---|
-| Ollama unreachable / timeout | `Локальная модель недоступна. Попробуйте позже.` | error |
-| LLM output fails Pydantic | one automatic retry with the validation error appended to the prompt; then `Не удалось разобрать запрос.` | both raw responses |
-| Notion 4xx on execute | `Notion отклонил операцию: <short reason>` | error |
+| Ollama unreachable / timeout | `Локальная модель недоступна. Попробуйте позже.` (+ inbox fallback, see F17) | error |
+| LLM output fails Pydantic | one automatic retry with the validation error appended to the prompt; then `Не удалось разобрать запрос.` (+ inbox fallback, see F17) | both raw responses |
+| Notion 4xx on execute | `Notion отклонил операцию: <short reason>` (+ inbox fallback — the write did not happen, so the text isn't lost) | error |
 | Notion 429 | retry with `Retry-After` up to 3 times, then as 4xx | error |
-| Discovery fails | use last snapshot if < 1 h old with warning line; else `Notion недоступен.` | error |
+| Discovery fails | use last snapshot if < 1 h old with warning line; else `Notion недоступен.` (no inbox fallback here — nothing to write to) | error |
 
 ## F15. Admin flow
 
