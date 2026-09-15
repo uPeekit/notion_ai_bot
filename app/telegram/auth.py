@@ -24,8 +24,29 @@ def deny(user_id: int | None, chat_id: int | None) -> None:
     log.warning("AUTH_DENIED user_id=%s chat_id=%s", user_id, chat_id)
 
 
+class _AllowedUserFilter(filters.MessageFilter):
+    """The declarative gate: a plain filters.User would reject a denied sender silently (its
+    membership test just returns False), leaving text messages, voice notes and commands denied
+    with no trace in the log at all — only app.telegram.handlers._guard_callback (the one
+    handler PTB cannot gate this way) would ever call deny(). This wraps the same membership
+    test and calls deny() on the way to returning False, so every declaratively-gated handler
+    logs exactly like the callback path does, without moving the check into a handler body."""
+
+    def __init__(self, allowed: frozenset[int]) -> None:
+        super().__init__()
+        self._allowed = allowed
+
+    def filter(self, message) -> bool:
+        user = message.from_user
+        user_id = user.id if user else None
+        if is_allowed(user_id, self._allowed):
+            return True
+        deny(user_id, getattr(message, "chat_id", None))
+        return False
+
+
 def allowed_filter(settings: Settings) -> filters.BaseFilter:
     """A python-telegram-bot filter built from Settings.allowed_user_ids, so an unauthorised
-    update never reaches a handler callback. An empty allowlist denies everyone (filters.User's
-    allow_empty defaults to False)."""
-    return filters.User(user_id=settings.allowed_user_ids)
+    update never reaches a handler callback. An empty allowlist denies everyone (is_allowed(_,
+    frozenset()) is always False)."""
+    return _AllowedUserFilter(settings.allowed_user_ids)

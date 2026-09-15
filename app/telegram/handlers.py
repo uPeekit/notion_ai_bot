@@ -77,9 +77,16 @@ def register(
     app.add_handler(CommandHandler("cancel", _cmd_cancel, filters=gate))
     app.add_handler(CommandHandler("refresh", _cmd_refresh, filters=gate))
     app.add_handler(CommandHandler("targets", _cmd_targets, filters=gate))
-    app.add_handler(MessageHandler(gate & filters.TEXT & ~filters.COMMAND, _on_text))
+    # `gate` is the outermost (rightmost) operand of every `&` below, not the leftmost: PTB's
+    # `_MergedFilter.filter` always evaluates its `base_filter` first and short-circuits the
+    # `and_filter` when that base is falsy, so putting the cheap type check first means `gate`
+    # — and the AUTH_DENIED it logs — only runs for the one handler a given update could
+    # possibly match, never for the other MessageHandler's chain too. `filters=gate` on the
+    # CommandHandlers above needs no such ordering: CommandHandler.check_update already resolves
+    # the command name before it ever consults `self.filters`.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & gate, _on_text))
     app.add_handler(
-        MessageHandler(gate & (filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE), _on_voice)
+        MessageHandler((filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE) & gate, _on_voice)
     )
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_error_handler(error_handler)

@@ -9,6 +9,7 @@ in, and every Update/Message/CallbackQuery is a real PTB object built offline.""
 from __future__ import annotations
 
 import datetime
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -305,6 +306,49 @@ async def test_unauthorised_text_produces_no_send_and_no_orchestrator_call():
     assert dispatched is False
     assert hs.orch.calls == []
     assert hs.bot.sent == []
+
+
+async def test_unauthorised_text_logs_auth_denied_exactly_once(caplog):
+    """The declarative gate (allowed_filter) must log the denial itself — nothing in this
+    module's handlers checks authorisation for a text message, so without logging inside the
+    filter this path would be denied silently."""
+    hs = build()
+    update = text_update(DENIED_USER, "купи молоко", hs.bot)
+
+    with caplog.at_level(logging.WARNING):
+        dispatched = await dispatch(hs.app, update, hs.context)
+
+    assert dispatched is False
+    assert hs.orch.calls == []
+    assert hs.bot.sent == []
+    denied = [r for r in caplog.records if "AUTH_DENIED" in r.getMessage()]
+    assert len(denied) == 1
+    assert str(DENIED_USER) in denied[0].getMessage()
+
+
+async def test_unauthorised_command_logs_auth_denied_exactly_once(caplog):
+    hs = build()
+    update = command_update(DENIED_USER, "undo", hs.bot)
+
+    with caplog.at_level(logging.WARNING):
+        dispatched = await dispatch(hs.app, update, hs.context)
+
+    assert dispatched is False
+    assert hs.orch.calls == []
+    assert hs.bot.sent == []
+    denied = [r for r in caplog.records if "AUTH_DENIED" in r.getMessage()]
+    assert len(denied) == 1
+    assert str(DENIED_USER) in denied[0].getMessage()
+
+
+async def test_allowed_text_emits_no_auth_denied_record(caplog):
+    hs = build()
+    update = text_update(ALLOWED_USER, "купи молоко", hs.bot)
+
+    with caplog.at_level(logging.WARNING):
+        assert await dispatch(hs.app, update, hs.context)
+
+    assert not any("AUTH_DENIED" in r.getMessage() for r in caplog.records)
 
 
 # ---- voice -----------------------------------------------------------------------------------

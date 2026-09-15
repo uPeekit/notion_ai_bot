@@ -83,13 +83,41 @@ def test_allowed_filter_empty_allowlist_denies_everyone(env, monkeypatch):
     assert f.filter(message) is False
 
 
+def test_allowed_filter_denied_user_logs_auth_denied(env, caplog):
+    """The declarative gate must log, exactly like _guard_callback does for the one handler it
+    cannot cover: a denied text message, voice note or command would otherwise leave no trace at
+    all (filters.User's own membership test just returns False, silently)."""
+    settings = Settings(_env_file=None)
+    f = allowed_filter(settings)
+    message = _FakeMessage(user_id=99, chat_id=555)
+    with caplog.at_level(logging.WARNING):
+        result = f.filter(message)
+    assert result is False
+    denied = [r for r in caplog.records if "AUTH_DENIED" in r.getMessage()]
+    assert len(denied) == 1
+    assert "99" in denied[0].getMessage()
+    assert "555" in denied[0].getMessage()
+
+
+def test_allowed_filter_allowed_user_logs_nothing(env, caplog):
+    settings = Settings(_env_file=None)
+    f = allowed_filter(settings)
+    message = _FakeMessage(user_id=1)
+    with caplog.at_level(logging.WARNING):
+        result = f.filter(message)
+    assert result is True
+    assert not any("AUTH_DENIED" in r.getMessage() for r in caplog.records)
+
+
 class _FakeUser:
     def __init__(self, user_id: int):
         self.id = user_id
 
 
 class _FakeMessage:
-    """Just enough of telegram.Message for filters.User.filter: a .from_user with an .id."""
+    """Just enough of telegram.Message for filters.User.filter and _AllowedUserFilter.filter: a
+    .from_user with an .id, plus an optional .chat_id."""
 
-    def __init__(self, user_id: int | None):
+    def __init__(self, user_id: int | None, chat_id: int | None = None):
         self.from_user = _FakeUser(user_id) if user_id is not None else None
+        self.chat_id = chat_id
