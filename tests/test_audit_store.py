@@ -133,6 +133,22 @@ def test_execution_undo_window(store):
     assert store.latest_execution(9, now) is None
 
 
+def test_reply_message_id_is_set_after_the_reply_is_sent(store):
+    """The row is written while the command runs, before its reply exists, so the column starts
+    null and the transport fills it in afterwards — it is how the undo button gets edited away
+    when the window closes."""
+    now = datetime.now(UTC)
+    eid = store.new_event(telegram_user_id=1, chat_id=9, kind="text")
+    xid = store.add_execution(eid, 9, None, "{}", now + timedelta(minutes=5))
+    assert store.get_execution(xid, now)["reply_message_id"] is None
+
+    store.set_reply_message_id(xid, 4242)
+    assert store.get_execution(xid, now)["reply_message_id"] == 4242
+    # and it addresses one row: a second execution in the same chat is untouched
+    other = store.add_execution(eid, 9, None, "{}", now + timedelta(minutes=5))
+    assert store.get_execution(other, now)["reply_message_id"] is None
+
+
 def test_migrate_idempotent(tmp_path):
     p = tmp_path / "t.sqlite"
     AuditStore(p).migrate()

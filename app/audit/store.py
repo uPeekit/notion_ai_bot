@@ -169,6 +169,18 @@ class AuditStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def set_reply_message_id(self, execution_id: int, reply_message_id: int) -> None:
+        """Fill in the Telegram message id of the reply that carried the Undo button. It cannot
+        be set at insert time — the row is written while the command runs, before the reply
+        exists — so the transport (Plan 3b) records it afterwards and uses it to edit that same
+        message when the undo window closes. Without this the column could never be filled."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE executions SET reply_message_id = ? WHERE id = ?",
+                (reply_message_id, execution_id),
+            )
+            self._conn.commit()
+
     def mark_undone(self, execution_id: int) -> None:
         with self._lock:
             self._conn.execute("UPDATE executions SET undone = 1 WHERE id = ?", (execution_id,))
