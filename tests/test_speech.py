@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -196,3 +197,47 @@ async def test_transcribe_runs_off_the_event_loop(monkeypatch):
 
     assert result == "hi"
     assert len(calls) == 1
+
+
+# ---- concurrency: two voice notes arriving close together ----------------------------------
+
+
+async def test_concurrent_transcriptions_construct_the_model_only_once():
+    """_ensure_model's `if self._model is None: ...` is a check-then-set: without a lock around
+    the whole of _transcribe_sync, two voice notes handled by two asyncio.to_thread workers can
+    both see self._model as None and both build a model — doubling a GPU allocation that is
+    already sharing 8GB with the LLM. The factory here blocks the first caller to reach it on a
+    threading.Event, and only releases once a second, concurrently-dispatched transcribe() call
+    has had a real (if generous) window to reach the same check — long enough that an unguarded
+    check-then-set would have raced in and called the factory a second time."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowFactory:
+        def __init__(self, model: FakeModel) -> None:
+            self._model = model
+            self.calls: list[dict] = []
+
+        def __call__(self, model_size_or_path, *, device, compute_type):
+            self.calls.append(
+                {"model": model_size_or_path, "device": device, "compute_type": compute_type}
+            )
+            entered.set()
+            assert release.wait(timeout=2), "test setup: release was never set"
+            return self._model
+
+    factory = SlowFactory(FakeModel([FakeSegment("hi")]))
+    stt = WhisperLocal(settings(), model_factory=factory)
+
+    async def releaser() -> None:
+        await asyncio.to_thread(entered.wait, 2)
+        await asyncio.sleep(0.05)  # generous window for an unguarded second call to race in
+        release.set()
+
+    first, second, _ = await asyncio.gather(
+        stt.transcribe(Path("a.ogg")), stt.transcribe(Path("b.ogg")), releaser()
+    )
+
+    assert first == "hi"
+    assert second == "hi"
+    assert len(factory.calls) == 1

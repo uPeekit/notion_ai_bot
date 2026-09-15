@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,14 @@ class WhisperLocal:
         self._model_factory = model_factory
         self._model: Any | None = None
         self._device = settings.whisper_device
+        # Guards the whole of _transcribe_sync, not just the model load: a threading.Lock (not
+        # asyncio.Lock, see app/notion/discovery.py) because this section runs on a
+        # to_thread worker thread, not the event loop. One GPU can't decode two clips at once
+        # anyway, so serialising costs nothing real, and it also closes the device-flip race
+        # (two calls disagreeing on self._device mid-fallback) and the "one call's fallback
+        # races another's in-flight transcription" case — a lock only around _ensure_model
+        # would leave both of those open. Do not narrow this back to just the load.
+        self._lock = threading.Lock()
 
     async def transcribe(self, path: Path) -> str:
         text = await asyncio.to_thread(self._transcribe_sync, path)
@@ -45,23 +54,24 @@ class WhisperLocal:
     # ---- worker-thread body: never call this directly from the event loop -----------------
 
     def _transcribe_sync(self, path: Path) -> str:
-        try:
-            return self._attempt(path)
-        except Exception as exc:
-            if self._device == "cpu":
-                raise SpeechError(f"whisper transcription failed: {exc}") from exc
-            log.warning(
-                "whisper failed on device %r (%s); falling back to cpu for the rest of the "
-                "process",
-                self._device,
-                exc,
-            )
-            self._device = "cpu"
-            self._model = None
+        with self._lock:
             try:
                 return self._attempt(path)
-            except Exception as exc2:
-                raise SpeechError(f"whisper transcription failed on cpu: {exc2}") from exc2
+            except Exception as exc:
+                if self._device == "cpu":
+                    raise SpeechError(f"whisper transcription failed: {exc}") from exc
+                log.warning(
+                    "whisper failed on device %r (%s); falling back to cpu for the rest of the "
+                    "process",
+                    self._device,
+                    exc,
+                )
+                self._device = "cpu"
+                self._model = None
+                try:
+                    return self._attempt(path)
+                except Exception as exc2:
+                    raise SpeechError(f"whisper transcription failed on cpu: {exc2}") from exc2
 
     def _attempt(self, path: Path) -> str:
         model = self._ensure_model()
