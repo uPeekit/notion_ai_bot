@@ -89,6 +89,11 @@ INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."
 
 # ---- errors (documentation/ERRORS.md), keyed by error code ------------------------------------
 
+# Placeholders here are filled by app.conversation.orchestrator, which degrades to
+# ERRORS["INTENT_UNKNOWN"] for any template it cannot fill — so a template may only ask for a
+# value its caller actually has. The two validator-issued REJECTs (SEM_TYPE, SEM_UNSUPPORTED_OP)
+# arrive without a candidate; their placeholder comes from Issue.detail. test_texts.py pins the
+# placeholder set of every code against that.
 ERRORS: dict[str, str] = {
     "STT_EMPTY": "Не разобрал голосовое сообщение. Повторите или напишите текстом.",
     "STT_FAILED": "Ошибка распознавания речи.",
@@ -97,7 +102,7 @@ ERRORS: dict[str, str] = {
     "LLM_INVALID_OUTPUT": "Не удалось разобрать запрос.",
     "INTENT_UNKNOWN": "Не понял, что нужно сделать в Notion.",
     "SEM_UNKNOWN_KEY": "Не удалось сопоставить запрос с Notion.",
-    "SEM_TYPE": "Не удалось разобрать значение «{value}».",
+    "SEM_TYPE": "Не удалось разобрать значение поля «{field_name}».",
     "SEM_UNSUPPORTED_OP": "Эта операция недоступна для «{target_name}».",
     "NOTION_4XX": "Notion отклонил операцию: {message}.",
     "NOTION_5XX": "Notion временно недоступен.",

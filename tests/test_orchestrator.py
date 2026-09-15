@@ -733,6 +733,36 @@ async def test_inbox_offer_pressed_twice_saves_once(make):
     closed_events(bot, ["text", "callback", "callback"])
 
 
+# ---- rejections the user can act on ------------------------------------------------------------
+
+async def test_sem_type_rejection_names_the_field_it_could_not_parse(make):
+    """A validator REJECT carries no candidate, so its message can only be filled from the
+    Issue the validator recorded. Before that, every SEM_TYPE degraded to the generic
+    "Не понял, что нужно сделать в Notion." — a message ERRORS.md never promised for it."""
+    bot = make(inbox_mode="off")
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95, fields={
+        "t3.f1": val("Сделать отчёт", 1.0), "t3.f3": val("not-a-date", 1.0)})))
+    reply = await bot.orch.handle_text(CHAT, USER, "сделать отчёт к не-дате")
+
+    assert reply.text == texts.ERRORS["SEM_TYPE"].format(field_name="Срок")
+    assert reply.text != texts.ERRORS["INTENT_UNKNOWN"]
+    (event,) = closed_events(bot, ["text"])
+    assert event["error"] == "SEM_TYPE"
+    assert "SEM_TYPE" in json.loads(event["validation_result"])["issues"][0]["code"]
+
+
+async def test_unsupported_op_rejection_names_the_target(make):
+    bot = make(inbox_mode="off")
+    # "Идеи" is a page: PAGE_OPERATIONS has create_page/append/search, never update.
+    bot.llm.queue(make_interp("update", cand(bot.ctx, "t5", 0.95, item_text="что-то",
+                                             fields={"t5.f1": val("x", 1.0)})))
+    reply = await bot.orch.handle_text(CHAT, USER, "измени идею")
+
+    assert reply.text == texts.ERRORS["SEM_UNSUPPORTED_OP"].format(target_name="Идеи")
+    (event,) = closed_events(bot, ["text"])
+    assert event["error"] == "SEM_UNSUPPORTED_OP"
+
+
 # ---- never raises to the transport -------------------------------------------------------------
 
 async def test_unexpected_failure_becomes_an_internal_reply(bot):

@@ -76,6 +76,8 @@ log = logging.getLogger(__name__)
 # are filtered out before the option list is handed over, or they would appear twice.
 RESERVED_OPTIONS = frozenset({"cancel", "inbox", "confirm", "other", "add_new"})
 GENERIC_REJECT = "INTENT_UNKNOWN"
+# The placeholder each validator-issued REJECT template asks for, and which Issue.detail fills.
+REJECT_DETAIL: dict[str, str] = {"SEM_TYPE": "field_name", "SEM_UNSUPPORTED_OP": "target_name"}
 # Decision placeholder written when an events row is opened; every exit overwrites it.
 OPEN = "OPEN"
 # /undo and /cancel arrive without the sender's id (see Orchestrator.undo/cancel), and so does
@@ -111,11 +113,21 @@ def _reject_code(decision: Decision) -> str:
     return code if code in texts.ERRORS else GENERIC_REJECT
 
 
-def _reject_fmt(decision: Decision) -> dict[str, Any]:
-    if decision.candidate is None:
+def _reject_fmt(decision: Decision, result: ValidationResult) -> dict[str, Any]:
+    """What ERRORS[_reject_code(decision)] needs to be filled in. The two rejects that carry a
+    candidate name it themselves; a validator-issued REJECT has none, so its placeholder comes
+    from the Issue that produced the code (Issue.detail: the field name behind SEM_TYPE, the
+    target name behind SEM_UNSUPPORTED_OP). Without this both templates could only ever degrade
+    to the generic INTENT_UNKNOWN message."""
+    if decision.candidate is not None:
+        return {"item_text": decision.candidate.item_text or texts.UNTITLED,
+                "target_name": decision.candidate.target.name}
+    code = _reject_code(decision)
+    key = REJECT_DETAIL.get(code)
+    if key is None:
         return {}
-    return {"item_text": decision.candidate.item_text or texts.UNTITLED,
-            "target_name": decision.candidate.target.name}
+    detail = next((i.detail for i in result.issues if i.code == code and i.detail), None)
+    return {key: detail} if detail is not None else {}
 
 
 def _undo_buttons(execution_id: int | None) -> list[list[Button]]:
@@ -268,7 +280,7 @@ class Orchestrator:
                 return question
         self._sessions.drop(turn.chat_id)
         return await self._inbox_or_error(turn, text, _reject_code(decision),
-                                          **_reject_fmt(decision))
+                                          **_reject_fmt(decision, result))
 
     async def _execute(
         self, turn: _Turn, decision: Decision, result: ValidationResult, text: str

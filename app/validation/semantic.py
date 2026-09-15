@@ -28,9 +28,16 @@ class TypeError_(ValueError):
 
 @dataclass(frozen=True)
 class Issue:
+    """`message` is for the audit log and the developer reading it (English, internals); `detail`
+    is the one user-facing noun the matching texts.ERRORS template needs — the field name for
+    SEM_TYPE, the target name for SEM_UNSUPPORTED_OP. Without it the orchestrator has nothing to
+    format those templates with (a REJECT from the validator carries no candidate) and has to
+    degrade every one of them to the generic INTENT_UNKNOWN message."""
+
     code: str
     message: str
     key: str | None = None
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +205,7 @@ class SemanticValidator:
                     "SEM_UNSUPPORTED_OP",
                     f"{intent} not supported for {target.name}",
                     cand.target,
+                    detail=target.name,
                 )
             )
             return None
@@ -216,7 +224,7 @@ class SemanticValidator:
             try:
                 fields[fk] = self._field(fk, ref, fdef, raw, ctx, issues)
             except TypeError_ as e:
-                issues.append(Issue("SEM_TYPE", f"{ref.name}: {e}", fk))
+                issues.append(Issue("SEM_TYPE", f"{ref.name}: {e}", fk, detail=ref.name))
                 return None
 
         item = None

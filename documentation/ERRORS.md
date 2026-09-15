@@ -14,9 +14,9 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `LLM_INVALID_OUTPUT` | llm/ollama → interpretation | JSON invalid or Pydantic fails | Не удалось разобрать запрос. | 1 retry with error text appended; both responses audited |
 | `INTENT_UNKNOWN` | validation/semantic | LLM `intent.value == "unknown"` | Не понял, что нужно сделать в Notion. | REJECT immediately, no candidates built |
 | `SEM_UNKNOWN_KEY` | validation/semantic | target/field/item/option key not in snapshot | Не удалось сопоставить запрос с Notion. | REJECT; indicates schema/enum fallback issue → log ERROR |
-| `SEM_TYPE` | validation/semantic | value type mismatch (e.g. date not ISO) | Не удалось разобрать значение «…». | REJECT |
+| `SEM_TYPE` | validation/semantic | value type mismatch (e.g. date not ISO) | Не удалось разобрать значение поля «…». | REJECT; «…» is the field name, carried to the reply on `Issue.detail` |
 | `SEM_STATUS_CLEAR` | validation/semantic | `explicit_null` on a `status` field (Notion API cannot clear a status) | — (not user-visible) | field dropped (left unwritten), warning logged |
-| `SEM_UNSUPPORTED_OP` | validation/semantic | operation not in target.operations | Эта операция недоступна для «…». | REJECT |
+| `SEM_UNSUPPORTED_OP` | validation/semantic | operation not in target.operations | Эта операция недоступна для «…». | REJECT; «…» is the target name, carried to the reply on `Issue.detail` |
 | `SEM_READONLY_FIELD` | reserved, unreachable | readonly fields never get a context key (`ContextBuilder._fields` skips `not f.writable`), so the LLM can never name one | — | none |
 | `nothing_to_write` | validation/policy | `update` with a resolved item but no field `value`/`explicit_null` | Не понял, что именно изменить. | REJECT, carries the candidate + a `Question("nothing_to_write", ...)` |
 | `NOTION_4XX` | notion/direct | validation error from Notion | Notion отклонил операцию: <message>. | REJECT after execute attempt; audit |
@@ -30,6 +30,12 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `INBOX_SAVED` | conversation/orchestrator (`_to_inbox`) | the inbox fallback wrote successfully | Сохранил в «{target}»: {url} | informational only — not an `events.error` value; the reply carries an Undo button like any other write |
 | `INBOX_FAILED` | conversation/orchestrator — audited as `events.error` only from `_sweep` and `_callback`'s `inbox` verb (the `[В разное]` button) | an inbox target is flagged but the fallback write itself failed (Notion error, or a database inbox with no title property) | Не удалось сохранить в «{target}». | the two sites above set `events.error`; every other path that shows this text — `_to_inbox` inside `_inbox_or_error` (e.g. F17's failed-save case), and `_expired_prefix` (F18's next-message rescue) — renders it to the user without auditing it itself, leaving `events.error` holding whatever code the original failure used (or unset) |
 | `INBOX_NOT_CONFIGURED` | conversation/orchestrator (`_inbox_target`) | `INBOX_MODE=off`, or mode `button` outside a button press, or no target flagged and no `INBOX_TARGET_ID` override | — (no reply of its own; the original error/REJECT message stands alone, with no `[В разное]` offer) | not an audited code — documents why the inbox never engages; flag a target in `targets.yaml` or set `INBOX_TARGET_ID` |
+
+Both of these REJECTs are raised by the validator, so the `Decision` reaching the orchestrator carries
+no candidate to name the field or target from. `Issue.detail` is that one user-facing noun, kept apart
+from `Issue.message` (English, for the audit log); `orchestrator.REJECT_DETAIL` maps each code to the
+placeholder it fills. A message whose placeholder cannot be filled degrades to `INTENT_UNKNOWN`, so
+adding a placeholder to a template without a source for it silently hides the message.
 
 ## Inbox fallback
 
