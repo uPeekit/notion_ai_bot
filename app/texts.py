@@ -119,6 +119,29 @@ ERRORS: dict[str, str] = {
     "INTERNAL": "Не удалось обработать сообщение.",
 }
 
+# ---- /start, /help, /refresh, /targets (app.telegram.handlers) --------------------------------
+
+HELP_TEXT = (
+    "Я сохраняю и обновляю записи в Notion по текстовым и голосовым сообщениям.\n"
+    "Просто напишите или наговорите, что нужно сделать — я найду подходящий раздел.\n\n"
+    "Команды:\n"
+    "/help — это сообщение\n"
+    "/undo — отменить последнее действие\n"
+    "/cancel — отменить текущий вопрос\n"
+    "/refresh — обновить список разделов Notion\n"
+    "/targets — показать список разделов\n\n"
+    "Сообщение, которое не удалось отнести ни к одному разделу, попадает в «разное» "
+    "(если этот раздел настроен)."
+)
+
+REFRESH_DONE = "Обновлено. Разделов: {count}."
+
+TARGETS_HEADER = "Разделы Notion:"
+TARGETS_NONE_YET = "Список разделов ещё не загружен. Отправьте /refresh."
+# t.kind ("database"/"page") -> a Russian noun for the /targets tree line.
+TARGET_KIND_LABELS: dict[str, str] = {"database": "база данных", "page": "страница"}
+TARGETS_INBOX_MARKER = "(разное)"
+
 # ---- LLM-facing keys --------------------------------------------------------------------------
 
 # Keys of the `pending` block the orchestrator adds to the request context when the next message
