@@ -70,6 +70,13 @@ def test_configure_has_no_access_to_settings_or_tokens():
     assert params["level"].annotation in (str, "str")
 
 
+def _reset_root_and_third_party() -> None:
+    for h in list(logging.getLogger().handlers):
+        logging.getLogger().removeHandler(h)
+    for name in logging_setup._THIRD_PARTY_WARNING_ONLY:
+        logging.getLogger(name).setLevel(logging.NOTSET)
+
+
 def test_configure_installs_the_event_id_filter_on_the_root_logger(capsys):
     configure("DEBUG")
     try:
@@ -78,5 +85,20 @@ def test_configure_installs_the_event_id_filter_on_the_root_logger(capsys):
         captured = capsys.readouterr()
         assert "[event=42]" in captured.err
     finally:
-        for h in list(logging.getLogger().handlers):
-            logging.getLogger().removeHandler(h)
+        _reset_root_and_third_party()
+
+
+def test_configure_silences_httpx_and_httpcore_info_logging(capsys):
+    """The real leak this guards against: python-telegram-bot's own httpx client logs
+    "GET .../bot<token>/getUpdates" at INFO on every poll. Asserting on actual emitted output
+    (not just configure()'s signature) is what proves the silencing happens, not just that it is
+    plausible."""
+    configure("DEBUG")  # even at DEBUG, httpx/httpcore must not get through
+    try:
+        logging.getLogger("httpx").info("GET http://example/bot123:SECRET-TOKEN/getUpdates")
+        logging.getLogger("httpcore").info("connect_tcp.started host='example'")
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert "SECRET-TOKEN" not in captured.err
+    finally:
+        _reset_root_and_third_party()

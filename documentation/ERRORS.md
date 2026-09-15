@@ -50,13 +50,22 @@ to), and never after a successful write. See ARCHITECTURE.md §4/§7.
 
 ## Startup checks (`main.py`)
 
+Steps 1-2 are synchronous and run in `main()` before any event loop exists. Steps 3-5 and 7 are
+async and run from `Application.post_init` — i.e. inside python-telegram-bot's own event loop,
+the same one that later polls — never from a throwaway `asyncio.run(...)` of their own: a second,
+separate loop would leave the same httpx-backed Notion/Ollama clients holding idle keep-alive
+connections bound to it, and the first real call on them once polling starts would raise
+`RuntimeError: Event loop is closed`.
+
 1. Settings load (`Settings.require_telegram()`); missing required → exit 2.
 2. `AuditStore.assert_schema_current()`; a pending migration → exit 4 with the hint to run the
    updater. Migrations are never applied here — never `AuditStore.migrate()` — only by the
    installer/updater or `tools/migrate.py` (ARCHITECTURE.md §15).
 3. Ollama `GET /api/tags`; warn if `LLM_MODEL` missing or the call itself fails — not fatal, the
    user may start Ollama or pull the model later.
-4. Notion `GET /v1/users/me`; exit 3 on failure (401 included).
+4. Notion `GET /v1/users/me`; exit 3 on 401/403 (auth failure). Any other failure (a 5xx, a
+   timeout) only warns and lets startup continue, the same as the Ollama check above — it is not
+   proof the token is wrong, and discovery below will surface it again if it persists.
 5. Initial discovery; write `targets.yaml`; log the target count and which target is flagged as
    the inbox, or warn that none is (the fallback is then inert) — not fatal on its own failure.
 6. Whisper not loaded at startup (lazy).

@@ -3,10 +3,25 @@
 Everything else in this codebase is a class waiting to be constructed; this module is where that
 finally happens, once, for the single long-running process a user starts on their own machine
 (`deploy/run.ps1`: `python -m app.main`). `build()` constructs every collaborator and returns them
-on one `App`; `startup_checks()` runs the fixed sequence documentation/ERRORS.md specifies
-(settings -> schema -> Ollama -> Notion -> initial discovery -> admin — step 8, polling, is
-`main()`'s own job, not this function's); `main()` is the thin synchronous entry point that ties
-`configure`/`build`/`startup_checks` to python-telegram-bot's own polling loop.
+on one `App`. Startup checks come in two parts, run from two different places, and that split is
+load-bearing rather than cosmetic:
+
+* `startup_checks(app)` — settings (exit 2) and schema (exit 4) — is synchronous and runs in
+  `main()` before any event loop exists.
+* `post_init_checks(app, application)` — Ollama, Notion, initial discovery, the admin server —
+  is async and runs from `Application.post_init`, i.e. inside python-telegram-bot's own event
+  loop, the same one that later does the real polling.
+
+The split exists because of a real, reproduced failure mode: running the async checks in a
+throwaway `asyncio.run(...)` before calling `Application.run_polling()` leaves the very same
+httpx-backed clients (`DirectNotionProvider`, `OllamaClient`) holding idle keep-alive connections
+bound to that now-closed loop; the next real call on them — the first Notion write or the first
+LLM call of the run — then raises `RuntimeError: Event loop is closed`, self-heals on retry, and
+reads like a random flake instead of the systematic bug it is. Running those checks inside
+`post_init` keeps every use of those clients on the one loop `run_polling()` owns for the whole
+process lifetime, so this never happens. `documentation/ERRORS.md`'s "settings -> schema ->
+Ollama -> Notion -> discovery -> admin -> polling" ordering is preserved either way: only *when*
+each step runs relative to the event loop's existence changed, not the sequence itself.
 
 Startup/exit messages on stderr are host-side operator text, not the Russian user-facing UI in
 `app/texts.py`, and stay in English on purpose — this module must contain no Cyrillic literal.
@@ -58,6 +73,14 @@ EXIT_CONFIG = 2
 EXIT_NOTION_AUTH = 3
 EXIT_PENDING_MIGRATION = 4
 
+# Only an actual auth failure is fatal (documentation/ERRORS.md: "exit 3 on 401"; 403 reads the
+# same way — a token that is simply forbidden rather than merely absent). Anything else from
+# provider.me() (a 5xx, a timeout, NotionUnavailable's status=0) is a transient-looking failure,
+# not proof the token is wrong, and is treated like the Ollama check right above it: a WARNING,
+# not a reason to kill a process the user may otherwise be able to use just fine once Notion (or
+# the network) recovers.
+_NOTION_AUTH_STATUSES = frozenset({401, 403})
+
 # Non-empty so python-telegram-bot's Bot() constructor (which only ever checks truthiness, never
 # format) accepts it when the real token is blank. Real validity is settings.require_telegram()'s
 # job — the very first startup check, which exits the process long before polling would ever put
@@ -98,6 +121,10 @@ class Sweeper:
         self._interval = interval_s
         self._task: asyncio.Task | None = None
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None
+
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._loop())
@@ -121,8 +148,8 @@ class Sweeper:
 @dataclass
 class App:
     """Every object the process needs, constructed exactly once by `build()`. Plan 3b's tests
-    build one with fake provider/llm factories and call `startup_checks`/its collaborators
-    directly — nothing in this module ever polls Telegram on its own."""
+    build one with fake provider/llm factories and call `startup_checks`/`post_init_checks`/its
+    collaborators directly — nothing in this module ever polls Telegram on its own."""
 
     settings: Settings
     store: AuditStore
@@ -137,6 +164,11 @@ class App:
     admin: AdminServer
     sweeper: Sweeper
     telegram_app: Application
+    # Set by post_init_checks on a fatal Notion auth failure. sys.exit() cannot be used there —
+    # PTB's own bootstrap catches SystemExit around the post_init call and treats it as a
+    # graceful stop (see post_init_checks' docstring) — so this is how the failure survives long
+    # enough for main() to act on it once run_polling() returns.
+    fatal: tuple[int, str] | None = None
 
 
 def build(
@@ -148,8 +180,9 @@ def build(
     """Constructs every collaborator once and wires them together. Never touches the network or
     the filesystem beyond opening the sqlite file and reading `targets.yaml` — `provider_factory`/
     `llm_factory`/`speech_factory` are the seam a test uses to hand back a fake instead of a real
-    `DirectNotionProvider`/`OllamaClient`/`WhisperLocal`, so `build()` and `startup_checks()` can
-    both be exercised with no real Notion, Ollama, Telegram or Whisper anywhere in reach."""
+    `DirectNotionProvider`/`OllamaClient`/`WhisperLocal`, so `build()`, `startup_checks()` and
+    `post_init_checks()` can all be exercised with no real Notion, Ollama, Telegram or Whisper
+    anywhere in reach."""
     store = AuditStore(settings.db_path)
     sessions = SessionStore(store)
     descriptions = Descriptions(settings.targets_file)
@@ -174,8 +207,13 @@ def build(
     telegram_app = Application.builder().token(token).build()
     register(telegram_app, orchestrator, settings, speech, discovery, store)
 
-    async def _post_init(_: Application) -> None:
-        sweeper.start()
+    # `app` is assigned below, after these closures are defined but before either is ever called
+    # (PTB only calls post_init/post_shutdown once run_polling() — or a test — invokes them), so
+    # the late-binding closure over the name `app` sees the fully constructed object every time.
+    async def _post_init(application: Application) -> None:
+        await post_init_checks(app, application)
+        if app.fatal is None:
+            sweeper.start()
 
     async def _post_shutdown(_: Application) -> None:
         # Sweeper first: it is the one thing that still touches the store on its own timer, so it
@@ -188,11 +226,12 @@ def build(
     telegram_app.post_init = _post_init
     telegram_app.post_shutdown = _post_shutdown
 
-    return App(
+    app = App(
         settings=settings, store=store, sessions=sessions, descriptions=descriptions,
         discovery=discovery, provider=provider, llm=llm, executor=executor, speech=speech,
         orchestrator=orchestrator, admin=admin, sweeper=sweeper, telegram_app=telegram_app,
     )
+    return app
 
 
 def _die(code: int, message: str) -> NoReturn:
@@ -200,13 +239,37 @@ def _die(code: int, message: str) -> NoReturn:
     sys.exit(code)
 
 
-async def startup_checks(app: App) -> None:
-    """documentation/ERRORS.md's fixed startup sequence, steps 1-7 in order; step 8 (polling) is
-    `main()`'s own job, run only once this returns without exiting. Every exit here prints one
-    English operator line to stderr with its remedy and calls `sys.exit` with the documented
-    code (2 config, 3 Notion auth, 4 pending migration); nothing else in this function is fatal —
-    an unusable Ollama or a failed initial discovery only warn, since the user may start Ollama
-    or fix Notion access later and the bot should still come up meanwhile."""
+def _error_field_names(e: Exception) -> list[str]:
+    """The field names a pydantic ValidationError names, and nothing else. `str(e)` for a
+    "missing" error embeds `input_value={...}` — the whole dict of settings that *were* supplied,
+    secrets included (pydantic truncates the repr, so what would leak is partial, not complete,
+    but a partial token is still a leaked token) — and `e.errors()[i]["input"]` carries the exact
+    same dict, untruncated. Only `err["loc"]` (the field path) is ever safe to surface."""
+    errors = getattr(e, "errors", None)
+    if not callable(errors):
+        return []
+    try:
+        return sorted({".".join(str(p) for p in err.get("loc", ())) for err in errors()})
+    except Exception:
+        return []
+
+
+def _config_error_message(e: Exception) -> str:
+    """A fixed, token-safe message for a `Settings()` construction failure — never `str(e)`, for
+    the reason `_error_field_names` explains."""
+    fields = _error_field_names(e)
+    where = f" ({', '.join(fields)})" if fields else ""
+    return f"configuration error{where}. Fix .env and restart."
+
+
+def startup_checks(app: App) -> None:
+    """The two checks that can (and must) run before any event loop exists: settings
+    (`Settings.require_telegram()`, exit 2 — only field *names* ever appear, via
+    `_config_error_message`/`_error_field_names`, never a value) and schema
+    (`AuditStore.assert_schema_current()`, exit 4, whose message already carries the "run the
+    updater" hint). Neither is async. Giving them a throwaway event loop of their own anyway
+    would be harmless in isolation, but see `post_init_checks` for why the checks that *are*
+    async must not get one."""
     try:
         app.settings.require_telegram()
     except ValueError as e:
@@ -217,6 +280,22 @@ async def startup_checks(app: App) -> None:
     except MigrationError as e:
         _die(EXIT_PENDING_MIGRATION, str(e))
 
+
+async def post_init_checks(app: App, application: Application) -> None:
+    """Everything that needs a running event loop: Ollama, Notion, initial discovery, the admin
+    server. Called from `Application.post_init` (wired in `build()`), so it shares PTB's own loop
+    with every real call `app.provider`/`app.llm` make later — see the module docstring for why
+    that is not optional.
+
+    A Notion auth failure is the one fatal condition in here, but it cannot be reported with
+    `sys.exit()`: `Application._Application__run` wraps the whole bootstrap — including the
+    `post_init` call — in `except (KeyboardInterrupt, SystemExit): ...` and treats either as a
+    plain graceful-stop signal, logs it at DEBUG, and lets `run_polling()` return normally with no
+    trace of *why*. Recording `app.fatal` and calling `application.stop_running()` (PTB's own
+    documented hook for "a graceful early shutdown ... if some condition is met [in post_init]")
+    is what actually stops polling from starting; `main()` checks `app.fatal` once `run_polling()`
+    returns and exits with the right code only then, once PTB's own shutdown/post_shutdown have
+    already run cleanly."""
     try:
         models = await app.llm.models()
     except LLMError as e:
@@ -231,8 +310,15 @@ async def startup_checks(app: App) -> None:
     try:
         await app.provider.me()
     except NotionError as e:
-        _die(EXIT_NOTION_AUTH,
-             f"Notion authentication failed ({e}). Check NOTION_TOKEN in .env.")
+        if e.status not in _NOTION_AUTH_STATUSES:
+            log.warning("notion check failed (%s); continuing, discovery may still fail", e)
+        else:
+            app.fatal = (
+                EXIT_NOTION_AUTH,
+                f"Notion authentication failed ({e}). Check NOTION_TOKEN in .env.",
+            )
+            application.stop_running()
+            return
 
     try:
         snapshot = await app.discovery.get()
@@ -258,12 +344,14 @@ def main() -> None:
         settings = load_settings()
     except Exception as e:  # pydantic ValidationError: a required .env value is missing/invalid
         configure("INFO")
-        _die(EXIT_CONFIG, f"configuration error: {e}. Fix .env and restart.")
+        _die(EXIT_CONFIG, _config_error_message(e))
 
     configure(settings.log_level)
     app = build(settings)
-    asyncio.run(startup_checks(app))
+    startup_checks(app)  # sync: settings + schema; exits 2/4 directly, no event loop involved
     app.telegram_app.run_polling()
+    if app.fatal is not None:  # post_init_checks found a fatal Notion auth failure and stopped
+        _die(*app.fatal)
 
 
 if __name__ == "__main__":
