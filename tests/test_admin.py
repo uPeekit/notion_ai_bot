@@ -4,7 +4,7 @@ import json
 import pytest
 import yaml
 
-from app.admin.server import AdminServer
+from app.admin.server import MAX_BODY_BYTES, AdminServer
 from app.config import Settings
 from app.notion.descriptions import Descriptions, TargetMeta
 from tools.sample_workspace import sample_snapshot
@@ -210,3 +210,40 @@ def test_malformed_json_rejected_and_nothing_written(server, descriptions):
     status, _body = _post(server, "/api/descriptions", b"{not json at all")
     assert status == 400
     assert descriptions._path.read_text(encoding="utf-8") == before
+
+
+def _post_with_content_length(server, path, body_bytes, content_length_header):
+    """Sends a POST with an explicit, possibly-hostile Content-Length header value that need
+    not match len(body_bytes) — exercises the server's own defensive parsing of that header,
+    bypassing http.client's normal auto-computed Content-Length."""
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+    try:
+        conn.putrequest("POST", path)
+        conn.putheader("Host", "127.0.0.1")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", content_length_header)
+        conn.endheaders(message_body=body_bytes)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def test_non_numeric_content_length_rejected(server, descriptions):
+    status, _body = _post_with_content_length(server, "/api/descriptions", b"{}", "abc")
+    assert status == 400
+    assert not descriptions._path.exists()
+
+
+def test_negative_content_length_rejected(server, descriptions):
+    status, _body = _post_with_content_length(server, "/api/descriptions", b"{}", "-1")
+    assert status == 400
+    assert not descriptions._path.exists()
+
+
+def test_content_length_over_cap_rejected(server, descriptions):
+    status, _body = _post_with_content_length(
+        server, "/api/descriptions", b"{}", str(MAX_BODY_BYTES + 1)
+    )
+    assert status == 400
+    assert not descriptions._path.exists()

@@ -16,6 +16,24 @@ log = logging.getLogger(__name__)
 
 _PAGE_HTML = (Path(__file__).parent / "page.html").read_bytes()  # read once at import
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+# Generous cap for a hand-edited descriptions document; also bounds the blocking rfile.read()
+# below so a hostile/huge Content-Length can't force an unbounded read.
+MAX_BODY_BYTES = 512 * 1024
+
+
+def _parse_content_length(raw: str | None) -> int | None:
+    """Returns the number of body bytes to read, or None when the header is missing (treated
+    as an empty body), non-numeric, negative, or over MAX_BODY_BYTES — the caller must reject
+    with 400 without ever calling rfile.read() in the last three cases."""
+    if raw is None:
+        return 0
+    try:
+        length = int(raw)
+    except ValueError:
+        return None
+    if length < 0 or length > MAX_BODY_BYTES:
+        return None
+    return length
 
 
 def _loopback_host(host_header: str | None) -> bool:
@@ -187,7 +205,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != "/api/descriptions":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        length = _parse_content_length(self.headers.get("Content-Length"))
+        if length is None:
+            log.warning("rejected POST /api/descriptions: bad Content-Length header")
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request"})
+            return
         raw = self.rfile.read(length) if length else b""
         try:
             body = json.loads(raw) if raw else {}
