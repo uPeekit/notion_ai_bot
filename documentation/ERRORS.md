@@ -50,13 +50,17 @@ to), and never after a successful write. See ARCHITECTURE.md §4/§7.
 
 ## Startup checks (`main.py`)
 
-1. Settings load; missing required → exit 2.
-2. SQLite migrate.
-3. Ollama `GET /api/tags`; warn if `LLM_MODEL` missing.
-4. Notion `GET /v1/users/me`; exit 3 on 401.
-5. Initial discovery; write `targets.yaml`; log target count.
+1. Settings load (`Settings.require_telegram()`); missing required → exit 2.
+2. `AuditStore.assert_schema_current()`; a pending migration → exit 4 with the hint to run the
+   updater. Migrations are never applied here — never `AuditStore.migrate()` — only by the
+   installer/updater or `tools/migrate.py` (ARCHITECTURE.md §15).
+3. Ollama `GET /api/tags`; warn if `LLM_MODEL` missing or the call itself fails — not fatal, the
+   user may start Ollama or pull the model later.
+4. Notion `GET /v1/users/me`; exit 3 on failure (401 included).
+5. Initial discovery; write `targets.yaml`; log the target count and which target is flagged as
+   the inbox, or warn that none is (the fallback is then inert) — not fatal on its own failure.
 6. Whisper not loaded at startup (lazy).
-7. Admin server start (if port > 0).
+7. Admin server start (if `ADMIN_UI_PORT > 0`).
 8. Telegram polling start.
 
 ## Logging
