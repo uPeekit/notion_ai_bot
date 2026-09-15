@@ -942,15 +942,23 @@ async def test_a_failed_inbox_button_resends_the_question_it_first_asked(bot):
 
 async def test_repeated_free_text_answers_stop_growing_the_request(bot):
     """MAX_QUESTIONS only counts button answers, so free text can be answered forever; the
-    concatenation the next prompt is built from has to stop somewhere short of an overflow."""
+    concatenation the next prompt is built from has to stop somewhere short of an overflow —
+    and it has to stop by dropping the *oldest* end. A cap that keeps the head instead freezes
+    the conversation at the limit: the new answer is chopped off, the prompt is byte-identical
+    to the previous round, and a deterministic model asks the same question forever."""
     bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> ask for it
     await bot.orch.handle_text(CHAT, USER, "добавь в покупки")
-    for _ in range(12):
+    for i in range(12):
         bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))
-        await bot.orch.handle_text(CHAT, USER, "ы" * 500)
+        await bot.orch.handle_text(CHAT, USER, f"ответ {i} " + "ы" * 500)
 
     assert len(bot.sessions.get(CHAT, NOW).original_text) <= MAX_PROMPT
-    assert len(bot.llm.seen[-1][0]) <= MAX_PROMPT
+    prompts = [seen[0] for seen in bot.llm.seen]
+    assert len(prompts[-1]) == MAX_PROMPT  # the cap really is being hit by now
+    # the newest answer survives the trim, and each turn is a different request
+    assert prompts[-1].endswith("ответ 11 " + "ы" * 500)
+    assert prompts[-1] != prompts[-2]
+    assert bot.sessions.get(CHAT, NOW).original_text.endswith("ы" * 500)
 
 
 async def test_a_title_falling_back_to_the_request_stays_one_line(bot):

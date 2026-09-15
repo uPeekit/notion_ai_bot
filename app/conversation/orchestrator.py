@@ -90,7 +90,8 @@ OPEN = "OPEN"
 # A free-text answer is folded into the request it answers ("original\nanswer") and the result
 # becomes the next round's original_text, so a user who keeps answering in free text grows it
 # without bound — MAX_QUESTIONS only counts button answers. Same ceiling the validator and the
-# inbox put on a single piece of text; without it a stuck loop ends in LLMContextOverflow.
+# inbox put on a single piece of text; without it a stuck loop ends in LLMContextOverflow. What
+# the cap drops is the oldest end of that concatenation (see _text), never the newest answer.
 MAX_PROMPT = 4000
 # /undo and /cancel arrive without the sender's id (see Orchestrator.undo/cancel), and so does
 # the expired-session sweeper; the events row still needs a non-null user column.
@@ -303,7 +304,11 @@ class Orchestrator:
         # answering and both halves of the request, and its fresh interpretation replaces the
         # session outright (an unrelated message is simply a new request, F5).
         pending = self._pending_block(session, snapshot) if session is not None else None
-        prompt = (f"{session.original_text}\n{text}"[:MAX_PROMPT] if session is not None
+        # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
+        # the tail instead freezes the conversation once the concatenation reaches the cap —
+        # every further answer chopped off, the same bytes sent again, the same question asked
+        # forever, at one LLM call a turn and with nothing ever reaching Notion or the inbox.
+        prompt = (f"{session.original_text}\n{text}"[-MAX_PROMPT:] if session is not None
                   else text)
         asked = list(session.asked) if session is not None else []
 
