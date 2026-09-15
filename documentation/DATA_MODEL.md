@@ -197,6 +197,11 @@ class PendingCandidate(BaseModel):      # extra="forbid"; one VCandidate flatten
     content: str | None
     search_query: str | None
     fields: list[PendingField]
+    item_candidates: list[str] = []     # VCandidate.item_candidates as page ids, not "t2.i4":
+                                         # Policy offers the `item` question only while this is
+                                         # non-empty, so a session that dropped them turns the
+                                         # second question of a round-trip into an
+                                         # item_not_found REJECT offering to create a duplicate
 
 class AnswerOption(BaseModel):          # extra="forbid"; one button on the question on screen
     id: str                             # o0..o7, or a literal "confirm"/"other"/"add_new"/
@@ -343,7 +348,7 @@ CREATE TABLE events (
   decision TEXT,                        -- EXECUTE | CLARIFY | REJECT
   clarification_state TEXT,             -- JSON question or null
   command TEXT,                         -- JSON command or null
-  executed INTEGER NOT NULL DEFAULT 0,
+  executed INTEGER NOT NULL DEFAULT 0,   -- the command ran; a `search` sets it and writes nothing
   notion_page_id TEXT,
   error TEXT,
   duration_ms INTEGER
@@ -359,7 +364,9 @@ CREATE TABLE executions (
   id INTEGER PRIMARY KEY,
   event_id INTEGER REFERENCES events(id),
   chat_id INTEGER NOT NULL,
-  reply_message_id INTEGER,
+  reply_message_id INTEGER,             -- null at insert (no reply yet); the transport fills it
+                                        -- in via AuditStore.set_reply_message_id, to edit the
+                                        -- Undo button away when the window closes
   undo TEXT NOT NULL,                   -- JSON: {kind: archive|restore|delete_blocks, ...}
   undone INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL

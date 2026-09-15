@@ -35,11 +35,17 @@ def inbox_target(snapshot: WorkspaceSnapshot) -> Target | None:
 def inbox_command(
     target: Target, text: str, *, note: str | None, now: datetime, tz: str
 ) -> Command:
-    """Builds the Command that persists `text` (plus an optional short `note`) to the flagged
-    inbox target: AppendBlocks for a page, CreateItem for a database. Never invents a target or
-    a blank artifact — a database inbox with no title property, or text that is empty after
-    stripping, raises ValueError; the caller (Task 5) catches it and degrades to a plain error
-    reply rather than silently dropping the message or minting an empty Notion row."""
+    """Builds the Command that persists `text` (plus an optional short `note` saying why the
+    message ended up here) to the flagged inbox target: AppendBlocks for a page, CreateItem for
+    a database. Never invents a target or a blank artifact — a database inbox with no title
+    property, or text that is empty after stripping, raises ValueError; the caller (Task 5)
+    catches it and degrades to a plain error reply rather than silently dropping the message or
+    minting an empty Notion row.
+
+    The note is kept only by a page inbox, as a second paragraph under the text. A database row
+    is written with its title property and nothing else — inventing a second property to hold a
+    note would mean guessing at a schema this module knows nothing about — so the note is
+    dropped there; the reason still reaches the user in the reply either way."""
     body = text.strip()[:MAX_TEXT]
     if not body:
         raise ValueError("inbox text is empty")

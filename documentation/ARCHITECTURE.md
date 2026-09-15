@@ -123,12 +123,23 @@ Callback payloads: `a:<token>:<option_id>` (`apply_answer` → `result_from_sess
 offered on a reply that saved nothing). A token that doesn't match the chat's live session, or an
 unknown prefix, replies `SESSION_EXPIRED`.
 
+`Orchestrator._text` runs discovery **before** it looks the session up, and that order is
+deliberate: looking first would pop an expired session (the lookup is destructive — it is what
+rescues the text into the inbox) and only then discover that Notion is unreachable, with nowhere
+to write it. Since the session row is the only copy of that text, the message would be gone. Do
+not reorder these two for the sake of skipping a snapshot fetch on the error path.
+
 Free text while a session is pending → the LLM is re-run once, with a `pending` block (question
 text, target name, original text — never a Notion id or context key) added to the context and
 `session.original_text + "\n" + new_text` as the prompt; the fresh interpretation replaces the
 session outright, whether it answers the question or turns out to be a new request (F4, F5).
 `MAX_QUESTIONS = 3` bounds button round-trips only — a free-text answer is indistinguishable from
-a fresh request and is never refused for exceeding it.
+a fresh request and is never refused for exceeding it. It is what bounds the *number* of answers;
+what bounds their *size* is `orchestrator.MAX_PROMPT` (4000 chars, the same ceiling the validator
+and the inbox put on one piece of text), which caps the concatenation each answer grows — without
+it a user who keeps answering in free text eventually ends the conversation in
+`LLMContextOverflow`. The capped text is what the session stores and what a fallback page title or
+search query is built from (`commands/builder.py:_one_line` folds it back onto one line).
 
 **Inbox fallback**: a message the pipeline could not otherwise resolve — an invalid/unavailable
 LLM response, a REJECT, a Notion error during execute, an expired unanswered session, the
@@ -231,6 +242,17 @@ IDLE ──text──▶ INTERPRETING ──EXECUTE──▶ IDLE (+undo record)
                         timeout ────┘─▶ IDLE (+ inbox fallback on the next message, or the sweeper)
 ```
 
+**One chat's turns are serialised.** Every entry point (`handle_text`, `handle_callback`,
+`undo`, `cancel`, and each chat's own rescue inside `flush_expired_sessions`) takes that chat's
+`asyncio.Lock` for the whole turn, so no two turns of one chat overlap; different chats stay fully
+concurrent, and the lock is dropped again once no turn holds it. It is not a nicety: every guard
+in the orchestrator is a read, an `await`, then a write — `events.executed` before an inbox save,
+`executions.undone` before an undo, the session row across a save — and a double-tapped Telegram
+button arrives as two callbacks ~100 ms apart in two concurrent handlers, where both reads would
+see the state from before either write and the message would be saved (or reverted) twice. The
+sweeper takes each chat's lock around that chat's own pop and rescue, never one lock for the whole
+sweep.
+
 One pending session per chat, keyed by `chat_id`. `MAX_QUESTIONS = 3` bounds *button* round-trips
 only: once three questions have been asked and answered by button, a fourth CLARIFY falls back to
 the inbox instead of asking again. A free-text answer is exempt — it re-runs the LLM and is
@@ -310,6 +332,18 @@ faster-whisper, model `WHISPER_MODEL` (default `large-v3-turbo`), `compute_type=
 ## 11. Audit and storage (SQLite)
 
 Tables: `events` (one row per handled message, per spec §27), `sessions` (pending clarification, one per chat), `executions` (undo data, expires). See [DATA_MODEL.md](DATA_MODEL.md). Tokens never stored; LLM request context and raw response stored as JSON text.
+
+Exactly one `events` row per handled message: opened at entry and closed once on every path, error
+exits included. `events.executed = 1` means *the command ran*, not that something was written — a
+`search` sets it and writes nothing (and records no `executions` row, since there is nothing to
+undo). `events.error` normally holds the code the turn earned for itself; the one code that is
+recorded as a fallback is `INBOX_FAILED` from `_expired_prefix`, because that rescue belongs to a
+*previous* message and the row would otherwise close as a clean `EXECUTE` with no trace that the
+rescued text was lost. A code the turn records for itself always wins over it.
+
+`executions.reply_message_id` starts null — the row is written while the command runs, before its
+reply exists — and the transport fills it in afterwards with `AuditStore.set_reply_message_id`, so
+it can edit the Undo button away when the window closes.
 
 ## 12. Admin page
 

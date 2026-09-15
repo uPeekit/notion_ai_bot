@@ -80,6 +80,11 @@ SEARCH_EMPTY = "Ничего не нашёл."
 INBOX_SAVED = "Сохранил в «{target_name}»: {url}"
 INBOX_SAVED_EXPIRED = "Вопрос устарел — сохранил сообщение в «{target_name}»."
 INBOX_FAILED = "Не удалось сохранить в «{target_name}»."
+# Short notes filed next to a message rescued into the inbox, so the user can tell later why it
+# is there rather than in the target it was meant for (inbox.py trims them to MAX_NOTE). A page
+# inbox keeps the note as a second paragraph under the text.
+INBOX_NOTE = "Причина: {reason}"
+INBOX_NOTE_UNANSWERED = "Остался без ответа вопрос: {question}"
 CANCELLED = "Отменено."
 UNDONE = "↩️ Отменено."
 ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)

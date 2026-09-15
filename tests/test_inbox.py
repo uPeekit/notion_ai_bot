@@ -98,6 +98,16 @@ def test_database_target_creates_item_with_only_the_title_property():
     assert prop.value == "молоко"
 
 
+def test_database_target_drops_the_note_it_has_nowhere_to_put():
+    """A row gets its title property and nothing else; there is no property to hold a note and
+    guessing at one would mean writing into a schema this module knows nothing about."""
+    db = _db()
+    cmd = inbox_command(db, "молоко", note="Причина: Notion временно недоступен.", now=NOW,
+                        tz=TZ)
+    assert [p.type for p in cmd.properties] == ["title"]
+    assert cmd.properties[0].value == "молоко"
+
+
 def test_database_without_title_property_raises_value_error():
     db = _db()
     no_title = replace(db, fields=[f for f in db.fields if f.type != "title"])

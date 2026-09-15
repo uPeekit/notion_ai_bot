@@ -168,6 +168,16 @@ Any update from a user id outside `TELEGRAM_ALLOWED_USER_IDS` is ignored (no rep
 4. Mode `auto`, but the save itself fails (Notion error, or the inbox has no title property): the same one-line join, with the failure text instead — `Не понял, что нужно сделать в Notion. Не удалось сохранить в «Разное».` — with `[В разное]` attached as a retry offer (pressing it replays this event's own text, `i:<event_id>`, into another save attempt; no `[Отменить]`, since nothing was written).
 5. Mode `button` (the save is never attempted at all): bot replies the plain error alone, `Не понял, что нужно сделать в Notion.`, with `[В разное]` attached; pressing it replays this event's own text (`i:<event_id>`) into the first save attempt.
 
+6. Whichever path wrote it, the inbox page also gets a short note saying *why* the message is
+   there, so it can be triaged later: `Причина: <the error text the user was shown>`, or
+   `Остался без ответа вопрос: <the question, worded exactly as it was asked>` for a rescued
+   session. A page inbox keeps the note as a second paragraph under the text (so an Undo removes
+   both blocks); a database inbox stores the text as the row title only, and the note is dropped
+   — there is no property to put it in.
+7. Pressing `[В разное]` on a pending question and having the save fail does not destroy the
+   question: the reply is the failure line with the question repeated under it, carrying the same
+   keyboard and the same token, so `[В разное]` is its own retry (`ERRORS.md`: `INBOX_FAILED`).
+
 ## F18. Вопрос устарел → в разное
 
 1. Bot asked a CLARIFY question (e.g. F3 step 3) and the user does not answer within `SESSION_TTL_S` (900 s default).
@@ -178,5 +188,5 @@ Any update from a user id outside `TELEGRAM_ALLOWED_USER_IDS` is ignored (no rep
    ✅ Добавлено: Покупки — Молоко
    Открыть: https://notion.so/…
    ```
-4. If nobody sends a follow-up message at all, the sweeper (`Orchestrator.flush_expired_sessions`, scheduled by Plan 3b) rescues the same text on its own; there is no reply to show since there is no chat turn to attach it to.
+4. If nobody sends a follow-up message at all, the sweeper (`Orchestrator.flush_expired_sessions`, scheduled by Plan 3b) rescues the same text on its own; there is no reply to show since there is no chat turn to attach it to. It takes each chat's own lock around that chat's pop-and-rescue, so a turn already in flight for that chat finishes first and the message cannot be handled and rescued at the same time.
 5. Mode `button`: the expired session's text is dropped silently — an accepted limitation of that mode, since there is no button left to press. Mode `off`: same, always. Only `auto` (the default) rescues it without the user asking.

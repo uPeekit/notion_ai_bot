@@ -9,6 +9,7 @@ error exits, where the orchestrator must reply rather than raise."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -22,7 +23,7 @@ from app import texts
 from app.audit.store import AuditStore
 from app.commands.executor import Executor
 from app.config import Settings
-from app.conversation.orchestrator import Orchestrator
+from app.conversation.orchestrator import MAX_PROMPT, Orchestrator
 from app.conversation.session import SessionStore
 from app.llm.base import LLMInvalidOutput, LLMUnavailable
 from app.llm.context import ContextBuilder
@@ -556,7 +557,9 @@ async def test_rejected_message_is_appended_to_the_inbox_with_an_undo_button(bot
 
     undone = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
     assert undone.text == texts.UNDONE
-    assert notion_calls(bot, "delete_block") == [("delete_block", "blk-0")]
+    # two paragraphs: the message, then the note saying why it landed in the inbox
+    assert notion_calls(bot, "delete_block") == [("delete_block", "blk-0"),
+                                                 ("delete_block", "blk-1")]
     assert rows(bot, "executions")[0]["undone"] == 1
     closed_events(bot, ["text", "callback"])
 
@@ -692,7 +695,8 @@ async def test_inbox_button_keeps_the_session_when_the_save_fails(bot):
     bot.notion.fail_append_blocks = NotionError(500, "server_error", "boom")
 
     reply = await bot.orch.handle_callback(CHAT, USER, press(question, "inbox"))
-    assert reply.text == texts.INBOX_FAILED.format(target_name="Идеи")
+    assert reply.text.startswith(texts.INBOX_FAILED.format(target_name="Идеи"))
+    assert question.text in reply.text  # and the question it is still waiting on
     assert bot.sessions.get(CHAT, NOW) is not None
     assert press(question, "inbox") in button_ids(reply)  # pressable again, same token
     assert rows(bot, "executions") == []
@@ -761,6 +765,210 @@ async def test_unsupported_op_rejection_names_the_target(make):
     assert reply.text == texts.ERRORS["SEM_UNSUPPORTED_OP"].format(target_name="Идеи")
     (event,) = closed_events(bot, ["text"])
     assert event["error"] == "SEM_UNSUPPORTED_OP"
+
+
+# ---- one chat at a time --------------------------------------------------------------------
+
+def slow_append(bot: Bot):
+    """Make the Notion write actually yield to the event loop, the way a real HTTP call does.
+    Without a suspension point inside the guarded section the fakes are atomic by accident and
+    a concurrency test proves nothing."""
+    real = bot.notion.append_blocks
+
+    async def append(block_id, children):
+        await asyncio.sleep(0)
+        return await real(block_id, children)
+
+    bot.notion.append_blocks = append
+
+
+async def test_two_presses_of_the_same_inbox_offer_save_once(make):
+    """A double-tapped button reaches the bot as two callbacks ~100 ms apart, in two concurrent
+    handlers. `executed` is read, a write is awaited, and only then is `executed` set — so
+    without a per-chat lock both passes see executed=0 and the message is saved twice."""
+    bot = make(inbox_mode="button")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+    offer = button_ids(rejected)[0]
+    slow_append(bot)
+
+    first, second = await asyncio.gather(
+        bot.orch.handle_callback(CHAT, USER, offer),
+        bot.orch.handle_callback(CHAT, USER, offer),
+    )
+
+    assert len(notion_calls(bot, "append_blocks")) == 1
+    assert len(rows(bot, "executions")) == 1
+    assert texts.INBOX_ALREADY_SAVED in (first.text, second.text)
+    closed_events(bot, ["text", "callback", "callback"])
+
+
+async def test_two_presses_of_the_same_undo_button_revert_once(make):
+    bot = make()
+    bot.llm.queue(buy_milk(bot))
+    created = await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
+    real_update = bot.notion.update_page
+
+    async def update_page(page_id, *, properties=None, archived=None):
+        await asyncio.sleep(0)
+        return await real_update(page_id, properties=properties, archived=archived)
+
+    bot.notion.update_page = update_page
+
+    await asyncio.gather(
+        bot.orch.handle_callback(CHAT, USER, f"u:{created.undo_id}"),
+        bot.orch.handle_callback(CHAT, USER, f"u:{created.undo_id}"),
+    )
+
+    assert len(notion_calls(bot, "update_page")) == 1  # the second press found it undone
+    assert rows(bot, "executions")[0]["undone"] == 1
+
+
+async def test_two_chats_are_not_serialised_against_each_other(make):
+    """The lock is per chat_id: one chat waiting on Notion must not hold up another."""
+    bot = make()
+    bot.llm.queue(buy_milk(bot))
+    bot.llm.queue(buy_milk(bot))
+    entered: list[int] = []
+    release = asyncio.Event()
+
+    real_create = bot.notion.create_page
+
+    async def create_page(parent, properties, children=None):
+        entered.append(len(entered))
+        if len(entered) == 1:  # the first chat parks inside the guarded section
+            await release.wait()
+        return await real_create(parent, properties, children)
+
+    bot.notion.create_page = create_page
+    first = asyncio.create_task(bot.orch.handle_text(CHAT, USER, "купи молоко в Рими"))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(bot.orch.handle_text(CHAT + 1, USER, "купи молоко в Рими"))
+    await asyncio.wait_for(second, timeout=1)  # would deadlock behind one global lock
+
+    release.set()
+    await asyncio.wait_for(first, timeout=1)
+    assert len(entered) == 2
+
+
+async def test_the_lock_map_does_not_grow_with_the_number_of_chats(bot):
+    for chat in range(5):
+        await bot.orch.cancel(chat)
+    assert bot.orch._locks == {} and bot.orch._waiting == {}
+
+
+# ---- the inbox leaves a trace ------------------------------------------------------------------
+
+def inbox_paragraphs(bot: Bot) -> list[str]:
+    children = notion_calls(bot, "append_blocks")[0][2]
+    return [rt["text"]["content"]
+            for block in children
+            for rt in block["paragraph"]["rich_text"]]
+
+
+async def test_a_rescued_message_says_why_it_is_in_the_inbox(bot):
+    bot.llm.queue_error(LLMUnavailable("connection refused"))
+    await bot.orch.handle_text(CHAT, USER, "купи молоко")
+
+    text, note = inbox_paragraphs(bot)
+    assert "купи молоко" in text
+    assert note == texts.INBOX_NOTE.format(reason=texts.ERRORS["LLM_UNAVAILABLE"])
+
+
+async def test_an_unanswered_question_is_filed_with_the_question_itself(bot):
+    bot.llm.queue(new_task(bot))
+    await bot.orch.handle_text(CHAT, USER, "добавь задачу подготовить документы")
+    bot.clock.advance(901)
+
+    bot.llm.queue(buy_milk(bot))
+    await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
+
+    text, note = inbox_paragraphs(bot)
+    assert "добавь задачу подготовить документы" in text
+    assert note.startswith("Остался без ответа вопрос:")
+    assert "Приоритет" in note  # the question that was actually on screen
+
+
+async def test_expired_rescue_that_fails_is_audited_on_the_turn(bot):
+    """The only real blind spot the audit log had: the rescued message is lost, the row belongs
+    to the *new* message and would otherwise close as a clean EXECUTE with error NULL."""
+    bot.llm.queue(new_task(bot))
+    await bot.orch.handle_text(CHAT, USER, "добавь задачу подготовить документы")
+    bot.clock.advance(901)
+    bot.notion.fail_append_blocks = NotionError(500, "server_error", "boom")
+
+    bot.llm.queue(buy_milk(bot))
+    reply = await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
+
+    assert reply.text.startswith(texts.INBOX_FAILED.format(target_name="Идеи"))
+    assert "Молоко" in reply.text  # the new message still went through
+    events = closed_events(bot, ["text", "text"])
+    assert events[1]["executed"] == 1
+    assert events[1]["error"] == "INBOX_FAILED"
+
+
+async def test_a_turns_own_error_outranks_the_expired_rescue_fallback(bot):
+    """The fallback is a floor, not an override: a code the turn earns for itself is more
+    informative and wins (the same rule _inbox_or_error already follows)."""
+    bot.llm.queue(new_task(bot))
+    await bot.orch.handle_text(CHAT, USER, "добавь задачу подготовить документы")
+    bot.clock.advance(901)
+    bot.notion.fail_append_blocks = NotionError(500, "server_error", "boom")
+
+    bot.llm.queue_error(LLMUnavailable("connection refused"))
+    await bot.orch.handle_text(CHAT, USER, "купи молоко")
+
+    events = closed_events(bot, ["text", "text"])
+    assert events[1]["error"] == "LLM_UNAVAILABLE"
+
+
+async def test_a_failed_inbox_button_resends_the_question_it_first_asked(bot):
+    """The retry keyboard must carry the same words as the original question — dropping the
+    target name turns "Какой элемент в «Покупки»?" into a bare "Какой элемент?"."""
+    bot.llm.queue(make_interp("update", cand(
+        bot.ctx, "t2", 0.95, item_candidates=["t2.i2", "t2.i4"], item_text="молоко",
+        fields={"t2.f5": val(True, 1.0)})))
+    question = await bot.orch.handle_text(CHAT, USER, "отметь молоко купленным")
+    assert question.text == texts.QUESTION_WITH_TARGET["item"].format(target_name="Покупки")
+    bot.notion.fail_append_blocks = NotionError(500, "server_error", "boom")
+
+    retry = await bot.orch.handle_callback(CHAT, USER, press(question, "inbox"))
+    assert retry.text.startswith(texts.INBOX_FAILED.format(target_name="Идеи"))
+    assert question.text in retry.text
+    assert button_ids(retry) == button_ids(question)  # the same answers, same token
+
+
+# ---- free-text answers do not grow without bound -----------------------------------------------
+
+async def test_repeated_free_text_answers_stop_growing_the_request(bot):
+    """MAX_QUESTIONS only counts button answers, so free text can be answered forever; the
+    concatenation the next prompt is built from has to stop somewhere short of an overflow."""
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> ask for it
+    await bot.orch.handle_text(CHAT, USER, "добавь в покупки")
+    for _ in range(12):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))
+        await bot.orch.handle_text(CHAT, USER, "ы" * 500)
+
+    assert len(bot.sessions.get(CHAT, NOW).original_text) <= MAX_PROMPT
+    assert len(bot.llm.seen[-1][0]) <= MAX_PROMPT
+
+
+async def test_a_title_falling_back_to_the_request_stays_one_line(bot):
+    """A create with no title uses the user's words, which after a free-text answer are two
+    lines joined by a newline — not a Notion page title."""
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95,
+                                             fields={"t3.f2": val("t3.f2.o1", 1.0)})))
+    question = await bot.orch.handle_text(CHAT, USER, "создай страницу")
+    assert question.buttons
+
+    # an empty title is a value, so Policy does not ask for one and the builder falls back
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t5", 0.95,
+                                             fields={"t5.f1": val("", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "про отпуск")
+
+    title = notion_calls(bot, "create_page")[0][2]["title"]["title"][0]["text"]["content"]
+    assert title == "создай страницу про отпуск"
+    assert "\n" not in title
 
 
 # ---- never raises to the transport -------------------------------------------------------------

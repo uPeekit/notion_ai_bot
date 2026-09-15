@@ -133,20 +133,28 @@ def test_drop_removes_session(store):
     assert ss.get(42, NOW) is None
 
 
+def sweep(ss: SessionStore, store: AuditStore, now) -> list[PendingSession]:
+    """The two halves of the inbox sweeper, in the order Orchestrator.flush_expired_sessions
+    drives them: scan for candidates, then pop each one (the orchestrator does it under that
+    chat's own lock, which is why the loop lives there and not in SessionStore)."""
+    popped = [ss.pop_expired_one(chat_id, now) for chat_id, _ in store.expired_sessions(now)]
+    return [s for s in popped if s is not None]
+
+
 def test_pop_expired_returns_only_expired_sessions(store):
     ss = SessionStore(store)
     expired = _field_required_session(chat_id=1)
     store.save_session(1, expired.model_dump_json(), NOW - timedelta(seconds=1))
     fresh = _field_required_session(chat_id=2)
     store.save_session(2, fresh.model_dump_json(), NOW + timedelta(minutes=5))
-    popped = ss.pop_expired(NOW)
+    popped = sweep(ss, store, NOW)
     assert [p.chat_id for p in popped] == [1]
     assert store.get_session(1, NOW - timedelta(minutes=1)) is None
     assert store.get_session(2, NOW) is not None
 
 
 def test_pop_expired_does_not_swallow_a_session_renewed_between_scan_and_delete(store):
-    """TOCTOU guard: pop_expired first scans (expired_sessions), then deletes per row
+    """TOCTOU guard: the sweeper first scans (expired_sessions), then deletes per row
     (pop_expired_session). If a save_session renewal for the same chat_id lands in that gap —
     plausible in a store built for concurrent access (RLock, check_same_thread=False) — the
     renewed, still-live session must survive and remain readable, not be swallowed by a delete
@@ -165,7 +173,7 @@ def test_pop_expired_does_not_swallow_a_session_renewed_between_scan_and_delete(
 
     store.expired_sessions = scan_then_race_a_renewal
     try:
-        popped = ss.pop_expired(NOW)
+        popped = sweep(ss, store, NOW)
     finally:
         store.expired_sessions = real_expired_sessions
 

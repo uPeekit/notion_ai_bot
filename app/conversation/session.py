@@ -190,7 +190,16 @@ class SessionStore:
     def pop_expired_one(self, chat_id: int, now: datetime) -> PendingSession | None:
         """Delete and return one chat's session only if it has already expired. The orchestrator
         asks this before `get`, which drops an expired row silently: the question is gone either
-        way, but its original text can still be rescued into the inbox instead of being lost."""
+        way, but its original text can still be rescued into the inbox instead of being lost.
+
+        It is also the second half of the inbox sweeper, whose first half is the store's own
+        expired_sessions(now) scan. The scan only discovers candidates; the delete happens here,
+        which re-checks expiry under the same lock acquisition as the delete itself. That closes
+        the TOCTOU window between the two: a session renewed (save_session with a later
+        expires_at) after the scan but before its turn to be popped is found no longer expired,
+        nothing is deleted, and None sends the sweeper past it instead of destroying live state.
+        The loop over the scan belongs to Orchestrator.flush_expired_sessions, which takes each
+        chat's lock around its own pop so a turn in flight cannot have its session taken away."""
         payload = self._audit.pop_expired_session(chat_id, now)
         if payload is None:
             return None
@@ -198,19 +207,3 @@ class SessionStore:
             return PendingSession.model_validate_json(payload)
         except ValidationError:
             return None
-
-    def pop_expired(self, now: datetime) -> list[PendingSession]:
-        """Return and delete every session whose expires_at <= now (the inbox sweeper).
-
-        expired_sessions(now) only discovers candidates; the actual delete goes through
-        pop_expired_session(chat_id, now), which re-checks expiry under the same lock
-        acquisition as the delete. That closes the TOCTOU window between the scan and the
-        delete: if a session is renewed (save_session with a later expires_at) after the scan
-        but before its turn to be popped, pop_expired_session finds it no longer expired,
-        deletes nothing, and this method silently skips it instead of destroying live state."""
-        out: list[PendingSession] = []
-        for chat_id, _ in self._audit.expired_sessions(now):
-            session = self.pop_expired_one(chat_id, now)
-            if session is not None:
-                out.append(session)
-        return out
