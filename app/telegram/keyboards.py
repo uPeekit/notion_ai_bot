@@ -13,9 +13,10 @@ _TELEGRAM_CALLBACK_DATA_LIMIT = 64
 
 
 def to_markup(reply: Reply) -> InlineKeyboardMarkup | None:
-    """None when the reply has no buttons. Asserts the invariant the orchestrator already
+    """None when the reply has no buttons. Enforces the invariant the orchestrator already
     guarantees (an id fits Telegram's 64-byte callback_data limit); a longer id is an upstream
-    programming error and must raise loudly rather than silently truncate."""
+    programming error and must raise loudly rather than silently truncate. A plain `assert`
+    would be stripped under `python -O`, so this raises explicitly instead."""
     if not reply.buttons:
         return None
     rows = []
@@ -23,10 +24,11 @@ def to_markup(reply: Reply) -> InlineKeyboardMarkup | None:
         rendered = []
         for button in row:
             size = len(button.id.encode())
-            assert size <= _TELEGRAM_CALLBACK_DATA_LIMIT, (
-                f"callback_data {button.id!r} is {size} bytes, over Telegram's "
-                f"{_TELEGRAM_CALLBACK_DATA_LIMIT}-byte limit"
-            )
+            if size > _TELEGRAM_CALLBACK_DATA_LIMIT:
+                raise ValueError(
+                    f"callback_data {button.id!r} is {size} bytes, over Telegram's "
+                    f"{_TELEGRAM_CALLBACK_DATA_LIMIT}-byte limit"
+                )
             rendered.append(InlineKeyboardButton(button.label, callback_data=button.id))
         rows.append(rendered)
     return InlineKeyboardMarkup(rows)

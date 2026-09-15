@@ -46,7 +46,7 @@ def test_65_byte_id_raises():
     too_long = "a:" + ("x" * 63)  # 65 bytes total
     assert len(too_long.encode()) == 65
     reply = Reply(text="q", buttons=[[Button(too_long, "label")]])
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="65"):
         to_markup(reply)
 
 
