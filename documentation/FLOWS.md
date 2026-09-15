@@ -164,8 +164,9 @@ Any update from a user id outside `TELEGRAM_ALLOWED_USER_IDS` is ignored (no rep
 
 1. «расскажи анекдот» — nothing here maps to an intent.
 2. LLM: `intent.value == "unknown"` → `SemanticValidator` issue `INTENT_UNKNOWN` → Policy → REJECT with no candidate. `_dispatch` has nothing to ask about, so it falls straight to the inbox fallback — the same path a REJECT with no candidate, an invalid/unavailable LLM response, a Notion error during execute, or an exhausted clarification budget (`MAX_QUESTIONS`) all take. Never a bare discovery failure (nothing to write to), never after a successful write.
-3. Mode `auto`, inbox flagged on «Разное»: bot replies `Не понял, что нужно сделать в Notion. Сохранил в «Разное»: <url>` `[Отменить]` (one message — the error and the save share one line, joined by a space).
-4. Mode `button` (or the save itself failed): bot replies the plain error alone, `Не понял, что нужно сделать в Notion.`, with `[В разное]` attached; pressing it replays this event's own text (`i:<event_id>`) into the same save.
+3. Mode `auto`, inbox flagged on «Разное», save succeeds: bot replies `Не понял, что нужно сделать в Notion. Сохранил в «Разное»: <url>` `[Отменить]` (one message — the error and the save share one line, joined by a space).
+4. Mode `auto`, but the save itself fails (Notion error, or the inbox has no title property): the same one-line join, with the failure text instead — `Не понял, что нужно сделать в Notion. Не удалось сохранить в «Разное».` — with `[В разное]` attached as a retry offer (pressing it replays this event's own text, `i:<event_id>`, into another save attempt; no `[Отменить]`, since nothing was written).
+5. Mode `button` (the save is never attempted at all): bot replies the plain error alone, `Не понял, что нужно сделать в Notion.`, with `[В разное]` attached; pressing it replays this event's own text (`i:<event_id>`) into the first save attempt.
 
 ## F18. Вопрос устарел → в разное
 

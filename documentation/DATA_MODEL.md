@@ -22,6 +22,7 @@ class Target:
     fields: list[Field]                 # empty for pages
     items: list[Item]                   # database rows or child pages, newest first, capped
     operations: frozenset[str]          # database: create, update, search; page: create_page, append, search
+    url: str                            # Notion page/data-source url
     is_inbox: bool = False              # set by Discovery._resolve_inbox from targets.yaml `inbox`
                                          # or the INBOX_TARGET_ID override; at most one target true
 
