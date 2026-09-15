@@ -20,7 +20,7 @@
 - At most `MAX_QUESTIONS = 3` clarification round-trips per session; the fourth unresolved question falls back to the inbox (or REJECT when the inbox is off). No question type is ever asked twice for the same field in one session.
 - The orchestrator never raises to its caller: every exception path maps to a `Reply` with a user-facing Russian message from `texts.py` and an audited `error` column.
 - The inbox write is a direct `AppendBlocks`/`CreateItem` command built by `inbox.py` — it does not go through the LLM, the validator or the policy, and a failed inbox write degrades to a plain error reply (never a retry loop, never a second fallback).
-- All user-facing strings live in `app/texts.py`. No Russian string literals anywhere else in `app/` (a test greps for Cyrillic outside `texts.py`).
+- All user-facing strings live in `app/texts.py`. No Russian string literals anywhere else in `app/`, except the two pre-existing LLM-facing modules `app/llm/prompts.py` (system prompt) and `app/llm/context.py` (weekday names); a test enforces this.
 - Secrets never reach a reply, a log line, or the `sessions`/`events` payloads.
 - `uv run ruff check .` and `uv run pytest -q` pass before each commit; trailer `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`; named `git add` only. PowerShell; uv may be at `$env:USERPROFILE\.local\bin\uv.exe`.
 
@@ -56,13 +56,13 @@ tests/test_inbox.py, tests/test_orchestrator.py, tests/fakes.py (+ FakeLLM)
   - `texts.py` constants: `ERRORS: dict[str, str]` keyed by every code in ERRORS.md that is user-visible (`STT_EMPTY`, `STT_FAILED`, `DISCOVERY_FAILED`, `LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `INTENT_UNKNOWN`, `SEM_UNKNOWN_KEY`, `SEM_TYPE`, `SEM_UNSUPPORTED_OP`, `NOTION_4XX`, `NOTION_5XX`, `UNDO_EXPIRED`, `UNDO_FAILED`, `SESSION_EXPIRED`, `nothing_to_write`, `item_not_found`); `BTN_*` button labels (`BTN_CANCEL = "Отмена"`, `BTN_INBOX = "В разное"`, `BTN_UNDO = "Отменить"`, `BTN_CONFIRM = "Да"`, `BTN_OTHER = "Другое"`, `BTN_ADD_NEW = "Добавить как новое"`); `QUESTION: dict[QType, str]` templates; `DONE_*` execution templates; `INBOX_SAVED`, `INBOX_SAVED_EXPIRED`, `INBOX_FAILED`, `CANCELLED`, `UNDONE`, `SEARCH_EMPTY`, `SEARCH_HEADER`.
   - `format_execution(result: ExecutionResult, *, target_url: str | None) -> str` — describes the **actual Notion change**: verb by command type, target name, item title, then one `• <field>: <value>` line per `Written` (values rendered by `_label`: `Option.name`, lists joined, `DateRange` as `d.m.Y` / `d.m.Y HH:MM`, bool as Да/Нет), and a trailing link line when a URL is known (`ExecutionResult.url` or, when that is `None` — the append case — the target's own URL).
   - `format_search(result) -> str` — numbered list of up to 20 hits as `1. <title>` with the URL on the same line; `SEARCH_EMPTY` when there are none.
-  - `format_question(q: Question, opts: list[AnswerOption], token: str) -> Reply` — question text from `QUESTION[q.type]` (with `field_name` / target name / `proposed` interpolated), one button per option (`a:<token>:o<i>`), then a final row with the type-specific extra buttons (`confirm`/`other`/`add_new`) plus `Отмена` and, when the inbox is enabled, `В разное`.
+  - `format_question(q: Question, options: Sequence[tuple[str, str]], token: str, *, inbox: bool) -> Reply` — `options` are `(option_id, label)` pairs (Task 3 produces them from `AnswerOption`s; `reply.py` must NOT import `session.py`, so it never sees the id-bearing model). Question text from `QUESTION[q.type]` (with `field_name` / target name / `proposed` interpolated), one button per option (`a:<token>:<option_id>`), then a final row with the type-specific extra buttons (`confirm`/`other`/`add_new`) plus `Отмена` and, when `inbox` is true, `В разное`.
 - Consumes: `Question`, `QOption` (`app.validation.policy`), `ExecutionResult`, `Written`, `SearchHit` (`app.commands.executor`), `DateRange` (`app.validation.semantic`).
 
 - [ ] **Step 1: write the tests**
   - `tests/test_texts.py`: every `QType` has a template; every user-visible ERRORS.md code has a message; no template contains an unsubstituted `{`-placeholder after formatting with the documented kwargs; all strings non-empty.
   - `tests/test_reply.py`: `format_execution` for each of the five commands (create item with three written fields, update with one, create page, append with two paragraphs falling back to the target URL, search) — golden strings; `format_search` empty and with 3 hits; `format_question` for `target` (2 options + Отмена + В разное), `field_required` with options, `field_required` without options (free-text prompt, no option buttons), `date` (confirm + other), `item_not_found` (add-new button), `content_required`; every button id ≤ 48 bytes and ASCII.
-  - Guard test: `grep`-style scan of `app/**/*.py` (excluding `texts.py`) finds no Cyrillic literal.
+  - Guard test: `grep`-style scan of `app/**/*.py` finds no Cyrillic literal outside `app/texts.py`, `app/llm/prompts.py` and `app/llm/context.py` (the last two are LLM-facing Russian — the system prompt and weekday names — not user-facing UI text).
 - [ ] **Step 2: implement `texts.py` and `reply.py`** until the tests pass.
 - [ ] **Step 3:** `uv run ruff check .`, `uv run pytest -q`; commit `feat: Russian texts and transport-neutral reply model`.
 
@@ -114,7 +114,7 @@ tests/test_inbox.py, tests/test_orchestrator.py, tests/fakes.py (+ FakeLLM)
 | `date`, `field_confirm` | `other` | → `"free_text"` (the next text message answers it) |
 | any | `cancel` / `inbox` | → `"cancel"` / `"inbox"` |
 
-  Every applied answer appends `s.question.type + ":" + (field_id or "")` to `asked`; a question whose key is already in `asked` must never be re-asked — `next_question(decision, asked)` returns the first question not already answered, or `None`.
+  Every applied answer appends `s.question.type + ":" + (field_id or "")` to `asked`; a question whose key is already in `asked` must never be re-asked — `next_question(decision: Decision, asked: list[str], ctx: Context) -> Question | None` returns the first question whose answer key (`q.type + ":" + (ctx.ref(q.field_key).field_id if q.field_key else "")`) is not in `asked`, or `None` when every question was already answered.
 - `options_for(q: Question, candidate: VCandidate, result: ValidationResult, ctx: Context) -> list[AnswerOption]` — turns `Question.options` (context keys) into id-based `AnswerOption`s; this is the only place that translates keys → ids, and it runs while the generating context is still in hand.
 
 - [ ] **Step 1: write the tests** (table-driven, one per row above, using `tests/helpers.py` to produce real `Decision`s):
@@ -186,10 +186,12 @@ class Orchestrator:
    `LLMUnavailable` → `LLM_UNAVAILABLE` + inbox; `LLMInvalidOutput`/`LLMContextOverflow` → `LLM_INVALID_OUTPUT` + inbox.
 6. `result = validator.validate(interp, ctx, snapshot)`; `decision = policy.evaluate(result)`; audit both.
 7. Dispatch:
-   - **EXECUTE** → `build_command(decision.candidate, snapshot)` → `executor.run(cmd)` → audit `command`, `executed`, `notion_page_id` → `add_execution` when `result.undo` is not `None` → `Reply(format_execution(...), [[Button(f"u:{exec_id}", BTN_UNDO)]], undo_id=exec_id)`. A `NotionError` here → `NOTION_4XX`/`NOTION_5XX` + inbox (the write did not happen, the text would otherwise be lost).
+   - **EXECUTE** → `build_command(decision.candidate, snapshot)` → `executor.run(cmd)` → audit `command`, `executed`, `notion_page_id` → `add_execution(..., reply_message_id=None, ...)` when `result.undo` is not `None` (the transport has no message id yet; Plan 3b fills it in after sending) → `Reply(format_execution(...), [[Button(f"u:{exec_id}", BTN_UNDO)]], undo_id=exec_id)`. A `NotionError` here → `NOTION_4XX`/`NOTION_5XX` + inbox (the write did not happen, the text would otherwise be lost).
    - **CLARIFY** → `q = next_question(decision, asked)`; when `None` or the session is exhausted → inbox fallback; else `options_for(...)` → `session_from_decision(...)` → `sessions.save` → `format_question`.
    - **REJECT** → inbox fallback with the reason code; `item_not_found` and `nothing_to_write` keep their carried question and are asked as a CLARIFY instead (the `add_new` button makes `item_not_found` actionable — this replaces the "no handler yet" note in ARCHITECTURE §8).
 8. Close the `events` row (`decision`, `duration_ms`, `error`).
+
+`Decision.reasons` on a REJECT carry `"<CODE>: <message>"` strings from the validator; `_reject_code(decision) -> str` takes the first reason's prefix when it is a key of `texts.ERRORS`, else falls back to `"INTENT_UNKNOWN"` for an unknown-intent rejection and a generic "не понял" message otherwise.
 
 **`handle_callback`** parses `a:<token>:<opt>` / `u:<id>`; unknown prefix, unknown session, or a token mismatch → `SESSION_EXPIRED`. Otherwise `apply_answer` → verb dispatch (`cancel` → drop + `CANCELLED`; `inbox` → inbox-save `original_text` + drop; `free_text` → keep the session, reply "введите значение"; `None` → rebuild the candidate against a fresh snapshot, re-evaluate with `Policy`, and re-enter step 7 — no LLM call). Each callback opens its own `events` row with `kind="callback"`.
 

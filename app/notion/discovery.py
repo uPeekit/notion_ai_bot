@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from app.notion import props
@@ -43,12 +44,14 @@ class Discovery:
         items_per_target: int = 50,
         ttl_s: int = 60,
         clock: Callable[[], datetime] = now_utc,
+        inbox_target_id: str = "",
     ) -> None:
         self._p = provider
         self._desc = descriptions
         self._items_per_target = items_per_target
         self._ttl = timedelta(seconds=ttl_s)
         self._clock = clock
+        self._inbox_target_id = inbox_target_id
         self._last: WorkspaceSnapshot | None = None
         self._force = False
         self._lock = asyncio.Lock()
@@ -237,6 +240,7 @@ class Discovery:
 
         meta = self._desc.ensure(discovered)
         targets = [self._apply_meta(t, meta.get(t.id)) for t in targets]
+        targets = self._resolve_inbox(targets, self._inbox_target_id)
         targets.sort(key=lambda t: t.path)
         self._last = WorkspaceSnapshot(fetched_at=self._clock(), targets=targets)
         log.info("discovered %d targets", len(targets))
@@ -262,5 +266,26 @@ class Discovery:
             id=t.id, kind=t.kind, name=t.name, path=t.path,
             description=m.description or t.description,
             parent_page_id=t.parent_page_id, database_id=t.database_id, fields=fields,
-            items=t.items, operations=t.operations, url=t.url,
+            items=t.items, operations=t.operations, url=t.url, is_inbox=m.inbox,
         )
+
+    @staticmethod
+    def _resolve_inbox(targets: list[Target], inbox_target_id: str) -> list[Target]:
+        """Applies the single-inbox invariant: INBOX_TARGET_ID (when set) wins outright over
+        every targets.yaml flag; otherwise, if more than one target was flagged in the yaml,
+        the lowest id wins and the rest lose the flag (logged, since it usually means a stale
+        entry from a deleted/renamed target)."""
+        if inbox_target_id:
+            if not any(t.id == inbox_target_id for t in targets):
+                log.warning(
+                    "INBOX_TARGET_ID %r matches no discovered target; inbox is disabled",
+                    inbox_target_id,
+                )
+            return [replace(t, is_inbox=t.id == inbox_target_id) for t in targets]
+        flagged = sorted(t.id for t in targets if t.is_inbox)
+        if len(flagged) <= 1:
+            return targets
+        winner = flagged[0]
+        log.warning("multiple inbox targets flagged (%s); using %s",
+                    ", ".join(flagged), winner)
+        return [replace(t, is_inbox=t.id == winner) for t in targets]

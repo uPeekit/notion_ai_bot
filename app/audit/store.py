@@ -101,6 +101,43 @@ class AuditStore:
             self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
             self._conn.commit()
 
+    def expired_sessions(self, now: datetime) -> list[tuple[int, str]]:
+        """Rows at or past expiry, without deleting them (used to discover sweep candidates)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT chat_id, payload FROM sessions WHERE expires_at <= ?", (_iso(now),)
+            ).fetchall()
+            return [(int(row["chat_id"]), row["payload"]) for row in rows]
+
+    def pop_session(self, chat_id: int) -> str | None:
+        """Read and delete one session's payload under a single lock acquisition."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM sessions WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return row["payload"]
+
+    def pop_expired_session(self, chat_id: int, now: datetime) -> str | None:
+        """Delete and return one session's payload only if it is still expired at `now`, with
+        the expiry re-check and the delete under one lock acquisition. Guards a sweeper that
+        scanned candidates earlier (via expired_sessions) against a concurrent save_session that
+        renewed the row in the meantime: if the row is missing, or was renewed to an expires_at
+        past `now` since it was last observed, this returns None and leaves the row untouched."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM sessions WHERE chat_id = ? AND expires_at <= ?",
+                (chat_id, _iso(now)),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return row["payload"]
+
     # executions
     def add_execution(
         self, event_id: int, chat_id: int, reply_message_id: int | None, undo: str,
@@ -131,6 +168,18 @@ class AuditStore:
                 (chat_id, _iso(now)),
             ).fetchone()
             return dict(row) if row else None
+
+    def set_reply_message_id(self, execution_id: int, reply_message_id: int) -> None:
+        """Fill in the Telegram message id of the reply that carried the Undo button. It cannot
+        be set at insert time — the row is written while the command runs, before the reply
+        exists — so the transport (Plan 3b) records it afterwards and uses it to edit that same
+        message when the undo window closes. Without this the column could never be filled."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE executions SET reply_message_id = ? WHERE id = ?",
+                (reply_message_id, execution_id),
+            )
+            self._conn.commit()
 
     def mark_undone(self, execution_id: int) -> None:
         with self._lock:

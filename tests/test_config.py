@@ -59,3 +59,15 @@ def test_items_per_target_out_of_range_fails(env):
     env.setenv("ITEMS_PER_TARGET", "200")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_inbox_defaults(env):
+    s = load_settings()
+    assert s.inbox_mode == "auto"
+    assert s.inbox_target_id == ""
+
+
+def test_bad_inbox_mode_fails(env):
+    env.setenv("INBOX_MODE", "bogus")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

@@ -19,6 +19,9 @@ class TargetMeta(BaseModel):
     name: str = ""
     description: str = ""
     fields: dict[str, FieldMeta] = Field(default_factory=dict)
+    inbox: bool = False  # user-set fallback flag; Descriptions.ensure never touches it, so it
+                         # survives every discovery round trip (editable from the admin page,
+                         # Plan 3b)
 
 
 class Descriptions:

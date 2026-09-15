@@ -83,3 +83,19 @@ def test_valid_file_still_roundtrips_after_broken_check(tmp_path):
     merged = d.ensure({"ds1": ("Покупки", {})})
     assert merged["ds1"].name == "Покупки"
     assert d.load()["ds1"].name == "Покупки"
+
+
+def test_inbox_flag_survives_ensure_roundtrip(tmp_path):
+    p = tmp_path / "t.yaml"
+    d = Descriptions(p)
+    d.save({"ds1": TargetMeta(name="Old", inbox=True)})
+    merged = d.ensure({"ds1": ("Покупки", {})})
+    assert merged["ds1"].inbox is True
+    assert d.load()["ds1"].inbox is True
+
+
+def test_inbox_flag_defaults_false_without_key(tmp_path):
+    p = tmp_path / "t.yaml"
+    p.write_text("ds1:\n  name: Old\n", encoding="utf-8")
+    d = Descriptions(p)
+    assert d.load()["ds1"].inbox is False

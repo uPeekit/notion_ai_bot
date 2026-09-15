@@ -22,6 +22,9 @@ class Target:
     fields: list[Field]                 # empty for pages
     items: list[Item]                   # database rows or child pages, newest first, capped
     operations: frozenset[str]          # database: create, update, search; page: create_page, append, search
+    url: str                            # Notion page/data-source url
+    is_inbox: bool = False              # set by Discovery._resolve_inbox from targets.yaml `inbox`
+                                         # or the INBOX_TARGET_ID override; at most one target true
 
 @dataclass(frozen=True)
 class Field:
@@ -63,9 +66,14 @@ class Item:
 "7ab0…33":
   name: Идеи
   description: Свободные заметки и идеи, дописывать абзацами.
+  inbox: true               # this is the fallback target for anything the pipeline can't resolve
 ```
 
-Discovery adds missing ids with empty descriptions and never deletes entries.
+Discovery adds missing ids with empty descriptions and never deletes entries. `inbox` (default
+`false`, at most one `true` — `Discovery._resolve_inbox` demotes every entry but the lowest id if
+more than one is flagged, logging a WARNING) is never touched by discovery itself, so it survives
+every rediscovery; edited by hand today, from the admin page in Plan 3b. `INBOX_TARGET_ID` in
+`.env` (§7) overrides this flag outright when set.
 
 ## 3. LLM interpretation (Pydantic, `interpretation/models.py`)
 
@@ -151,7 +159,7 @@ class Decision:
 
 Question order (ties within one `Decision.questions` broken by this order, one asked at a time): `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write`.
 
-Special cases, both REJECT with the candidate and a single question carried (so Plan 3 can act without re-running the LLM):
+Special cases, both REJECT with the candidate and a single question carried (so the conversation layer can act without re-running the LLM):
 - `update` intent with no resolvable item and no `item_candidates`: `Decision("REJECT", best, [Question("item_not_found", ..., proposed=best.item_text)], ["item not found in target"], risk)`.
 - `update` intent with a resolved item but no field `status` in `("value", "explicit_null", "ambiguous")`: `Decision("REJECT", best, [Question("nothing_to_write", ...)], ["nothing to write"], risk)`. (An `ambiguous` field still needs a `field_ambiguous` CLARIFY round-trip — it is not "nothing to write", since resolving it produces a real value.)
 
@@ -159,7 +167,7 @@ Special cases, both REJECT with the candidate and a single question carried (so 
 
 ### Answer keys across a context rebuild
 
-`Question.id` is stable only within one context generation, not across a rebuild (it embeds positional context keys). The per-question-type answer is likewise keyed into the *old* context and cannot be replayed after discovery re-runs; Plan 3 must persist the value below instead, then re-resolve it against the fresh `Context` (via `Context.field_key`/`option_key`/`item_key`, §1 above):
+`Question.id` is stable only within one context generation, not across a rebuild (it embeds positional context keys). The per-question-type answer is likewise keyed into the *old* context and cannot be replayed after discovery re-runs; `PendingSession` persists the value below instead, then `resolver.py` re-resolves it against the fresh `Context` (via `Context.field_key`/`option_key`/`item_key`, §1 above):
 
 | Question type | What must be persisted instead of the context key |
 |---|---|
@@ -169,24 +177,84 @@ Special cases, both REJECT with the candidate and a single question carried (so 
 | `field_ambiguous` | the typed value itself (the one the user picked, not its context key) |
 | `date`, `field_confirm` | the JSON `proposed` value (already Notion-id-based, not key-based) |
 
-`PendingSession` below is a **Plan 3 placeholder** (no code yet); `Resolution` remains sketched, but `question` now names the real type:
+`PendingSession` (`conversation/session.py`) is real code — the payload of the `sessions` row
+(§6). It follows the rule above to the letter: every field is a Notion id or a JSON-safe typed
+value, never a context key, so it survives a rediscovery that renumbers every key:
 
 ```python
-class Resolution(BaseModel):
-    target_key: str | None
-    item_key: str | None
-    field_values: dict[str, Any]        # key → final typed value
-    answered: list[str]                 # question ids already answered
+class PendingField(BaseModel):          # extra="forbid"; one VField flattened by Notion id
+    field_id: str; name: str; type: str; status: str
+    value: Any = None                   # to_json_value(VField.value)
+    candidates: list[Any] = []          # to_json_value(c) for c in VField.candidates
+    confidence: float = 1.0
+    source_text: str = ""
 
-class PendingSession(BaseModel):
+class PendingCandidate(BaseModel):      # extra="forbid"; one VCandidate flattened by Notion id
+    target_id: str
+    confidence: float
+    item_page_id: str | None            # VCandidate.item.id, not the item's context key
+    item_text: str | None
+    content: str | None
+    search_query: str | None
+    fields: list[PendingField]
+    item_candidates: list[str] = []     # VCandidate.item_candidates as page ids, not "t2.i4":
+                                         # Policy offers the `item` question only while this is
+                                         # non-empty, so a session that dropped them turns the
+                                         # second question of a round-trip into an
+                                         # item_not_found REJECT offering to create a duplicate
+
+class AnswerOption(BaseModel):          # extra="forbid"; one button on the question on screen
+    id: str                             # o0..o7, or a literal "confirm"/"other"/"add_new"/
+                                         # "cancel"/"inbox" — never a QOption.key (would embed
+                                         # Notion page ids and blow Telegram's 64-byte payload)
+    label: str
+    target_id: str | None = None
+    item_page_id: str | None = None
+    field_id: str | None = None
+    option_id: str | None = None
+    value: Any = None
+
+class PendingSession(BaseModel):        # extra="forbid"
     chat_id: int
+    event_id: int
+    token: str                          # secrets.token_hex(4); embedded in every "a:<token>:…"
+                                         # callback payload; a stale/mismatched token → SESSION_EXPIRED
     original_text: str
-    interpretation: Interpretation
-    resolution: Resolution
-    question: Question                  # validation.policy.Question (see above)
+    intent: str
+    intent_confidence: float
+    candidates: list[PendingCandidate]  # every validated candidate, so an alternate target/item
+                                         # can be picked without re-running the LLM
+    question: Question                  # validation.policy.Question — the one on screen now;
+                                         # its target_key/field_key/options[].key ARE context
+                                         # keys, kept on purpose so Task 3's resolver can re-
+                                         # resolve them against a freshly built Context
+    options: list[AnswerOption]         # the answer table for `question`
+    asked: list[str] = []               # answer keys already spent against MAX_QUESTIONS (3)
     created_at: datetime
     expires_at: datetime
 ```
+
+`AnswerOption` fields set per question type (`resolver.options_for`; `id`/`label` always set;
+`cancel`/`inbox` are appended to every question's option list):
+
+| Question type | Fields set besides `id`/`label` |
+|---|---|
+| `target` | `target_id` |
+| `item` | `item_page_id` |
+| `item_not_found` | `field_id` (the title field); single option, `id="add_new"` |
+| `field_required` | `field_id`, `option_id` (select/status/relation options) |
+| `field_ambiguous` | `field_id`, `value` (the typed candidate value itself) |
+| `intent_confirm` | single option, `id="confirm"` |
+| `date`, `field_confirm` | `field_id`; two options, `id="confirm"`/`id="other"` |
+| every type | `cancel` (`id="cancel"`) and `inbox` (`id="inbox"`), unconditionally — whether the `[В разное]` *button* is actually shown is decided separately, by `reply.format_question`'s own `inbox` flag (an inbox target must be available) |
+
+`apply_answer(session, option_id)` is pure and id-based — no `Context`, no `WorkspaceSnapshot`, no
+I/O — and returns the updated session plus a control verb (`None` = re-evaluate with `Policy`,
+`"cancel"`, `"inbox"`, or `"free_text"` for the `[Другое]` button on `date`/`field_confirm`).
+`rebuild_candidate`/`result_from_session` turn a stored session back into a `ValidationResult`
+against a *fresh* snapshot on every answer: a renamed target/field/option still resolves by id
+(via `Context.target_key`/`field_key`/`option_key`); anything actually gone is dropped (with a
+`SEM_UNKNOWN_KEY` issue for a vanished option) rather than raising.
 
 ## 5. Commands (`commands/models.py`, `commands/executor.py`)
 
@@ -280,7 +348,7 @@ CREATE TABLE events (
   decision TEXT,                        -- EXECUTE | CLARIFY | REJECT
   clarification_state TEXT,             -- JSON question or null
   command TEXT,                         -- JSON command or null
-  executed INTEGER NOT NULL DEFAULT 0,
+  executed INTEGER NOT NULL DEFAULT 0,   -- the command ran; a `search` sets it and writes nothing
   notion_page_id TEXT,
   error TEXT,
   duration_ms INTEGER
@@ -296,7 +364,9 @@ CREATE TABLE executions (
   id INTEGER PRIMARY KEY,
   event_id INTEGER REFERENCES events(id),
   chat_id INTEGER NOT NULL,
-  reply_message_id INTEGER,
+  reply_message_id INTEGER,             -- null at insert (no reply yet); the transport fills it
+                                        -- in via AuditStore.set_reply_message_id, to edit the
+                                        -- Undo button away when the window closes
   undo TEXT NOT NULL,                   -- JSON: {kind: archive|restore|delete_blocks, ...}
   undone INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL
@@ -337,3 +407,5 @@ Secrets are never written. `llm_context` contains keys, not Notion ids.
 | `SESSION_TTL_S` | `900` | pending clarification lifetime |
 | `UNDO_WINDOW_S` | `300` | |
 | `LOG_LEVEL` | `INFO` | |
+| `INBOX_MODE` | `auto` | `auto`\|`button`\|`off` — `auto` saves on every unresolvable path and still offers the button; `button` saves only on a button press; `off` disables the inbox entirely |
+| `INBOX_TARGET_ID` | `` | Notion page/data-source id; overrides every `targets.yaml` `inbox: true` flag when set; logs a WARNING if it matches no discovered target |

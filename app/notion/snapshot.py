@@ -61,6 +61,9 @@ class Target:
     items: list[Item]
     operations: frozenset[str]
     url: str
+    is_inbox: bool = False  # last field, default False: keeps every existing Target(...) call
+                            # working. The one target the user flagged as the fallback inbox
+                            # (Discovery._resolve_inbox resolves ties and the env override).
 
     def field(self, field_id: str) -> Field | None:
         return next((f for f in self.fields if f.id == field_id), None)

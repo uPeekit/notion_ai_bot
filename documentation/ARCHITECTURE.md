@@ -18,6 +18,7 @@ This document fixes the decisions the spec leaves open. Where they differ, this 
 | Remote AI later | Ollama and speech behind protocols; `OLLAMA_BASE_URL`, optional `WHISPER_SERVER_URL`. | User may add a dedicated AI machine. |
 | Package/tooling | `uv`, Python 3.12 (uv-managed), `ruff`, `pytest`, `pydantic-settings`. | 3.13 wheel coverage for ctranslate2 is uneven. |
 | Notion API | Direct REST via `httpx`, `Notion-Version: 2025-09-03` (data sources). | Spec; official SDK adds little. |
+| Unresolvable messages | Appended to a user-flagged inbox target (`targets.yaml` `inbox: true`, or the `INBOX_TARGET_ID` override, which wins), never dropped. | Nothing the pipeline gives up on should vanish. The target stays ordinary for the LLM — not hidden, not mentioned in the prompt — so the model can't learn to use it as an escape hatch instead of classifying. |
 
 ## 2. Runtime topology
 
@@ -73,9 +74,11 @@ notion_ai_bot/
 │   │   ├── models.py           CreateItem, UpdateItem, CreatePage, AppendBlocks, Search
 │   │   └── executor.py         runs commands via provider, records undo info
 │   ├── conversation/
-│   │   ├── orchestrator.py     one entry point: handle(text|voice|callback)
-│   │   ├── session.py          pending clarification FSM
-│   │   └── resolver.py         applies user answers to interpretation
+│   │   ├── reply.py            Button/Reply model; formats questions, execution + search text
+│   │   ├── session.py          PendingSession/SessionStore: persisted clarification state
+│   │   ├── resolver.py         apply_answer/result_from_session: button answers, no LLM call
+│   │   ├── inbox.py            builds the Command that saves unresolved text to the flagged target
+│   │   └── orchestrator.py     one entry point: handle_text/handle_callback/undo/cancel
 │   ├── audit/
 │   │   └── store.py            SQLite schema + repository
 │   └── admin/
@@ -97,10 +100,10 @@ notion_ai_bot/
 Telegram update
   → auth (allowlist) → reject silently if not allowed
   → voice? download → SpeechToText → text (audited, not echoed)
-  → Orchestrator.handle(chat_id, text)
+  → Orchestrator.handle_text(chat_id, user_id, text)         (or handle_callback/undo/cancel)
       → session = pending for chat? (then this is a clarification answer, see §7)
       → snapshot = Discovery.get(ttl)                      (Notion)
-      → ctx = ContextBuilder.build(snapshot, now, tz, session)
+      → ctx = ContextBuilder.build(snapshot, now, pending)  (pending = §7's `pending` block, from session)
       → schema = OutputSchema.for_context(ctx)             (dynamic JSON schema)
       → raw = LLMClient.interpret(text, ctx, schema)        (Ollama, temp 0)
       → interp = Interpretation.model_validate(raw)        (Pydantic)
@@ -109,12 +112,43 @@ Telegram update
       → EXECUTE: cmd = CommandBuilder.build(best, snapshot)
                  result = Executor.run(cmd)                 (Notion)
                  reply + Undo button; audit
+                 Notion error on execute → inbox fallback instead of a bare error (text not lost)
         CLARIFY: session.save(question); ask with buttons; audit
-        REJECT:  reply reason; audit
+                 MAX_QUESTIONS (3) reached without a resolution → inbox fallback
+        REJECT:  no candidate, or invalid/unavailable LLM output → inbox fallback; audit
 ```
 
-Callback (button) → `Resolver.apply(session, answer)` → back to `SemanticValidator` (no LLM call).
-Free text while a session is pending → LLM call with `conversation_context` = pending interpretation + question + answer; result replaces the pending interpretation.
+Callback payloads: `a:<token>:<option_id>` (`apply_answer` → `result_from_session`, no LLM call),
+`u:<execution_id>` (undo), `i:<event_id>` (save that event's own text to the inbox — the button
+offered on a reply that saved nothing). A token that doesn't match the chat's live session, or an
+unknown prefix, replies `SESSION_EXPIRED`.
+
+`Orchestrator._text` runs discovery **before** it looks the session up, and that order is
+deliberate: looking first would pop an expired session (the lookup is destructive — it is what
+rescues the text into the inbox) and only then discover that Notion is unreachable, with nowhere
+to write it. Since the session row is the only copy of that text, the message would be gone. Do
+not reorder these two for the sake of skipping a snapshot fetch on the error path.
+
+Free text while a session is pending → the LLM is re-run once, with a `pending` block (question
+text, target name, original text — never a Notion id or context key) added to the context and
+`session.original_text + "\n" + new_text` as the prompt; the fresh interpretation replaces the
+session outright, whether it answers the question or turns out to be a new request (F4, F5).
+`MAX_QUESTIONS = 3` bounds button round-trips only — a free-text answer is indistinguishable from
+a fresh request and is never refused for exceeding it. It is what bounds the *number* of answers;
+what bounds their *size* is `orchestrator.MAX_PROMPT` (4000 chars, the same ceiling the validator
+and the inbox put on one piece of text), which caps the concatenation each answer grows — without
+it a user who keeps answering in free text eventually ends the conversation in
+`LLMContextOverflow`. The capped text is what the session stores and what a fallback page title or
+search query is built from (`commands/builder.py:_one_line` folds it back onto one line).
+
+**Inbox fallback**: a message the pipeline could not otherwise resolve — an invalid/unavailable
+LLM response, a REJECT, a Notion error during execute, an expired unanswered session, the
+«В разное» button, or a clarification budget (`MAX_QUESTIONS`) that ran out — is appended to the
+one Notion target the user flagged as the inbox (`targets.yaml` `inbox: true`, or the
+`INBOX_TARGET_ID` override, which wins and logs a WARNING when it matches no target) instead of
+being dropped. Never triggered by a bare discovery failure (nothing to write to) or after a
+successful write. `INBOX_MODE` controls when: `auto` (default) saves immediately and still offers
+the button; `button` saves only on a press; `off` disables it entirely.
 
 ## 5. Workspace snapshot and discovery
 
@@ -197,28 +231,51 @@ System prompt (Russian): role = classifier and extractor, not an agent. Rules: p
 ```text
 IDLE ──text──▶ INTERPRETING ──EXECUTE──▶ IDLE (+undo record)
                     │
-                    ├──REJECT──▶ IDLE
+                    ├──REJECT──▶ IDLE (+ inbox fallback: saved if a target is flagged, else [В разное] offered)
                     │
-                    └──CLARIFY──▶ WAITING (session saved)
+                    └──CLARIFY──▶ WAITING (session saved, its `token` embedded in every button payload)
                                     │
-                        button ─────┤─▶ Resolver.apply → validate → EXECUTE|CLARIFY|REJECT
-                        free text ──┤─▶ LLM with session context → validate → …
-                        timeout ────┘─▶ IDLE (session expired message)
+                        button ─────┤─▶ apply_answer → result_from_session → EXECUTE|CLARIFY|REJECT (no LLM call)
+                        free text ──┤─▶ LLM with the `pending` block in context → validate → …
+                        [В разное] ─┤─▶ inbox fallback, session dropped
+                        MAX_QUESTIONS (3) reached ─┤─▶ inbox fallback (budget exhausted)
+                        timeout ────┘─▶ IDLE (+ inbox fallback on the next message, or the sweeper)
 ```
 
-One pending session per chat. A new unrelated message while WAITING: the LLM is told about the pending question; if its answer keeps the same target and resolves the question, continue; otherwise the old session is dropped and the new text is handled fresh.
+**One chat's turns are serialised.** Every entry point (`handle_text`, `handle_callback`,
+`undo`, `cancel`, and each chat's own rescue inside `flush_expired_sessions`) takes that chat's
+`asyncio.Lock` for the whole turn, so no two turns of one chat overlap; different chats stay fully
+concurrent, and the lock is dropped again once no turn holds it. It is not a nicety: every guard
+in the orchestrator is a read, an `await`, then a write — `events.executed` before an inbox save,
+`executions.undone` before an undo, the session row across a save — and a double-tapped Telegram
+button arrives as two callbacks ~100 ms apart in two concurrent handlers, where both reads would
+see the state from before either write and the message would be saved (or reverted) twice. The
+sweeper takes each chat's lock around that chat's own pop and rescue, never one lock for the whole
+sweep.
 
-Clarification question types (each has a button layout in `keyboards.py`):
+One pending session per chat, keyed by `chat_id`. `MAX_QUESTIONS = 3` bounds *button* round-trips
+only: once three questions have been asked and answered by button, a fourth CLARIFY falls back to
+the inbox instead of asking again. A free-text answer is exempt — it re-runs the LLM and is
+indistinguishable from a fresh request, so it is never refused for exceeding the budget. A new
+unrelated message while WAITING is handled exactly like a free-text answer to the pending
+question: the LLM sees both in one call and its fresh interpretation replaces the session outright
+— continuing the same request, or starting an unrelated one, depending only on what it returns.
+
+Clarification question types (each rendered by `conversation/reply.py:format_question`):
 
 | Type | Trigger | Buttons |
 |---|---|---|
-| `target` | target margin < threshold | one per candidate target + Отмена |
-| `intent_confirm` | only trigger is `intent.confidence < POLICY_INTENT_MIN`, exactly one candidate | подтвердить намерение ✓ / отмена |
-| `item` | update: item missing or several candidates; append: several candidates (no item means append to the page itself) | one per candidate item (max 8) + Отмена |
+| `target` | target margin < threshold | one per candidate target + Отмена (+ В разное) |
+| `intent_confirm` | only trigger is `intent.confidence < POLICY_INTENT_MIN`, exactly one candidate | Да + Отмена (+ В разное) |
+| `item` | update: item missing or several candidates; append: several candidates (no item means append to the page itself) | one per candidate item (max 8) + Отмена (+ В разное) |
 | `field_required` | required field `not_mentioned` | options for select/status/relation; free-text prompt for others |
 | `field_ambiguous` | field status `ambiguous` | one per candidate value |
-| `date` | date confidence < `POLICY_DATE_MIN` | proposed date ✓ / other date (free text) |
-| `nothing_to_write` | update: item resolved but no field `value`/`explicit_null`/`ambiguous` | — (REJECT, not a clarification round-trip) |
+| `date` | date confidence < `POLICY_DATE_MIN` | Да / Другое (free text) + Отмена (+ В разное) |
+| `item_not_found` | update: item not in target's items and no `item_candidates` | Добавить как новое + Отмена (+ В разное) — REJECT, not a full CLARIFY round-trip, but answerable: the button flips the intent to `create` and re-validates (F8) |
+| `nothing_to_write` | update: item resolved but no field `value`/`explicit_null`/`ambiguous` | Отмена (+ В разное); answer is free text only — REJECT, not a clarification round-trip |
+
+Every question type's trailing row also carries [В разное] whenever an inbox target is flagged
+(mode `auto` or `button`) — pressing it saves the session's `original_text` and drops the session.
 
 One question per message. Several open issues are asked in the `_ORDER` from `policy.py`: `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write` (the last two of these — `item_not_found`, `nothing_to_write` — are REJECT-only single questions, never part of a multi-question CLARIFY).
 
@@ -244,7 +301,7 @@ EXECUTE otherwise
 
 Question order when several apply (one asked per message, `_ORDER` in `policy.py`): `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write`.
 
-`update` with no resolvable item is a REJECT, not a CLARIFY, when there are no `item_candidates` to pick from — but unlike other REJECTs it still carries `Decision.candidate` (the resolved target/fields) and one `Question("item_not_found", ...)`, purely so Plan 3 can offer "add as new item" without re-running the LLM; MVP has no handler for that question type yet.
+`update` with no resolvable item is a REJECT, not a CLARIFY, when there are no `item_candidates` to pick from — but unlike other REJECTs it still carries `Decision.candidate` (the resolved target/fields) and one `Question("item_not_found", ...)`, purely so the conversation layer can offer "add as new item" without re-running the LLM. It is handled: `resolver.options_for`/`apply_answer` attach one **Добавить как новое** button; pressing it flips the intent to `create`, seeds the title field from the unmatched text, drops the stale item id, and re-validates — turning the failed update into a create without a second LLM call (FLOWS.md F8).
 
 An `explicit_null` on a `status`-type field is dropped before it reaches the policy: `SemanticValidator` turns it back into `not_mentioned` and appends a `SEM_STATUS_CLEAR` issue (warning-level, not user-visible — the Notion API has no way to clear a status property), so the field is simply left unwritten rather than blocking or clarifying.
 
@@ -276,9 +333,23 @@ faster-whisper, model `WHISPER_MODEL` (default `large-v3-turbo`), `compute_type=
 
 Tables: `events` (one row per handled message, per spec §27), `sessions` (pending clarification, one per chat), `executions` (undo data, expires). See [DATA_MODEL.md](DATA_MODEL.md). Tokens never stored; LLM request context and raw response stored as JSON text.
 
+Exactly one `events` row per handled message: opened at entry and closed once on every path, error
+exits included. `events.executed = 1` means *the command ran*, not that something was written — a
+`search` sets it and writes nothing (and records no `executions` row, since there is nothing to
+undo). `events.error` normally holds the code the turn earned for itself; the one code that is
+recorded as a fallback is `INBOX_FAILED` from `_expired_prefix`, because that rescue belongs to a
+*previous* message and the row would otherwise close as a clean `EXECUTE` with no trace that the
+rescued text was lost. A code the turn records for itself always wins over it.
+
+`executions.reply_message_id` starts null — the row is written while the command runs, before its
+reply exists — and the transport fills it in afterwards with `AuditStore.set_reply_message_id`, so
+it can edit the Undo button away when the window closes.
+
 ## 12. Admin page
 
 `GET /` → HTML tree of targets (from last snapshot) with a textarea per target. `GET /api/targets` → JSON snapshot summary + descriptions. `POST /api/descriptions` → writes `data/targets.yaml` and invalidates the snapshot cache. Bound to `127.0.0.1` only. Telegram `/refresh` forces re-discovery, `/targets` prints the tree as text.
+
+The page also picks the inbox target (Plan 3b): one radio/checkbox per target writing the `inbox: true` flag (`notion/descriptions.py:TargetMeta.inbox`) through the same `POST /api/descriptions`. Until then, flag it by hand in `data/targets.yaml`, or set `INBOX_TARGET_ID` in `.env` (see NOTION_SETUP.md), which overrides the yaml flag outright.
 
 ## 13. Model selection
 

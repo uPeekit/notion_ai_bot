@@ -44,6 +44,15 @@ def _search_filters(c: VCandidate) -> list[PropertyWrite]:
     ]
 
 
+def _one_line(raw_text: str) -> str:
+    """The user's own words as a fallback page title or search query. They can be more than one
+    line: a free-text answer is handed on as "<original request>
+<answer>" (the orchestrator's
+    MAX_PROMPT concatenation), and a Notion title holding a newline is not what either half of
+    that meant. Collapses every run of whitespace, and truncates like every other free text."""
+    return " ".join(raw_text.split())[:MAX_TEXT]
+
+
 def _title_value(c: VCandidate) -> str | None:
     f: VField | None = next((f for f in c.fields.values() if f.field.type == "title"), None)
     return f.value if f and f.status == "value" else None
@@ -55,7 +64,7 @@ def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
         return CreateItem(data_source_id=t.id, target_name=t.name, properties=_writes(c))
     if intent == "create":
         return CreatePage(parent_page_id=t.id, target_name=t.name,
-                          title=_title_value(c) or raw_text.strip()[:MAX_TEXT],
+                          title=_title_value(c) or _one_line(raw_text),
                           body=paragraphs(c.content))
     if intent == "update":
         assert c.item is not None
@@ -76,7 +85,7 @@ def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
             # from the whole sentence.
             query = ""
         else:
-            query = _title_value(c) or raw_text.strip()[:MAX_TEXT]
+            query = _title_value(c) or _one_line(raw_text)
         return Search(data_source_id=t.id if t.kind == "database" else None, target_name=t.name,
                       title_property=title.name if title else None, query=query,
                       filters=filters)
