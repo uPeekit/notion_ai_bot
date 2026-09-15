@@ -98,7 +98,8 @@ def rebuild_candidate(
 ) -> VCandidate | None:
     """Resolve one PendingCandidate back into a VCandidate against `snapshot`/`ctx`. Never
     raises: a gone target returns None; a gone field is dropped; a field whose stored option no
-    longer exists is dropped with a SEM_UNKNOWN_KEY issue; a gone item resolves to item=None.
+    longer exists is dropped with a SEM_UNKNOWN_KEY issue; a gone item is dropped — the resolved
+    one leaving item=None, a remembered alternative leaving item_candidates one shorter.
     `issues` is mutated in place, matching SemanticValidator._candidate's own convention."""
     target = snapshot.target(pc.target_id)
     if target is None:
@@ -112,9 +113,15 @@ def rebuild_candidate(
         if vf is not None:
             fields[vf.key] = vf
     item = target.item(pc.item_page_id) if pc.item_page_id is not None else None
+    # Restored, not dropped: Policy asks the `item` question only while these are non-empty, so
+    # an emptied list turns the second question of a two-question round-trip into an
+    # item_not_found REJECT that offers to create a duplicate of a page that does exist.
+    item_candidates = [i for i in (target.item(pid) for pid in pc.item_candidates)
+                       if i is not None]
     return VCandidate(
-        key=key, target=target, confidence=pc.confidence, item=item, item_candidates=[],
-        item_text=pc.item_text, fields=fields, content=pc.content, search_query=pc.search_query,
+        key=key, target=target, confidence=pc.confidence, item=item,
+        item_candidates=item_candidates, item_text=pc.item_text, fields=fields,
+        content=pc.content, search_query=pc.search_query,
     )
 
 

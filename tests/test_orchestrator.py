@@ -362,6 +362,32 @@ async def test_f7_item_ambiguous_button_updates_the_chosen_page(bot):
     closed_events(bot, ["text", "callback"])
 
 
+async def test_target_then_item_keeps_the_items_the_first_question_found(bot):
+    """Two questions about one request. The item candidates belong to the session, not to the
+    Decision that was thrown away with the first question: a rebuild that forgot them makes
+    Policy fall through to item_not_found and offer to create a duplicate of a page that does
+    exist ("Не нашёл ..." + [Добавить как новое])."""
+    bot.llm.queue(make_interp(
+        "update",
+        cand(bot.ctx, "t2", 0.88, item_candidates=["t2.i2", "t2.i4"], item_text="молоко",
+             fields={"t2.f5": val(True, 1.0)}),
+        cand(bot.ctx, "t3", 0.82, fields={"t3.f4": val("t3.f4.o2", 1.0)}),
+    ))
+    target_q = await bot.orch.handle_text(CHAT, USER, "отметь молоко купленным")
+    assert target_q.text == texts.QUESTION["target"]
+
+    item_q = await bot.orch.handle_callback(CHAT, USER, press(target_q, "o0"))
+    assert item_q.text == texts.QUESTION_WITH_TARGET["item"].format(target_name="Покупки")
+    assert [b.label for row in item_q.buttons for b in row] == [
+        "Молоко", "Молоко овсяное", texts.BTN_CANCEL, texts.BTN_INBOX]
+
+    reply = await bot.orch.handle_callback(CHAT, USER, press(item_q, "o1"))
+    assert notion_calls(bot, "update_page")[0][1] == "b-milk2"
+    assert "• Куплено: Да" in reply.text
+    assert bot.llm.calls == 1
+    closed_events(bot, ["text", "callback", "callback"])
+
+
 # ---- F8: item not found ------------------------------------------------------------------------
 
 async def test_f8_item_not_found_add_new_creates_the_item(bot):

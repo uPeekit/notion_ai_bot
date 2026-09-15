@@ -408,6 +408,26 @@ def _deleted_option_snapshot():
     return replace(snap, targets=targets)
 
 
+def _renamed_option_snapshot():
+    snap = sample_snapshot()
+    todo = snap.target("ds-todo")
+    prio = todo.field("prio")
+    new_prio = replace(prio, options=[replace(o, name="Срочно") if o.id == "o-A" else o
+                                      for o in prio.options])
+    new_fields = [new_prio if f.id == "prio" else f for f in todo.fields]
+    new_todo = replace(todo, fields=new_fields)
+    targets = [new_todo if t.id == "ds-todo" else t for t in snap.targets]
+    return replace(snap, targets=targets)
+
+
+def _dropped_item_candidate_snapshot():
+    snap = sample_snapshot()
+    buy = snap.target("ds-buy")
+    new_buy = replace(buy, items=[i for i in buy.items if i.id != "b-milk2"])
+    targets = [new_buy if t.id == "ds-buy" else t for t in snap.targets]
+    return replace(snap, targets=targets)
+
+
 def _deleted_field_snapshot():
     snap = sample_snapshot()
     todo = snap.target("ds-todo")
@@ -462,6 +482,38 @@ def test_rebuild_after_deleted_option_drops_only_that_field():
     assert "t3.f2" not in vc.fields
     assert "t3.f1" in vc.fields and vc.fields["t3.f1"].value == "Документы"
     assert any(i.code == "SEM_UNKNOWN_KEY" for i in issues)
+
+
+def test_rebuild_after_renamed_option_keeps_the_field_with_its_fresh_name():
+    """The headline claim of session.py's docstring and DATA_MODEL.md §4: a stored answer is a
+    Notion id, so renaming the option the user picked must survive the round-trip and come back
+    carrying the *new* label — not the one that was on the button."""
+    vc, issues = _rebuild_from_original(
+        _renamed_option_snapshot(),
+        make_interp("create", cand(ctx_and_snapshot()[0], "t3", 0.95, fields={
+            "t3.f1": val("Документы"), "t3.f2": val("t3.f2.o1")})),
+    )
+    assert vc is not None and issues == []
+    assert vc.fields["t3.f2"].value == Option("o-A", "Срочно")
+
+
+def test_rebuild_restores_item_candidates_by_page_id():
+    """Policy only offers the `item` question while item_candidates is non-empty, so they have
+    to survive a round-trip; the ones whose page is gone drop out, like every other id."""
+    interp = make_interp("update", cand(
+        ctx_and_snapshot()[0], "t2", 0.95, item_candidates=["t2.i2", "t2.i4"],
+        item_text="молоко", fields={"t2.f5": val(True)}))
+    _, result, _, snap = decide(interp)
+    pc = _pending_candidate(result.best)
+    assert pc.item_candidates == ["b-milk", "b-milk2"]  # page ids, never "t2.i2"
+
+    ctx, _ = ctx_and_snapshot()
+    issues = []
+    vc = rebuild_candidate(pc, snap, ctx, issues)
+    assert [i.id for i in vc.item_candidates] == ["b-milk", "b-milk2"]
+
+    vc, _ = _rebuild_from_original(_dropped_item_candidate_snapshot(), interp)
+    assert [i.id for i in vc.item_candidates] == ["b-milk"]
 
 
 def test_rebuild_after_deleted_field_drops_that_field_without_issue():

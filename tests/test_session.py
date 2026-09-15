@@ -228,6 +228,8 @@ def test_extra_field_forbidden_on_every_model():
                           content=None, search_query=None, fields=[], bogus=1)
     with pytest.raises(ValidationError):
         AnswerOption(id="o0", label="A", bogus=1)
+    with pytest.raises(ValidationError):
+        PendingSession(**_field_required_session().model_dump(), bogus=1)
 
 
 def test_ambiguous_field_persists_typed_candidates_not_keys():

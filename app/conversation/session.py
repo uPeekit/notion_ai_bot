@@ -52,7 +52,14 @@ class PendingField(BaseModel):
 
 class PendingCandidate(BaseModel):
     """One VCandidate flattened to Notion ids: the target's id, the resolved item's page id (if
-    any), and its fields. Not the candidate's context key (VCandidate.key)."""
+    any), the page ids of the items that could still have been meant, and its fields. Not the
+    candidate's context key (VCandidate.key), and not the items' context keys (t2.i4) either —
+    `item_candidates` holds page ids, which a rediscovery does not renumber.
+
+    Keeping `item_candidates` is what lets a *second* question be asked about the same request:
+    Policy only offers the `item` question while `best.item_candidates` is non-empty, so a
+    session that forgot them would answer the target question and then claim it found nothing
+    (REJECT/item_not_found) for a request that matched two pages."""
 
     model_config = ConfigDict(extra="forbid")
     target_id: str
@@ -62,6 +69,7 @@ class PendingCandidate(BaseModel):
     content: str | None
     search_query: str | None
     fields: list[PendingField]
+    item_candidates: list[str] = Field(default_factory=list)
 
 
 class AnswerOption(BaseModel):
@@ -128,6 +136,7 @@ def _pending_candidate(c: VCandidate) -> PendingCandidate:
         item_page_id=c.item.id if c.item is not None else None, item_text=c.item_text,
         content=c.content, search_query=c.search_query,
         fields=[_pending_field(f) for f in c.fields.values()],
+        item_candidates=[i.id for i in c.item_candidates],
     )
 
 
