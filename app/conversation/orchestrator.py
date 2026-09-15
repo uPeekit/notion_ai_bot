@@ -76,6 +76,8 @@ log = logging.getLogger(__name__)
 # are filtered out before the option list is handed over, or they would appear twice.
 RESERVED_OPTIONS = frozenset({"cancel", "inbox", "confirm", "other", "add_new"})
 GENERIC_REJECT = "INTENT_UNKNOWN"
+# Decision placeholder written when an events row is opened; every exit overwrites it.
+OPEN = "OPEN"
 # /undo and /cancel arrive without the sender's id (see Orchestrator.undo/cancel), and so does
 # the expired-session sweeper; the events row still needs a non-null user column.
 NO_USER = 0
@@ -134,6 +136,9 @@ class _Turn:
     event_id: int
     chat_id: int
     now: datetime
+    # What this row's raw_input holds, when that is the user's own words: the only text an
+    # `i:<event_id>` offer on this turn could faithfully replay.
+    source_text: str | None = None
     started: float = field(default_factory=monotonic)
     cols: dict[str, Any] = field(default_factory=dict)
 
@@ -164,45 +169,50 @@ class Orchestrator:
         self, chat_id: int, user_id: int, text: str, *, kind: str = "text",
         transcript: str | None = None,
     ) -> Reply:
-        turn = self._open(chat_id, user_id, kind, raw_input=text, transcription=transcript)
-        return await self._guard(turn, self._text(turn, text))
+        return await self._turn(chat_id, user_id, kind, lambda t: self._text(t, text),
+                                raw_input=text, transcription=transcript)
 
     async def handle_callback(self, chat_id: int, user_id: int, data: str) -> Reply:
-        turn = self._open(chat_id, user_id, "callback", raw_input=data)
-        return await self._guard(turn, self._callback(turn, data))
+        return await self._turn(chat_id, user_id, "callback", lambda t: self._callback(t, data),
+                                raw_input=data)
 
     async def undo(self, chat_id: int, execution_id: int | None = None) -> Reply:
-        turn = self._open(chat_id, NO_USER, "undo")
-        return await self._guard(turn, self._undo(turn, execution_id))
+        return await self._turn(chat_id, NO_USER, "undo",
+                                lambda t: self._undo(t, execution_id))
 
     async def cancel(self, chat_id: int) -> Reply:
-        turn = self._open(chat_id, NO_USER, "cancel")
-        return await self._guard(turn, self._cancel(turn))
+        return await self._turn(chat_id, NO_USER, "cancel", self._cancel)
 
     async def flush_expired_sessions(self) -> int:
         """Sweeper: rescue the text behind every question nobody answered before its TTL ran out.
         Plan 3b schedules it; a message from the same chat rescues its own expired session on the
         way past (see `_text`), so this only catches chats that went quiet."""
-        now = self._clock()
-        if not self._store.expired_sessions(now):
-            return 0
-        try:
-            await self._discovery.get()
-        except Exception as e:  # nothing to write to: keep the sessions for a later sweep
-            log.warning("sweep skipped, discovery failed: %s", e)
-            return 0
         flushed = 0
-        for session in self._sessions.pop_expired(now):
-            turn = self._open(session.chat_id, NO_USER, "sweep")
-            turn.audit(decision=_kind("SWEEP"))
+        try:
+            now = self._clock()
+            if not self._store.expired_sessions(now):
+                return 0
             try:
-                await self._rescue(turn, session.original_text)
-            except Exception:  # one bad session must not stop the sweep
-                log.exception("sweep failed for chat %s", session.chat_id)
-                turn.audit(error="INTERNAL")
-            self._finish(turn)
-            flushed += 1
+                await self._discovery.get()
+            except Exception as e:  # nothing to write to: keep the sessions for a later sweep
+                log.warning("sweep skipped, discovery failed: %s", e)
+                return 0
+            for session in self._sessions.pop_expired(now):
+                await self._turn(session.chat_id, NO_USER, "sweep",
+                                 lambda t, s=session: self._sweep(t, s))
+                flushed += 1
+        except Exception:  # runs on a timer, not behind a chat handler: report what it managed
+            log.exception("session sweep aborted")
         return flushed
+
+    async def _sweep(self, turn: _Turn, session: PendingSession) -> Reply:
+        """One expired session. The Reply goes nowhere — the sweeper has no chat to answer — but
+        routing it through `_turn` is what gives each rescue its own closed audit row."""
+        turn.audit(decision=_kind("SWEEP"))
+        target = await self._inbox_target(forced=False)
+        if target is not None and await self._rescue(turn, session.original_text, target) is None:
+            turn.audit(error="INBOX_FAILED")
+        return Reply("")
 
     # ---- text pipeline -----------------------------------------------------------------------
 
@@ -253,7 +263,7 @@ class Orchestrator:
         # CLARIFY, plus the two REJECTs that carry a candidate and a question: item_not_found is
         # actionable through its BTN_ADD_NEW button, nothing_to_write through free text.
         if decision.candidate is not None and decision.questions:
-            question = self._ask(turn, decision, result, ctx, text, asked)
+            question = await self._ask(turn, decision, result, ctx, text, asked)
             if question is not None:
                 return question
         self._sessions.drop(turn.chat_id)
@@ -281,7 +291,7 @@ class Orchestrator:
         return Reply(format_execution(executed, target_url=candidate.target.url),
                      _undo_buttons(execution_id), undo_id=execution_id)
 
-    def _ask(
+    async def _ask(
         self, turn: _Turn, decision: Decision, result: ValidationResult, ctx: Context, text: str,
         asked: list[str],
     ) -> Reply | None:
@@ -302,7 +312,7 @@ class Orchestrator:
         turn.audit(clarification_state=session.model_dump_json())
         return format_question(
             question, [(o.id, o.label) for o in options if o.id not in RESERVED_OPTIONS],
-            session.token, inbox=self._inbox_target(forced=True) is not None,
+            session.token, inbox=await self._inbox_target(forced=True) is not None,
             target_name=candidate.target.name,
         )
 
@@ -345,16 +355,33 @@ class Orchestrator:
             turn.audit(decision=_kind("CANCEL"))
             return Reply(texts.CANCELLED)
         if verb == "inbox":
-            self._sessions.drop(turn.chat_id)
             turn.audit(decision=_kind("INBOX"))
-            reply, _ = await self._to_inbox(turn, session.original_text, None, forced=True)
-            # None only when the inbox disappeared (mode switched off, flag removed) between
-            # rendering the button and pressing it: there is no target left to name.
-            return reply if reply is not None else self._plain(turn, "SESSION_EXPIRED")
+            reply, saved = await self._to_inbox(turn, session.original_text, None, forced=True)
+            if saved and reply is not None:
+                self._sessions.drop(turn.chat_id)
+                return reply
+            # The write failed, or the inbox disappeared between rendering the button and
+            # pressing it. The session is the only copy of the text, so it stays, and the
+            # question comes back with its own keyboard: its BTN_INBOX button is the retry.
+            turn.audit(error="INBOX_FAILED")
+            failed = reply.text if reply is not None else _error("SESSION_EXPIRED")
+            return self._resend(session, failed)
         if verb == "free_text":
             turn.audit(decision=_kind("FREE_TEXT"))
             return Reply(texts.ENTER_VALUE)  # the session stays: the next message answers it
         return await self._resume(turn, answered)
+
+    @staticmethod
+    def _resend(session: PendingSession, text: str) -> Reply:
+        """The pending question's keyboard again under a different line of text, for when a
+        button could not do what it promised: the question is still open and every one of its
+        answers — a second attempt at BTN_INBOX included — is still valid under the same token."""
+        keyboard = format_question(
+            session.question,
+            [(o.id, o.label) for o in session.options if o.id not in RESERVED_OPTIONS],
+            session.token, inbox=True,
+        )
+        return replace(keyboard, text=text)
 
     async def _resume(self, turn: _Turn, session: PendingSession) -> Reply:
         """Re-evaluate an answered session against a fresh snapshot — no second LLM call. The
@@ -393,14 +420,22 @@ class Orchestrator:
 
     # ---- inbox fallback ----------------------------------------------------------------------
 
-    def _inbox_target(self, *, forced: bool) -> Target | None:
+    async def _inbox_target(self, *, forced: bool) -> Target | None:
         """The target to fall back to, or None when the caller should reply with the plain error.
         `forced` is a button press: mode `button` means "only when I ask for it", so it saves
-        then and only then; mode `off` means never."""
+        then and only then; mode `off` means never.
+
+        It fetches its own snapshot rather than trusting an earlier step to have populated
+        `discovery.last`: the callback paths never run discovery, and after a restart inside
+        SESSION_TTL_SECONDS there is no cached snapshot for a button press to find."""
         mode = self._s.inbox_mode
         if mode == "off" or (mode == "button" and not forced):
             return None
-        snapshot = self._discovery.last
+        try:
+            snapshot: WorkspaceSnapshot | None = await self._discovery.get()
+        except Exception as e:
+            log.warning("discovery failed, using the cached snapshot for the inbox: %s", e)
+            snapshot = self._discovery.last
         return inbox_target(snapshot) if snapshot is not None else None
 
     async def _to_inbox(
@@ -411,7 +446,7 @@ class Orchestrator:
         else; `saved` is False when the write itself failed, which is what decides whether the
         caller offers the BTN_INBOX button. Direct: no LLM, no validator, no policy, and no
         second fallback — a failed write degrades to INBOX_FAILED rather than retrying."""
-        target = self._inbox_target(forced=forced)
+        target = await self._inbox_target(forced=forced)
         if target is None:
             return None, False
         prefix = f"{_error(code, **fmt)} " if code else ""
@@ -430,14 +465,15 @@ class Orchestrator:
         if saved:
             return reply if reply is not None else Reply(_error(code, **fmt))
         return replace(reply if reply is not None else Reply(_error(code, **fmt)),
-                       buttons=self._inbox_offer(turn))
+                       buttons=await self._inbox_offer(turn, text))
 
-    def _inbox_offer(self, turn: _Turn) -> list[list[Button]]:
+    async def _inbox_offer(self, turn: _Turn, text: str) -> list[list[Button]]:
         """The BTN_INBOX offer on a reply that saved nothing. It carries this event's id rather
         than a session token because a rejected message has no question and so no session;
-        pressing it replays the event's own text through `_inbox_event`. Absent when there is no
-        inbox to press it for."""
-        if self._inbox_target(forced=True) is None:
+        pressing it replays that row's own `raw_input` through `_inbox_event`. Which is why it is
+        only offered when this turn's row does hold exactly `text`: a callback row's raw_input is
+        the button payload, and a free-text answer's is only half of the request."""
+        if turn.source_text != text or await self._inbox_target(forced=True) is None:
             return []
         return [[Button(f"i:{turn.event_id}", texts.BTN_INBOX)]]
 
@@ -454,7 +490,15 @@ class Orchestrator:
         if not text or age > timedelta(seconds=self._s.session_ttl_s):
             return self._plain(turn, "SESSION_EXPIRED")
         turn.audit(decision=_kind("INBOX"))
-        reply, _ = await self._to_inbox(turn, text, None, forced=True)
+        if row["executed"]:
+            # The keyboard on a delivered message cannot be taken away, so the guard lives here:
+            # pressing the offer twice must not mint a second copy in Notion.
+            return Reply(texts.INBOX_ALREADY_SAVED)
+        reply, saved = await self._to_inbox(turn, text, None, forced=True)
+        if saved:
+            # Mark the *source* row, not this one: that message's text is what reached Notion,
+            # and it is what the next press of the same button has to be refused against.
+            self._store.update_event(event_id, executed=1)
         # No inbox any more: repeat what the original reply said instead of saving.
         return reply if reply is not None else Reply(_error(row["error"] or GENERIC_REJECT))
 
@@ -464,7 +508,7 @@ class Orchestrator:
         """Run the inbox command, returning None when it could not be written. A ValueError from
         inbox_command (empty text, or a database inbox with no title property) is a configuration
         problem, not a transport one, and degrades the same way rather than raising."""
-        target = target if target is not None else self._inbox_target(forced=False)
+        target = target if target is not None else await self._inbox_target(forced=False)
         if target is None:
             return None
         try:
@@ -479,7 +523,7 @@ class Orchestrator:
     async def _expired_prefix(self, turn: _Turn, expired: PendingSession) -> str:
         """A question nobody answered in time: its text goes to the inbox and the user is told
         so, on top of whatever the message they just sent produces."""
-        target = self._inbox_target(forced=False)
+        target = await self._inbox_target(forced=False)
         if target is None:
             return ""
         written = await self._rescue(turn, expired.original_text, target)
@@ -488,29 +532,45 @@ class Orchestrator:
 
     # ---- audit -------------------------------------------------------------------------------
 
+    async def _turn(
+        self, chat_id: int, user_id: int, kind: str,
+        work: Callable[[_Turn], Awaitable[Reply]], **cols: Any,
+    ) -> Reply:
+        """Open the events row, run `work`, close the row — with all three inside the guard. The
+        audit store is the one dependency that cannot report its own failure through the audit
+        log, so a locked or unwritable database degrades to a logged INTERNAL reply instead of
+        reaching the transport as an exception."""
+        try:
+            turn = self._open(chat_id, user_id, kind, **cols)
+        except Exception:
+            log.exception("could not open an audit event for chat %s", chat_id)
+            return Reply(_error("INTERNAL"))
+        try:
+            reply = await work(turn)
+        except Exception:  # the caller is a chat handler: it gets a Reply, always
+            log.exception("unhandled failure in event %s", turn.event_id)
+            reply = self._plain(turn, "INTERNAL")
+        try:
+            self._finish(turn)
+        except Exception:  # the answer is already earned; losing the audit row must not eat it
+            log.exception("could not close audit event %s", turn.event_id)
+        return reply
+
     def _open(self, chat_id: int, user_id: int, kind: str, **cols: Any) -> _Turn:
         event_id = self._store.new_event(
             telegram_user_id=user_id, chat_id=chat_id, kind=kind,
             **{k: v for k, v in cols.items() if v is not None},
         )
-        # Seeded so that an exit nobody anticipated still closes the row with a decision.
-        return _Turn(event_id, chat_id, self._clock(), cols={"decision": _kind(kind.upper())})
+        return _Turn(
+            event_id, chat_id, self._clock(), source_text=cols.get("raw_input"),
+            # A placeholder no exit ever writes, so the column is never null and a row that was
+            # closed without a decision is visible as exactly that.
+            cols={"decision": _kind(OPEN)},
+        )
 
     def _finish(self, turn: _Turn) -> None:
         self._store.update_event(
             turn.event_id, duration_ms=int((monotonic() - turn.started) * 1000), **turn.cols)
-
-    def _close(self, turn: _Turn, reply: Reply) -> Reply:
-        self._finish(turn)
-        return reply
-
-    async def _guard(self, turn: _Turn, work: Awaitable[Reply]) -> Reply:
-        try:
-            reply = await work
-        except Exception:  # the caller is a chat handler: it gets a Reply, always
-            log.exception("unhandled failure in event %s", turn.event_id)
-            reply = self._plain(turn, "INTERNAL")
-        return self._close(turn, reply)
 
     def _plain(self, turn: _Turn, code: str, **fmt: Any) -> Reply:
         turn.audit(error=code, decision=json.dumps({"kind": "ERROR", "code": code}))

@@ -135,10 +135,13 @@ def rows(bot: Bot, table: str) -> list[dict]:
 
 
 def closed_events(bot: Bot, kinds: list[str] | None = None) -> list[dict]:
-    """One events row per handled message, each closed with a decision and a duration."""
+    """One events row per handled message, each closed with a real decision and a duration. The
+    orchestrator seeds the column with a placeholder when it opens the row, so "not null" proves
+    nothing — what matters is that some exit replaced it."""
     evs = rows(bot, "events")
     for e in evs:
-        assert e["decision"], f"event {e['id']} ({e['kind']}) was not closed with a decision"
+        decided = json.loads(e["decision"])["kind"]
+        assert decided != "OPEN", f"event {e['id']} ({e['kind']}) was closed still unresolved"
         assert e["duration_ms"] is not None, f"event {e['id']} has no duration"
     if kinds is not None:
         assert [e["kind"] for e in evs] == kinds
@@ -522,6 +525,8 @@ async def test_rejected_message_is_appended_to_the_inbox_with_an_undo_button(bot
     assert "https://notion.so/pg-ideas" in reply.text
     assert notion_calls(bot, "append_blocks")[0][1] == "pg-ideas"
     assert reply.undo_id is not None
+    # exactly the undo button: nothing was left unsaved, so there is nothing to offer
+    assert button_ids(reply) == [f"u:{reply.undo_id}"]
 
     undone = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
     assert undone.text == texts.UNDONE
@@ -651,6 +656,100 @@ async def test_page_inbox_target_records_one_execution_per_save(bot):
     execs = rows(bot, "executions")
     assert len(execs) == 1
     assert json.loads(execs[0]["undo"])["kind"] == "delete_blocks"
+
+
+async def test_inbox_button_keeps_the_session_when_the_save_fails(bot):
+    """Pressing [В разное] and being told it failed must not also destroy the text: the session
+    is the only copy, and its own keyboard is what makes a second attempt possible."""
+    bot.llm.queue(new_task(bot))
+    question = await bot.orch.handle_text(CHAT, USER, "добавь задачу подготовить документы")
+    bot.notion.fail_append_blocks = NotionError(500, "server_error", "boom")
+
+    reply = await bot.orch.handle_callback(CHAT, USER, press(question, "inbox"))
+    assert reply.text == texts.INBOX_FAILED.format(target_name="Идеи")
+    assert bot.sessions.get(CHAT, NOW) is not None
+    assert press(question, "inbox") in button_ids(reply)  # pressable again, same token
+    assert rows(bot, "executions") == []
+
+    bot.notion.fail_append_blocks = None
+    retried = await bot.orch.handle_callback(CHAT, USER, press(question, "inbox"))
+    assert texts.INBOX_SAVED.format(target_name="Идеи", url="https://notion.so/pg-ideas") \
+        in retried.text
+    assert bot.sessions.get(CHAT, NOW) is None
+    closed_events(bot, ["text", "callback", "callback"])
+
+
+async def test_inbox_offer_fetches_a_snapshot_of_its_own(make):
+    """A button press runs no discovery of its own, so the inbox must not depend on an earlier
+    step having cached a snapshot — after a restart inside the session TTL there is none."""
+    bot = make(inbox_mode="button")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+    bot.discovery.last = None  # as after a process restart
+
+    reply = await bot.orch.handle_callback(CHAT, USER, button_ids(rejected)[0])
+    assert texts.INBOX_SAVED.format(target_name="Идеи", url="https://notion.so/pg-ideas") \
+        in reply.text
+    assert notion_calls(bot, "append_blocks")[0][1] == "pg-ideas"
+
+
+async def test_inbox_offer_pressed_twice_saves_once(make):
+    bot = make(inbox_mode="button")
+    bot.llm.queue(not_a_request(bot))
+    rejected = await bot.orch.handle_text(CHAT, USER, "как дела?")
+    offer = button_ids(rejected)[0]
+    await bot.orch.handle_callback(CHAT, USER, offer)
+
+    again = await bot.orch.handle_callback(CHAT, USER, offer)
+    assert again.text == texts.INBOX_ALREADY_SAVED
+    assert len(notion_calls(bot, "append_blocks")) == 1
+    assert len(rows(bot, "executions")) == 1
+    closed_events(bot, ["text", "callback", "callback"])
+
+
+# ---- never raises to the transport -------------------------------------------------------------
+
+async def test_unexpected_failure_becomes_an_internal_reply(bot):
+    async def boom(*args, **kwargs):
+        raise RuntimeError("kaput")
+
+    bot.notion.create_page = boom  # not a NotionError: nothing in the pipeline expects it
+    bot.llm.queue(buy_milk(bot))
+    reply = await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
+
+    assert reply.text == texts.ERRORS["INTERNAL"]
+    assert reply.buttons == []
+    (event,) = closed_events(bot, ["text"])
+    assert event["error"] == "INTERNAL"
+
+
+async def test_an_audit_store_that_cannot_open_the_event_still_replies(bot):
+    bot.store.close()  # every insert now raises: locked database, full disk, ...
+
+    reply = await bot.orch.handle_text(CHAT, USER, "купи молоко")
+    assert reply.text == texts.ERRORS["INTERNAL"]
+    assert rows(bot, "events") == []
+    assert bot.llm.calls == 0
+
+
+async def test_an_audit_store_that_cannot_close_the_event_still_replies(bot):
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    bot.llm.queue(buy_milk(bot))
+    bot.store.update_event = boom
+
+    reply = await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
+    assert "Молоко" in reply.text  # the work is done and the answer is earned
+    assert notion_calls(bot, "create_page")
+
+
+async def test_flush_expired_sessions_never_raises_to_its_scheduler(bot):
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    bot.store.expired_sessions = boom
+    assert await bot.orch.flush_expired_sessions() == 0
 
 
 # ---- sessions -----------------------------------------------------------------------------------

@@ -83,6 +83,9 @@ INBOX_FAILED = "Не удалось сохранить в «{target_name}»."
 CANCELLED = "Отменено."
 UNDONE = "↩️ Отменено."
 ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)
+# A delivered keyboard cannot be withdrawn, so the inbox offer can be pressed again after
+# it has already done its job; the second press is refused with this instead of saving twice.
+INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."
 
 # ---- errors (documentation/ERRORS.md), keyed by error code ------------------------------------
 
