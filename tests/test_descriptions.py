@@ -1,5 +1,10 @@
+import threading
+import time
+
+import pytest
 import yaml
 
+from app.notion import descriptions
 from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta
 
 
@@ -99,3 +104,66 @@ def test_inbox_flag_defaults_false_without_key(tmp_path):
     p.write_text("ds1:\n  name: Old\n", encoding="utf-8")
     d = Descriptions(p)
     assert d.load()["ds1"].inbox is False
+
+
+# ---- the admin HTTP thread and the event loop share this one file ------------------------------
+
+
+def test_save_replaces_the_file_atomically(tmp_path, monkeypatch):
+    """`Path.write_text` truncates first and writes after, so a concurrent reader can see a
+    *partial but still valid* yaml document — `ensure()` then re-adds the discovered names to it
+    and saves that back, silently losing the user's descriptions and inbox flag. The write must
+    land on a temp file and reach its destination through os.replace, which is atomic."""
+    p = tmp_path / "t.yaml"
+    d = Descriptions(p)
+    d.save({"ds1": TargetMeta(name="Old", description="keep me", inbox=True)})
+    before = p.read_text(encoding="utf-8")
+
+    def _replace_fails(src, dst):
+        raise OSError("replace refused")
+
+    monkeypatch.setattr(descriptions.os, "replace", _replace_fails)
+    with pytest.raises(OSError):
+        d.save({"ds1": TargetMeta(name="New", description="clobbered")})
+
+    assert p.read_text(encoding="utf-8") == before  # never truncated in place
+    assert [f.name for f in tmp_path.iterdir()] == [p.name]  # and no temp file left behind
+
+
+def test_ensure_and_save_do_not_interleave_across_threads(tmp_path):
+    """The real interleaving: the admin thread is inside save() while the event loop is inside
+    Discovery._refresh_locked -> ensure(). Both take the same lock, so the read-modify-write pairs
+    run one after the other and the user's description survives whichever order they land in."""
+    p = tmp_path / "t.yaml"
+    d = Descriptions(p)
+    d.save({"ds1": TargetMeta(name="Old", description="user wrote this", inbox=True)})
+
+    order: list[str] = []
+    real_dump = descriptions.yaml.safe_dump
+
+    def slow_dump(*args, **kwargs):
+        order.append("dump-start")
+        time.sleep(0.05)
+        order.append("dump-end")
+        return real_dump(*args, **kwargs)
+
+    descriptions.yaml.safe_dump = slow_dump
+    try:
+        saver = threading.Thread(
+            target=d.save,
+            args=({"ds1": TargetMeta(name="Old", description="user wrote this", inbox=True)},),
+        )
+        saver.start()
+        time.sleep(0.01)  # let the saver get inside the critical section first
+        merged = d.ensure({"ds1": ("Покупки", {"f1": "Название"})})
+        saver.join()
+    finally:
+        descriptions.yaml.safe_dump = real_dump
+
+    assert order == ["dump-start", "dump-end", "dump-start", "dump-end"]
+    assert merged["ds1"].description == "user wrote this"
+    assert merged["ds1"].inbox is True
+    on_disk = d.load()["ds1"]
+    assert on_disk.description == "user wrote this"
+    assert on_disk.inbox is True
+    assert on_disk.name == "Покупки"

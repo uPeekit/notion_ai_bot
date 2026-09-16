@@ -59,9 +59,9 @@ Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 |---|---|---|---|---|
 | T-040 | `conversation/session.py` + `resolver.py`: PendingSession persistence, apply button answers, expiry **(done, Plan 3a Tasks 2–3)** | T-031, T-011 | M | FSM tests for F2, F3, F7, F12, expiry |
 | T-041 | `conversation/orchestrator.py`: full pipeline text → reply model (`Reply(text, keyboard, undo_id)`), free-text-while-pending handling (F4, F5), search reply formatting **(done, Plan 3a Task 5 — `handle_text`/`handle_callback`/`undo`/`cancel`/`flush_expired_sessions`)** | T-040, T-034, T-022 | L | end-to-end tests with FakeLLM + FakeNotion for F1–F12, F14 |
-| T-042 | `telegram/auth.py`, `telegram/handlers.py`: text, voice (download), callbacks, commands `/start /help /refresh /targets /undo /cancel`; wiring in `main.py` with startup checks | T-041 | L | handler tests with PTB test utilities; manual run |
-| T-043 | `speech/base.py`, `speech/whisper_local.py`, lazy load, device auto-detect, CUDA→CPU fallback | T-004 | M | unit test with mocked model; manual test with a real voice note |
-| T-044 | Voice path in orchestrator, transcript to audit (F13) | T-042, T-043 | S | e2e test with fake STT |
+| T-042 | `telegram/auth.py`, `telegram/handlers.py`: text, voice (download), callbacks, commands `/start /help /refresh /targets /undo /cancel`; wiring in `main.py` with startup checks **(done, Plan 3b Tasks 1/2/4 — `app/telegram/auth.py`, `app/telegram/handlers.py`, `app/main.py`)** | T-041 | L | handler tests with PTB test utilities; manual run |
+| T-043 | `speech/base.py`, `speech/whisper_local.py`, lazy load, device auto-detect, CUDA→CPU fallback **(done, Plan 3b Task 3)** | T-004 | M | unit test with mocked model; manual test with a real voice note |
+| T-044 | Voice path in orchestrator, transcript to audit (F13) **(done, Plan 3b Task 2 — `_on_voice` in `app/telegram/handlers.py`)** | T-042, T-043 | S | e2e test with fake STT |
 
 **Scope addition (Plan 3a):** the inbox fallback was not in this plan's original task list — `conversation/inbox.py`, `INBOX_MODE`/`INBOX_TARGET_ID` in `config.py`, `TargetMeta.inbox`/`Target.is_inbox` and `Discovery._resolve_inbox`, and `AuditStore.expired_sessions`/`pop_session`/`pop_expired_session`. Added alongside T-040/T-041 so a message the pipeline can't resolve is appended to a user-flagged target instead of being dropped. See ARCHITECTURE.md §1/§4/§7, DATA_MODEL.md §2/§7, NOTION_SETUP.md "Inbox target".
 
@@ -69,19 +69,22 @@ Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 
 | ID | Task | Depends | Cx | Acceptance |
 |---|---|---|---|---|
-| T-050 | `admin/server.py` + `page.html`: tree view, description/required editing, save → yaml + cache invalidation | T-014, T-015 | M | HTTP tests; manual browser check |
-| T-051 | Audit completeness: every pipeline exit writes one `events` row with decision and durations **(orchestrator side done, Plan 3a Task 5 — `_turn`/`_open`/`_finish` guarantee exactly one closed row per handled message on every exit, error paths included; Telegram-layer `message_id`/`reply_message_id` wiring still pending on T-042)** | T-041 | S | tests assert row per flow |
-| T-052 | Structured logging, `event_id` correlation, no-secrets check | T-042 | S | grep test on log output of a run with fake tokens |
-| T-053 | README: usage, commands, tuning thresholds, remote Ollama/Whisper | T-042 | S | reviewed |
+| T-050 | `admin/server.py` + `page.html`: tree view, description/required editing, save → yaml + cache invalidation **(done, Plan 3b Task 5 — three routes, the `Host`-loopback guard, and the inbox radio picker; ARCHITECTURE.md §12)** | T-014, T-015 | M | HTTP tests; manual browser check |
+| T-051 | Audit completeness: every pipeline exit writes one `events` row with decision and durations **(done — orchestrator side from Plan 3a Task 5, `_turn`/`_open`/`_finish` guarantee exactly one closed row per handled message on every exit, error paths included; the Telegram-layer `reply_message_id` wiring completed in Plan 3b Task 2, `handlers.py:_send` → `AuditStore.set_reply_message_id`)** | T-041 | S | tests assert row per flow |
+| T-052 | Structured logging, `event_id` correlation, no-secrets check **(done, Plan 3b Task 4 — `app/logging_setup.py`; extended in Task 6 to also floor `telegram.ext.ExtBot`, a second token-bearing DEBUG log the original httpx/httpcore floor did not cover)** | T-042 | S | grep test on log output of a run with fake tokens |
+| T-053 | README: usage, commands, tuning thresholds, remote Ollama/Whisper **(done, Plan 3b Task 6)** | T-042 | S | reviewed |
 
 ## Phase 6 — QA
 
 | ID | Task | Depends | Cx | Acceptance |
 |---|---|---|---|---|
-| T-060 | Security tests: crafted LLM output with foreign ids/URLs/extra keys never reaches provider | T-041 | M | tests pass |
+| T-060 | Security tests: crafted LLM output with foreign ids/URLs/extra keys never reaches provider **(done, Plan 3b Task 6 — `tests/test_security.py`: foreign id/URL/extra-key candidates against the real Orchestrator+SemanticValidator; LLM context scanned for ids/URLs/tokens; replies, audit rows and log output scanned for both tokens; unauthorised user produces no audit row and no provider call)** | T-041 | M | tests pass |
 | T-061 | Integration tests (`-m integration`): real Ollama on fixtures; real Notion against a dedicated test page | T-041 | M | pass on host machine |
 | T-062 | Live trial: 20 real voice commands, review audit rows, tune thresholds and prompt | T-061 | M | thresholds recorded in `.env.example` comments |
 
 ## Out of scope (MVP)
 
-Delete/bulk operations, MCP provider, remote Whisper implementation (interface only), non-Russian UI, multi-user, cloud LLM fallback, page body structure in context.
+Delete/bulk operations, MCP provider, remote Whisper (no `whisper_remote.py` exists yet, not even
+a stub — `WHISPER_DEVICE=cpu` is the only way today to run transcription without a GPU, not a way
+to move it to another machine; see ARCHITECTURE.md §3), non-Russian UI, multi-user, cloud LLM
+fallback, page body structure in context.

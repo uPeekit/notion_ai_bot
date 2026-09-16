@@ -70,6 +70,7 @@ from app.llm.base import (
 )
 from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
+from app.logging_setup import bind_event
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
@@ -667,15 +668,21 @@ class Orchestrator:
         except Exception:
             log.exception("could not open an audit event for chat %s", chat_id)
             return Reply(_error("INTERNAL"))
-        try:
-            reply = await work(turn)
-        except Exception:  # the caller is a chat handler: it gets a Reply, always
-            log.exception("unhandled failure in event %s", turn.event_id)
-            reply = self._plain(turn, "INTERNAL")
-        try:
-            self._finish(turn)
-        except Exception:  # the answer is already earned; losing the audit row must not eat it
-            log.exception("could not close audit event %s", turn.event_id)
+        # Every log record produced while this turn is in flight — here, and in every module the
+        # turn calls into (discovery, the LLM client, the executor) — carries this event's id, so
+        # a log line can be traced back to its `events` row. The id cannot be bound any earlier:
+        # it does not exist until `_open` above has returned, and no caller upstream of this
+        # method (a Telegram handler) ever sees it at all.
+        with bind_event(turn.event_id):
+            try:
+                reply = await work(turn)
+            except Exception:  # the caller is a chat handler: it gets a Reply, always
+                log.exception("unhandled failure in event %s", turn.event_id)
+                reply = self._plain(turn, "INTERNAL")
+            try:
+                self._finish(turn)
+            except Exception:  # the answer is already earned; losing the row must not eat it
+                log.exception("could not close audit event %s", turn.event_id)
         return reply
 
     def _open(self, chat_id: int, user_id: int, kind: str, **cols: Any) -> _Turn:

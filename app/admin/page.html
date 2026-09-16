@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Notion AI Bot — админка</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0 auto;
+    padding: 16px;
+    max-width: 900px;
+  }
+  h1 { font-size: 1.25rem; }
+  p.meta, p.hint { color: #666; font-size: 0.85rem; }
+  .notice {
+    background: #fff3cd;
+    color: #664d03;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 12px 0;
+  }
+  .empty { color: #666; }
+  .target {
+    border: 1px solid #999;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .target .path { font-size: 0.8rem; color: #666; }
+  .target h2 { margin: 4px 0 8px; font-size: 1.05rem; }
+  .target textarea {
+    width: 100%;
+    min-height: 3em;
+    font: inherit;
+    padding: 4px;
+  }
+  table.fields { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.fields th, table.fields td {
+    text-align: left;
+    padding: 4px 6px;
+    font-size: 0.9rem;
+    border-bottom: 1px solid #ddd;
+  }
+  table.fields input[type="text"] { width: 100%; font: inherit; padding: 2px 4px; }
+  .inbox-row { margin: 8px 0; font-size: 0.9rem; }
+  .inbox-row label { margin-left: 4px; }
+  #save-bar {
+    position: sticky;
+    bottom: 0;
+    background: Canvas;
+    padding: 12px 0;
+    border-top: 1px solid #999;
+  }
+  #save-bar button {
+    font-size: 1rem;
+    padding: 8px 24px;
+    cursor: pointer;
+  }
+  #save-status { margin-left: 12px; }
+</style>
+</head>
+<body>
+<h1>Цели и описания для Notion-ассистента</h1>
+<p class="hint">
+  Здесь настраивается, как бот понимает вашу базу Notion: описание каждой цели (для чего она
+  нужна), обязательные поля и куда складывать сообщения, которые бот не смог распознать
+  («инбокс»). Ничего из этой страницы не отправляется в Notion — только в локальный файл
+  <code>data/targets.yaml</code>.
+</p>
+<p class="meta" id="fetched-at"></p>
+<div id="notice-inbox-locked" class="notice" hidden>
+  Инбокс задан переменной окружения <code>INBOX_TARGET_ID</code> в <code>.env</code> — выбор
+  ниже недоступен, пока она установлена.
+</div>
+<div id="load-error" class="notice" hidden></div>
+<div id="empty-state" class="empty" hidden>
+  Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
+  Запустите бота и обновите эту страницу.
+</div>
+<div id="targets"></div>
+<div id="save-bar">
+  <button id="save-button" type="button">Сохранить</button>
+  <span id="save-status"></span>
+</div>
+
+<script>
+"use strict";
+
+var state = { targets: [], inboxLocked: false };
+
+function el(tag, attrs, children) {
+  var node = document.createElement(tag);
+  attrs = attrs || {};
+  Object.keys(attrs).forEach(function (key) {
+    if (key === "text") {
+      node.textContent = attrs[key];
+    } else {
+      node.setAttribute(key, attrs[key]);
+    }
+  });
+  (children || []).forEach(function (child) { node.appendChild(child); });
+  return node;
+}
+
+function fieldRow(target, field) {
+  var row = el("tr");
+  row.appendChild(el("td", { text: field.name + " (" + field.type + ")" }));
+
+  var reqCell = el("td");
+  var reqBox = el("input", { type: "checkbox" });
+  reqBox.checked = !!field.required;
+  reqBox.className = "field-required";
+  reqBox.dataset.targetId = target.id;
+  reqBox.dataset.fieldId = field.id;
+  if (field.type === "title") {
+    // Notion's title property is always required; unchecking here would have no effect
+    // once discovery re-applies the real property flags, so don't offer a control that lies.
+    reqBox.disabled = true;
+  }
+  reqCell.appendChild(reqBox);
+  if (field.type === "title") {
+    reqCell.appendChild(el("span", { text: " (заголовок обязателен всегда)" }));
+  }
+  row.appendChild(reqCell);
+
+  var descCell = el("td");
+  var descInput = el("input", { type: "text" });
+  descInput.value = field.description || "";
+  descInput.placeholder = "Описание поля для LLM";
+  descInput.className = "field-description";
+  descInput.dataset.targetId = target.id;
+  descInput.dataset.fieldId = field.id;
+  descCell.appendChild(descInput);
+  row.appendChild(descCell);
+
+  return row;
+}
+
+function targetBox(target) {
+  var box = el("div", { class: "target" });
+  box.appendChild(el("div", { class: "path", text: target.path }));
+  box.appendChild(el("h2", { text: target.name }));
+
+  var desc = el("textarea");
+  desc.value = target.description || "";
+  desc.placeholder = "Для чего эта база или страница — своими словами, для LLM";
+  desc.className = "target-description";
+  desc.dataset.targetId = target.id;
+  box.appendChild(desc);
+
+  if (target.fields.length) {
+    var table = el("table", { class: "fields" });
+    table.appendChild(el("tr", {}, [
+      el("th", { text: "Поле" }),
+      el("th", { text: "Обязательно" }),
+      el("th", { text: "Описание поля" }),
+    ]));
+    target.fields.forEach(function (f) { table.appendChild(fieldRow(target, f)); });
+    box.appendChild(table);
+  }
+
+  var inboxRow = el("div", { class: "inbox-row" });
+  var radioId = "inbox-" + target.id;
+  var radio = el("input", { type: "radio", name: "inbox", value: target.id, id: radioId });
+  radio.checked = !!target.is_inbox;
+  radio.disabled = state.inboxLocked;
+  inboxRow.appendChild(radio);
+  inboxRow.appendChild(el("label", {
+    for: radioId, text: " инбокс — сюда бот складывает всё, что не смог распознать",
+  }));
+  box.appendChild(inboxRow);
+
+  return box;
+}
+
+function render() {
+  var list = document.getElementById("targets");
+  list.innerHTML = "";
+  document.getElementById("empty-state").hidden = state.targets.length !== 0;
+  document.getElementById("notice-inbox-locked").hidden = !state.inboxLocked;
+
+  var noneRow = el("div", { class: "inbox-row" });
+  var noneRadio = el("input", { type: "radio", name: "inbox", value: "", id: "inbox-none" });
+  noneRadio.checked = !state.targets.some(function (t) { return t.is_inbox; });
+  noneRadio.disabled = state.inboxLocked;
+  noneRow.appendChild(noneRadio);
+  noneRow.appendChild(el("label", { for: "inbox-none", text: " инбокс не выбран" }));
+  list.appendChild(noneRow);
+
+  state.targets.forEach(function (t) { list.appendChild(targetBox(t)); });
+}
+
+function showFetchedAt(iso) {
+  var line = document.getElementById("fetched-at");
+  if (!iso) {
+    line.textContent = "Notion ещё не опрашивался — данных нет.";
+    return;
+  }
+  var d = new Date(iso);
+  line.textContent = "Данные из Notion получены: " + d.toLocaleString("ru-RU");
+}
+
+function showLoadError(message) {
+  var box = document.getElementById("load-error");
+  box.textContent = message
+    ? "Не удалось загрузить список целей (" + message + "). Проверьте, что бот запущен, " +
+      "и обновите страницу."
+    : "";
+  box.hidden = !message;
+}
+
+// Always resolves: a failed /api/targets must say so on the page rather than leave a blank one
+// behind an unhandled promise rejection nobody sees without the browser console open.
+function load() {
+  return fetch("/api/targets")
+    .then(function (r) {
+      if (!r.ok) { throw new Error("HTTP " + r.status); }
+      return r.json();
+    })
+    .then(function (data) {
+      state.targets = data.targets || [];
+      state.inboxLocked = !!data.inbox_locked;
+      showLoadError("");
+      showFetchedAt(data.fetched_at || null);
+      render();
+    })
+    .catch(function (e) {
+      showLoadError(e && e.message ? e.message : "ошибка сети");
+    });
+}
+
+function collectBody() {
+  var checkedInbox = document.querySelector('input[name="inbox"]:checked');
+  var inboxId = checkedInbox ? checkedInbox.value : "";
+  var targets = {};
+  state.targets.forEach(function (t) {
+    var descEl = document.querySelector(
+      '.target-description[data-target-id="' + t.id + '"]'
+    );
+    var fields = {};
+    t.fields.forEach(function (f) {
+      var reqEl = document.querySelector(
+        '.field-required[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
+      );
+      var fdescEl = document.querySelector(
+        '.field-description[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
+      );
+      fields[f.id] = {
+        description: fdescEl ? fdescEl.value : "",
+        required: reqEl ? reqEl.checked : false,
+      };
+    });
+    targets[t.id] = {
+      description: descEl ? descEl.value : "",
+      inbox: t.id === inboxId,
+      fields: fields,
+    };
+  });
+  return { targets: targets };
+}
+
+document.getElementById("save-button").addEventListener("click", function () {
+  var status = document.getElementById("save-status");
+  status.textContent = "Сохранение…";
+  fetch("/api/descriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(collectBody()),
+  })
+    .then(function (r) {
+      if (!r.ok) { throw new Error("http " + r.status); }
+      return r.json();
+    })
+    .then(function (data) {
+      status.textContent = "Сохранено, изменено целей: " + data.saved;
+      return load();
+    })
+    .catch(function () {
+      status.textContent = "Ошибка сохранения — попробуйте ещё раз.";
+    });
+});
+
+load();
+</script>
+</body>
+</html>

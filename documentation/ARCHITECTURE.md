@@ -22,19 +22,33 @@ This document fixes the decisions the spec leaves open. Where they differ, this 
 
 ## 2. Runtime topology
 
-Single `asyncio` process on the host machine:
+Single `asyncio` process on the host machine, one event loop for the whole run
+(python-telegram-bot's own — `Application.run_polling()`; see `app/main.py`'s module docstring for
+why nothing here is ever given a second, throwaway loop of its own):
 
 ```text
-python-telegram-bot (long polling)
+python-telegram-bot (long polling), one asyncio event loop for the whole process
    │
-   ├─ speech: faster-whisper in a worker thread (GPU if free, else CPU)
+   ├─ app.main.post_init_checks (runs once, inside this same loop, before polling starts):
+   │     Ollama /api/tags, Notion /v1/users/me, initial discovery, admin server start
+   ├─ telegram/handlers.py: text, voice, callback, command handlers → Orchestrator
+   ├─ speech: faster-whisper, loaded lazily on the first voice message, run via
+   │     asyncio.to_thread (GPU if available, else CPU — see §10)
    ├─ llm: httpx → Ollama /api/chat  (OLLAMA_BASE_URL)
    ├─ notion: httpx → api.notion.com (NOTION_TOKEN never leaves this layer)
    ├─ sqlite: data/bot.sqlite  (audit, pending sessions, undo records)
-   └─ admin: http.server thread on 127.0.0.1:8787 (targets.yaml editor)
+   ├─ Sweeper: one background asyncio task, started after a clean post_init, that calls
+   │     Orchestrator.flush_expired_sessions every SESSION_TTL_S / 3 seconds — the net that
+   │     rescues a question nobody answered even if the chat never sends a follow-up message
+   │     (FLOWS.md F18 step 4)
+   └─ admin: stdlib http.server on a daemon thread, bound to 127.0.0.1:ADMIN_UI_PORT (§12)
 ```
 
-No webhooks, no Docker, no public port.
+No webhooks, no Docker, no public port. `app.main.build()` constructs every collaborator above
+exactly once and wires the two Telegram lifecycle hooks: `post_init` (the async startup checks,
+then start the Sweeper) and `post_shutdown` (stop the Sweeper, stop the admin server, close the
+sqlite connection) — see §15 and `documentation/ERRORS.md`'s "Startup checks" for the exact,
+ordered list and exit codes.
 
 ## 3. Module layout
 
@@ -42,18 +56,19 @@ No webhooks, no Docker, no public port.
 notion_ai_bot/
 ├── app/
 │   ├── config.py               Settings (pydantic-settings, .env)
-│   ├── main.py                 wiring + startup checks
+│   ├── main.py                 wiring, startup checks, Sweeper, process entry point
+│   ├── logging_setup.py        event_id-tagged structured logging; httpx/httpcore/ExtBot floor
+│   ├── version.py              reads the running version (pyproject.toml, or a shipped VERSION)
 │   ├── texts.py                all Russian user-facing strings
 │   ├── telegram/
-│   │   ├── handlers.py         message/voice/callback handlers → Orchestrator
-│   │   ├── keyboards.py        inline keyboard builders
-│   │   └── auth.py             allowlist filter
+│   │   ├── handlers.py         message/voice/callback/command handlers → Orchestrator
+│   │   ├── keyboards.py        Reply → telegram.InlineKeyboardMarkup
+│   │   └── auth.py             allowlist filter (declarative gate + the one manual callback check)
 │   ├── speech/
-│   │   ├── base.py             SpeechToText protocol
-│   │   ├── whisper_local.py    faster-whisper implementation
-│   │   └── whisper_remote.py   HTTP client (post-MVP, stub interface only)
+│   │   ├── base.py             SpeechToText protocol, SpeechEmpty/SpeechError
+│   │   └── whisper_local.py    faster-whisper implementation (lazy load, CUDA→CPU fallback, §10)
 │   ├── llm/
-│   │   ├── base.py             LLMClient protocol
+│   │   ├── base.py             LLMClient protocol, LLMTrace, error types
 │   │   ├── ollama.py           httpx client, structured output
 │   │   ├── context.py          ContextBuilder: snapshot → keyed compact context
 │   │   ├── prompts.py          system prompt (ru), few-shot examples
@@ -66,12 +81,16 @@ notion_ai_bot/
 │   │   ├── discovery.py        search + data source + items → WorkspaceSnapshot
 │   │   ├── snapshot.py         WorkspaceSnapshot, Target, Field, Item dataclasses
 │   │   ├── descriptions.py     targets.yaml read/write
-│   │   └── mapper.py           Command → Notion payload
+│   │   ├── mapper.py           Command → Notion payload
+│   │   ├── props.py            Notion property JSON → plain text (titles, rich text)
+│   │   └── errors.py           NotionError/NotionUnavailable
 │   ├── validation/
 │   │   ├── semantic.py         checks against snapshot
 │   │   └── policy.py           thresholds → EXECUTE / CLARIFY / REJECT
 │   ├── commands/
-│   │   ├── models.py           CreateItem, UpdateItem, CreatePage, AppendBlocks, Search
+│   │   ├── models.py           CreateItem, UpdateItem, CreatePage, AppendBlocks, Search, …
+│   │   ├── builder.py          VCandidate + snapshot → Command (build_command)
+│   │   ├── jsonvalue.py        JSON-safe typed-field-value conversion (shared with policy.py)
 │   │   └── executor.py         runs commands via provider, records undo info
 │   ├── conversation/
 │   │   ├── reply.py            Button/Reply model; formats questions, execution + search text
@@ -80,19 +99,31 @@ notion_ai_bot/
 │   │   ├── inbox.py            builds the Command that saves unresolved text to the flagged target
 │   │   └── orchestrator.py     one entry point: handle_text/handle_callback/undo/cancel
 │   ├── audit/
-│   │   └── store.py            SQLite schema + repository
+│   │   ├── store.py            SQLite schema + repository (events, sessions, executions)
+│   │   └── migrate.py          migration runner: discover/pending/apply, checksum guard
 │   └── admin/
-│       ├── server.py           stdlib HTTP server thread
-│       └── page.html           editor page
+│       ├── server.py           stdlib HTTP server thread (§12)
+│       └── page.html           editor page (targets, required flags, inbox picker)
 ├── tools/
 │   ├── benchmark_llm.py        run fixtures against N models, report accuracy/latency
-│   └── discover.py             dump workspace snapshot to stdout
+│   ├── discover.py             dump workspace snapshot to stdout
+│   ├── migrate.py              apply/inspect migrations from the command line
+│   └── sample_workspace.py     fixed workspace used by tests and the benchmark
+├── migrations/                 NNNN_name.sql, applied only by tools/migrate.py or the installer
+├── deploy/                     install.ps1, run.ps1, update.ps1, *_wizard.ps1 (RELEASE.md)
+├── release.py, apply_update.py, release.cmd, update.cmd
 ├── tests/
 ├── data/                        runtime files (gitignored): bot.sqlite, targets.yaml
 ├── documentation/
 ├── pyproject.toml
 └── .env.example
 ```
+
+`app/speech/whisper_remote.py` (a remote-Whisper HTTP client) does not exist yet — remote speech
+recognition is out of scope for this plan (see the Plan 3b task briefs' "Out of scope"); today
+`WHISPER_DEVICE=cpu` is the only way to run transcription without a GPU, not a way to move it to
+another machine. `OLLAMA_BASE_URL` has no such limitation — it already works against Ollama
+running on a different host (README.md).
 
 ## 4. Request pipeline
 
@@ -327,7 +358,31 @@ Commands hold Notion ids resolved by the app from keys. `mapper.py` is the only 
 
 ## 10. Speech
 
-faster-whisper, model `WHISPER_MODEL` (default `large-v3-turbo`), `compute_type=int8`, `device=auto` (CUDA if available, else CPU), `language=ru` hint (configurable), `vad_filter=True`. Runs via `asyncio.to_thread`. Model loaded lazily on first voice message and kept. Transcript is stored in audit only; the reply describes the actual Notion change. GPU on Windows needs cuBLAS + cuDNN 9 for CUDA 12 (install via `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` wheels, add their `bin` to PATH); CPU fallback is automatic if CUDA libs are missing.
+`app/speech/whisper_local.py:WhisperLocal`, faster-whisper, model `WHISPER_MODEL` (default
+`large-v3-turbo`), `compute_type=int8`, `device=auto` (CUDA if available, else CPU), `language=ru`
+hint (configurable), `vad_filter=True`. Transcript is stored in audit only; the reply describes
+the actual Notion change, never the transcript (FLOWS.md F13, ERRORS.md `STT_EMPTY`/`STT_FAILED`).
+
+* **Lazy load.** The model is *not* loaded at startup (`app.main.post_init_checks` deliberately
+  never touches `app.speech`) — only on the first voice message, inside the worker thread
+  described below, and then kept for the life of the process. A user who never sends a voice
+  message never pays the load cost at all.
+* **One `threading.Lock` serialises every call**, not just the load. `transcribe()` runs the
+  whole thing (`_transcribe_sync`) via `asyncio.to_thread`, so it executes on a worker thread, not
+  the event loop — a plain `asyncio.Lock` would not help there. The lock covers the load *and*
+  the decode because one GPU cannot decode two clips at once anyway, and narrowing it to just the
+  load would reopen two races: two concurrent calls disagreeing about which device is current
+  mid-fallback, and a fallback on one call racing an in-flight transcription on another.
+* **CUDA → CPU fallback, remembered for the process.** A failure — whether raised while loading
+  the model or only while decoding the first segments — logs one WARNING naming the original
+  error, flips the instance to CPU, and retries once; a second failure raises `SpeechError`
+  (`STT_FAILED`). Once CPU has been taken, it is permanent for that `WhisperLocal` instance: every
+  later call goes straight to CPU and never touches CUDA again, even if the earlier failure was a
+  fluke. There is no way to force a retry on CUDA short of restarting the process.
+
+GPU on Windows needs cuBLAS + cuDNN 9 for CUDA 12 (install via `nvidia-cublas-cu12`,
+`nvidia-cudnn-cu12` wheels, add their `bin` to PATH); CPU fallback is automatic if CUDA libs are
+missing, per the paragraph above.
 
 ## 11. Audit and storage (SQLite)
 
@@ -347,9 +402,37 @@ it can edit the Undo button away when the window closes.
 
 ## 12. Admin page
 
-`GET /` → HTML tree of targets (from last snapshot) with a textarea per target. `GET /api/targets` → JSON snapshot summary + descriptions. `POST /api/descriptions` → writes `data/targets.yaml` and invalidates the snapshot cache. Bound to `127.0.0.1` only. Telegram `/refresh` forces re-discovery, `/targets` prints the tree as text.
+`app/admin/server.py`: a stdlib `http.server.ThreadingHTTPServer` on a daemon thread, exactly
+three routes, no framework, no auth beyond the loopback guard below:
 
-The page also picks the inbox target (Plan 3b): one radio/checkbox per target writing the `inbox: true` flag (`notion/descriptions.py:TargetMeta.inbox`) through the same `POST /api/descriptions`. Until then, flag it by hand in `data/targets.yaml`, or set `INBOX_TARGET_ID` in `.env` (see NOTION_SETUP.md), which overrides the yaml flag outright.
+| Route | Does |
+|---|---|
+| `GET /` | Serves `page.html` (read once at import, from disk) — the tree of targets from the last snapshot, a description textarea and a required checkbox per field, and the inbox picker below. |
+| `GET /api/targets` | JSON snapshot summary (`Discovery.last`) plus `inbox_locked` (`bool(settings.inbox_target_id)`) so the page knows whether to grey out its own inbox picker. |
+| `POST /api/descriptions` | Validates the whole posted document against the last snapshot (unknown target/field id → 400, nothing written), merges it into `data/targets.yaml` (load → merge → save), invalidates the discovery cache, and returns how many targets actually changed. |
+
+**Host loopback guard.** Every request — `GET` and `POST` alike — is rejected with `403
+forbidden_host` before anything else runs unless its `Host` header names `127.0.0.1`, `localhost`
+or `::1` (`_loopback_host`). This is a DNS-rebinding guard, not redundant with binding the socket
+to `127.0.0.1`: binding keeps other *machines* out, but a page open in the user's own browser,
+navigated to a hostile domain that resolves to `127.0.0.1` via DNS rebinding, would otherwise
+still reach a server merely bound to loopback — the `Host` header is what a same-origin browser
+request cannot forge to say anything else. `MAX_BODY_BYTES` (512 KiB) similarly bounds
+`POST`'s `Content-Length` before `rfile.read()` ever runs, so a hostile/huge header cannot force
+an unbounded blocking read.
+
+**The inbox picker** is one radio button per target plus "инбокс не выбран", rendered from
+`is_inbox` on each target in the `GET /api/targets` payload and saved as the `inbox` flag on
+`POST /api/descriptions` (`notion/descriptions.py:TargetMeta.inbox`; at most one target may carry
+it — a second `inbox: true` in one POST is rejected with 400). **It is disabled in the page itself
+whenever `INBOX_TARGET_ID` is set** (`inbox_locked: true`, every radio's `disabled` attribute, and
+a visible notice naming the env var): the `.env` override always wins over the yaml flag outright
+(`notion/discovery.py`), so a click here would silently do nothing useful, and the page disables
+the control rather than let the user believe it took effect. Unset `INBOX_TARGET_ID` to manage the
+inbox target from this page instead (see `documentation/NOTION_SETUP.md`, "Inbox target").
+
+Telegram `/refresh` forces re-discovery (invalidating the same cache this page invalidates on
+save); `/targets` prints the tree as text, with the inbox target marked.
 
 ## 13. Model selection
 
@@ -358,10 +441,29 @@ Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `qwen3:8b` 
 ## 14. Security boundaries
 
 - LLM receives: context JSON, user text, time. Never tokens, ids (only keys), URLs, tool lists.
-- LLM output is data; the only consumers are Pydantic validation and the semantic validator.
+- LLM output is data, never trusted as an address: `Candidate.target`/`.item`/`.fields` keys are
+  plain strings at the Pydantic layer (the grammar Ollama is given constrains them, but nothing
+  enforces that at the Python level), so `SemanticValidator` re-checks every one against the live
+  context before anything is built into a `Command` — a foreign Notion id, a URL, or an
+  unadvertised field key in the LLM's output is rejected there (`SEM_UNKNOWN_KEY`), never reaches
+  `Executor`/`NotionProvider` (`tests/test_security.py` exercises this against the real
+  orchestrator with fakes, not a mock that only proves "was called").
 - Notion calls originate only from `direct.py`, invoked only by `executor.py` and `discovery.py`.
-- Telegram allowlist enforced before any processing; unknown users get no reply.
-- Admin page bound to loopback, no auth (host-local by design).
+- Telegram allowlist enforced before any processing; unknown users get no reply, no audit row, and
+  trigger no provider call at all (`app/telegram/auth.py`).
+- Admin page bound to loopback, no auth beyond the `Host`-header guard (§12) — host-local by
+  design.
+- Logging never carries a token, at any level: besides `httpx`/`httpcore` (which log Telegram's
+  token-bearing request URL at INFO), `telegram.ext.ExtBot` logs the same URL once at DEBUG from
+  its own constructor — a leak the httpx floor alone does not cover, since it isn't an httpx
+  request. `app/logging_setup.py` floors both to WARNING unconditionally. A third leak needs more
+  than a floor: `telegram.ext`'s polling retry loop logs a token-bearing `InvalidToken` at ERROR
+  *with* its traceback when Telegram rejects the token, so `configure()` also wraps the handler in
+  a redacting formatter that rewrites every occurrence of the secret values `main()` explicitly
+  hands it (the two tokens, never a `Settings`) to `***` — message, args and traceback alike. The
+  same `InvalidToken` escaping `run_polling()` is caught in `main()` and reported as a config exit
+  that names `TELEGRAM_BOT_TOKEN` and prints nothing of the exception. See its module docstring
+  and `documentation/ERRORS.md`'s "Logging" section.
 
 ## 15. Releases and migrations
 
