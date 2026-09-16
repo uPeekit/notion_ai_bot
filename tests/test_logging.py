@@ -102,3 +102,24 @@ def test_configure_silences_httpx_and_httpcore_info_logging(capsys):
         assert "SECRET-TOKEN" not in captured.err
     finally:
         _reset_root_and_third_party()
+
+
+def test_configure_silences_extbot_debug_logging_even_at_debug(capsys):
+    """A second, independent leak from a second, independent logger: python-telegram-bot's own
+    `telegram.ext.ExtBot` (not its httpx layer — this fires from `ExtBot.__init__` itself) logs
+    "Set Bot API URL: https://api.telegram.org/bot<token>" at DEBUG, every time
+    `Application.builder().token(...).build()` constructs one — which `app.main.build()` always
+    does. The httpx/httpcore floor above does nothing for this logger; it needs its own entry in
+    `_THIRD_PARTY_WARNING_ONLY`. Regression test for a real leak this suite's own full-stack
+    security test (`tests/test_security.py`) found: with `telegram.ext.ExtBot` missing from that
+    tuple, this assertion fails and shows the token in plain text."""
+    configure("DEBUG")
+    try:
+        logging.getLogger("telegram.ext.ExtBot").debug(
+            "Set Bot API URL: https://api.telegram.org/bot123:SECRET-TOKEN"
+        )
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert "SECRET-TOKEN" not in captured.err
+    finally:
+        _reset_root_and_third_party()

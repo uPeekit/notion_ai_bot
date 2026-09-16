@@ -75,3 +75,10 @@ connections bound to it, and the first real call on them once polling starts wou
 ## Logging
 
 Structured `logging` with `event_id` in every record after an event is created. Never log tokens, never log message text above INFO. DEBUG may log LLM context and response.
+
+`app.logging_setup.configure()` also floors two third-party loggers to WARNING no matter what
+`LOG_LEVEL` is set to, because each would otherwise print the Telegram bot token to stderr on its
+own, with no app code calling `log.*` on it: `httpx`/`httpcore` (python-telegram-bot's own HTTP
+client logs every request's full URL, token and all, at INFO) and `telegram.ext.ExtBot` (logs the
+same token-bearing URL once at DEBUG, from its own constructor — not an HTTP request, so the
+httpx floor does nothing for it). See `app/logging_setup.py`'s module docstring.

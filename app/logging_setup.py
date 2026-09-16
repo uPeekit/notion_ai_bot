@@ -6,13 +6,24 @@ flight (startup, the admin server thread, a message that never reached `Orchestr
 
 `configure()` takes only a level string, on purpose: it must never see a `Settings` object, so it
 cannot log a token by reading one out of settings itself. That is not the same as saying no token
-can ever reach a record through this module — it also has to actively defend against one
-specific, real leak: `httpx` (python-telegram-bot's own HTTP client) logs each request's full URL
-at INFO by default, and PTB's own requests embed the bot token directly in that URL
-(`.../bot<token>/getUpdates`), so at the app's normal `INFO` level every poll would otherwise
-print the token to stderr on its own, with no app code ever calling `log.info` on it. `configure`
-forces the `httpx`/`httpcore` loggers to `WARNING` unconditionally, regardless of the level it is
-given, so raising the app's own log level can never accidentally turn this back on.
+can ever reach a record through this module — it also has to actively defend against two
+specific, real leaks, from two independent third-party loggers, at two different levels:
+
+* `httpx` (python-telegram-bot's own HTTP client) logs each request's full URL at INFO by
+  default, and PTB's own requests embed the bot token directly in that URL
+  (`.../bot<token>/getUpdates`), so at the app's normal `INFO` level every poll would otherwise
+  print the token to stderr on its own, with no app code ever calling `log.info` on it.
+* `telegram.ext.ExtBot` (PTB's own `Bot`/`ExtBot` class, not its HTTP layer) logs
+  `"Set Bot API URL: <url>"` and `"...API File URL: <url>"` — both with the token baked into the
+  URL the same way — once, at DEBUG, from its own constructor (`ExtBot.__init__`, always run by
+  `Application.builder().token(...).build()`). This one is not an httpx request at all, so the
+  httpx/httpcore floor below does nothing for it, and it fires long before polling ever starts —
+  the very first thing `app.main.build()` does with a real token.
+
+`configure` forces `httpx`/`httpcore`/`telegram.ext.ExtBot` (and, in case a caller ever builds a
+plain `telegram.Bot` instead of going through `Application.builder()`, `telegram.Bot` too) to
+`WARNING` unconditionally, regardless of the level it is given, so raising the app's own log
+level — including to `DEBUG` — can never accidentally turn either of these back on.
 
 `bind_event` is a context manager, not a bare setter, because the id must always come back off
 again once the turn that owns it ends — otherwise a later, unrelated log record (on the same
@@ -35,10 +46,11 @@ NO_EVENT = "-"
 
 event_id_var: ContextVar[str] = ContextVar("event_id", default=NO_EVENT)
 
-# Third-party loggers whose own default INFO output is unsafe here: httpx logs "<method> <url>"
-# for every request, and python-telegram-bot's requests carry the bot token in that URL's path.
-# Held at WARNING no matter what level configure() itself is given.
-_THIRD_PARTY_WARNING_ONLY = ("httpx", "httpcore")
+# Third-party loggers that would otherwise print the bot token to stderr on their own: httpx logs
+# "<method> <url>" for every request (INFO), and telegram.ext.ExtBot logs the same token-bearing
+# URL once at construction time (DEBUG, via its "Set Bot API URL" lines) — see the module
+# docstring. Held at WARNING no matter what level configure() itself is given.
+_THIRD_PARTY_WARNING_ONLY = ("httpx", "httpcore", "telegram.ext.ExtBot", "telegram.Bot")
 
 
 class _EventIdFilter(logging.Filter):
