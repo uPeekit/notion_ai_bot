@@ -45,6 +45,7 @@ from app.audit.store import AuditStore
 from app.config import Settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.reply import Reply
+from app.logging_setup import event_id_var
 from app.notion.discovery import Discovery
 from app.notion.snapshot import WorkspaceSnapshot
 from app.speech.base import SpeechEmpty, SpeechError, SpeechToText
@@ -130,6 +131,10 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     store: AuditStore = context.bot_data[_STORE]
     message = update.message
     media = message.voice or message.audio or message.video_note
+    # Sent before anything slow happens. The first voice note of a run loads the Whisper model —
+    # and the very first one ever downloads it too, ~1.5 GB, with nothing visible in Telegram —
+    # so without this the user has no way to tell a working bot from a dead one.
+    await _send(update, context, Reply(texts.VOICE_TRANSCRIBING), store)
     file = await context.bot.get_file(media.file_id)
 
     fd, tmp_name = tempfile.mkstemp(suffix=".ogg")
@@ -242,9 +247,11 @@ def _targets_text(snapshot: WorkspaceSnapshot) -> str:
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """PTB's global error hook: the one place in this module a broad exception is caught, by
-    design (see module docstring). Never re-raises. `event_id` is logged when the caller has
-    one to give (nothing in this task sets it; it is a hook for a future correlation id)."""
-    event_id = getattr(context, "event_id", None)
+    design (see module docstring). Never re-raises. The audit `event_id` comes from
+    `logging_setup.event_id_var` — the same contextvar the root filter stamps onto every record —
+    so an exception raised while a turn is in flight names the row it belongs to, and one raised
+    outside any turn logs `-`."""
+    event_id = event_id_var.get()
     log.error("unhandled exception (event_id=%s)", event_id, exc_info=context.error)
     chat = update.effective_chat if isinstance(update, Update) else None
     if chat is None:

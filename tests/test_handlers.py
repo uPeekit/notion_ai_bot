@@ -15,10 +15,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from telegram import CallbackQuery, Chat, Message, MessageEntity, Update, User, Voice
-from telegram.ext import Application, ApplicationBuilder
+from telegram.ext import Application, ApplicationBuilder, CommandHandler
 
+from app import texts
 from app.config import Settings
 from app.conversation.reply import Button, Reply
+from app.logging_setup import bind_event
 from app.notion.snapshot import Target, WorkspaceSnapshot
 from app.speech.base import SpeechEmpty, SpeechError
 from app.telegram import handlers as h
@@ -363,7 +365,8 @@ async def test_voice_note_transcribes_and_deletes_temp_file():
     assert hs.orch.calls == [
         ("handle_text", CHAT_ID, ALLOWED_USER, "купи молоко", "voice", "купи молоко")
     ]
-    assert len(hs.bot.sent) == 1
+    # the "transcribing" notice first, then the orchestrator's own reply
+    assert [m["text"] for m in hs.bot.sent] == [texts.VOICE_TRANSCRIBING, "ok"]
     downloaded = hs.bot.file.paths[0]
     assert not downloaded.exists()  # deleted in the handler's finally
 
@@ -375,8 +378,8 @@ async def test_speech_empty_replies_and_never_calls_orchestrator():
     assert await dispatch(hs.app, update, hs.context)
 
     assert hs.orch.calls == []
-    assert len(hs.bot.sent) == 1
-    assert "распозна" in hs.bot.sent[0]["text"].lower() or "голосовое" in hs.bot.sent[0]["text"]
+    assert len(hs.bot.sent) == 2  # the notice, then the failure message
+    assert "распозна" in hs.bot.sent[1]["text"].lower() or "голосовое" in hs.bot.sent[1]["text"]
     assert not hs.bot.file.paths[0].exists()
 
 
@@ -387,7 +390,8 @@ async def test_speech_error_replies_and_never_calls_orchestrator():
     assert await dispatch(hs.app, update, hs.context)
 
     assert hs.orch.calls == []
-    assert len(hs.bot.sent) == 1
+    assert len(hs.bot.sent) == 2  # the notice, then the failure message
+    assert hs.bot.sent[1]["text"] == texts.ERRORS["STT_FAILED"]
     assert not hs.bot.file.paths[0].exists()
 
 
@@ -460,7 +464,6 @@ async def test_start_command_replies_with_help_text_and_touches_no_orchestrator(
     assert await dispatch(hs.app, update, hs.context)
 
     assert hs.orch.calls == []
-    from app import texts
     assert hs.bot.sent[0]["text"] == texts.HELP_TEXT
 
 
@@ -470,7 +473,6 @@ async def test_help_command_replies_with_help_text():
 
     assert await dispatch(hs.app, update, hs.context)
 
-    from app import texts
     assert hs.bot.sent[0]["text"] == texts.HELP_TEXT
 
 
@@ -484,7 +486,6 @@ async def test_refresh_command_invalidates_and_reports_target_count():
     assert await dispatch(hs.app, update, hs.context)
 
     assert hs.discovery.invalidated is True
-    from app import texts
     assert hs.bot.sent[0]["text"] == texts.REFRESH_DONE.format(count=2)
 
 
@@ -496,7 +497,6 @@ async def test_refresh_command_reports_discovery_failure():
 
     assert await dispatch(hs.app, update, hs.context)
 
-    from app import texts
     assert hs.bot.sent[0]["text"] == texts.ERRORS["DISCOVERY_FAILED"]
 
 
@@ -520,7 +520,6 @@ async def test_targets_command_with_no_snapshot_yet_says_so_without_fetching():
 
     assert await dispatch(hs.app, update, hs.context)
 
-    from app import texts
     assert hs.bot.sent[0]["text"] == texts.TARGETS_NONE_YET
 
 
@@ -561,7 +560,6 @@ async def test_error_handler_replies_once_and_swallows_the_exception():
     await h.error_handler(update, context)  # must not raise
 
     assert len(bot.sent) == 1
-    from app import texts
     assert bot.sent[0]["text"] == texts.ERRORS["INTERNAL"]
 
 
@@ -572,3 +570,63 @@ async def test_error_handler_with_no_known_chat_does_not_send():
     await h.error_handler(object(), context)  # not even an Update
 
     assert bot.sent == []
+
+
+async def test_voice_notice_is_sent_before_transcription_begins():
+    """The first voice note of a run loads the Whisper model — and the very first one ever
+    downloads ~1.5 GB of it — with nothing visible in Telegram meanwhile. Without a notice sent
+    *before* speech.transcribe is awaited, a working bot and a dead one look identical."""
+    order: list[str] = []
+    hs = build()
+
+    real_transcribe = hs.speech.transcribe
+
+    async def recording_transcribe(path):
+        order.append("transcribe")
+        return await real_transcribe(path)
+
+    hs.speech.transcribe = recording_transcribe
+    real_send = hs.bot.send_message
+
+    async def recording_send(chat_id, text, **kwargs):
+        order.append("send:" + text)
+        return await real_send(chat_id, text, **kwargs)
+
+    hs.bot.send_message = recording_send
+
+    assert await dispatch(hs.app, voice_update(ALLOWED_USER, hs.bot), hs.context)
+
+    assert order[0] == "send:" + texts.VOICE_TRANSCRIBING
+    assert order[1] == "transcribe"
+
+
+async def test_error_handler_logs_the_event_id_of_the_turn_in_flight(caplog):
+    """`getattr(context, "event_id", None)` was always None — nothing in python-telegram-bot ever
+    sets that attribute. The id lives in the same contextvar the log filter reads."""
+    bot = FakeBot()
+    update = text_update(ALLOWED_USER, "hi", bot)
+    context = SimpleNamespace(bot=bot, error=RuntimeError("boom"), bot_data={})
+
+    with caplog.at_level(logging.ERROR, logger="app.telegram.handlers"):
+        with bind_event(77):
+            await h.error_handler(update, context)
+
+    assert any("event_id=77" in r.getMessage() for r in caplog.records)
+
+
+def test_every_registered_command_is_in_the_published_menu_and_the_help_text():
+    """Telegram's "/" menu comes from texts.COMMANDS; a command registered here but missing from
+    it is invisible to the user, and one missing from HELP_TEXT is undocumented."""
+    app = build_app()
+    h.register(app, FakeOrchestrator(), make_settings(), FakeSpeech(), FakeDiscovery(), FakeStore())
+
+    registered = {
+        name
+        for handler in app.handlers[0]
+        if isinstance(handler, CommandHandler)
+        for name in handler.commands
+    }
+
+    assert registered == set(texts.COMMANDS)
+    for name in registered:
+        assert f"/{name}" in texts.HELP_TEXT
