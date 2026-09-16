@@ -456,8 +456,14 @@ Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `qwen3:8b` 
 - Logging never carries a token, at any level: besides `httpx`/`httpcore` (which log Telegram's
   token-bearing request URL at INFO), `telegram.ext.ExtBot` logs the same URL once at DEBUG from
   its own constructor — a leak the httpx floor alone does not cover, since it isn't an httpx
-  request. `app/logging_setup.py` floors both to WARNING unconditionally; see its module
-  docstring and `documentation/ERRORS.md`'s "Logging" section.
+  request. `app/logging_setup.py` floors both to WARNING unconditionally. A third leak needs more
+  than a floor: `telegram.ext`'s polling retry loop logs a token-bearing `InvalidToken` at ERROR
+  *with* its traceback when Telegram rejects the token, so `configure()` also wraps the handler in
+  a redacting formatter that rewrites every occurrence of the secret values `main()` explicitly
+  hands it (the two tokens, never a `Settings`) to `***` — message, args and traceback alike. The
+  same `InvalidToken` escaping `run_polling()` is caught in `main()` and reported as a config exit
+  that names `TELEGRAM_BOT_TOKEN` and prints nothing of the exception. See its module docstring
+  and `documentation/ERRORS.md`'s "Logging" section.
 
 ## 15. Releases and migrations
 

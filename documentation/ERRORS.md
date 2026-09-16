@@ -57,6 +57,9 @@ separate loop would leave the same httpx-backed Notion/Ollama clients holding id
 connections bound to it, and the first real call on them once polling starts would raise
 `RuntimeError: Event loop is closed`.
 
+0. `logging_setup.configure(LOG_LEVEL, redact=(telegram token, notion token))`; an unknown
+   `LOG_LEVEL` → exit 2 naming the valid levels (the name is normalised to upper case first, so
+   `LOG_LEVEL=info` is accepted rather than crashing on `Logger.setLevel`).
 1. Settings load (`Settings.require_telegram()`); missing required → exit 2.
 2. `AuditStore.assert_schema_current()`; a pending migration → exit 4 with the hint to run the
    updater. Migrations are never applied here — never `AuditStore.migrate()` — only by the
@@ -69,16 +72,36 @@ connections bound to it, and the first real call on them once polling starts wou
 5. Initial discovery; write `targets.yaml`; log the target count and which target is flagged as
    the inbox, or warn that none is (the fallback is then inert) — not fatal on its own failure.
 6. Whisper not loaded at startup (lazy).
-7. Admin server start (if `ADMIN_UI_PORT > 0`).
-8. Telegram polling start.
+7. `set_my_commands` publishes the "/" command menu; a failure only warns (and the warning names
+   the exception class only — an `InvalidToken` raised here carries the bot token in its text).
+8. Admin server start (if `ADMIN_UI_PORT > 0`); an `OSError` binding the port (already in use, or
+   a Windows excluded port range — `WinError 10013` on 8787 is common) only warns and startup
+   continues. The page is optional by design; losing it must not lose the bot.
+9. Telegram polling start. If Telegram rejects the bot token, python-telegram-bot raises
+   `InvalidToken` out of `run_polling()` → exit 2 naming `TELEGRAM_BOT_TOKEN`. Neither that
+   exception's message nor its traceback is ever printed or logged: PTB builds it as
+   ``InvalidToken(f"The token `{token}` was rejected by the server.")``.
 
 ## Logging
 
-Structured `logging` with `event_id` in every record after an event is created. Never log tokens, never log message text above INFO. DEBUG may log LLM context and response.
+Structured `logging` with `event_id` in every record after an event is created. Never log tokens,
+never log message text above DEBUG (`tests/test_security.py` enforces exactly that: over a full
+text → execute → undo flow, no line above `DEBUG` may contain the message text). DEBUG may log
+LLM context and response.
 
 `app.logging_setup.configure()` also floors two third-party loggers to WARNING no matter what
 `LOG_LEVEL` is set to, because each would otherwise print the Telegram bot token to stderr on its
 own, with no app code calling `log.*` on it: `httpx`/`httpcore` (python-telegram-bot's own HTTP
 client logs every request's full URL, token and all, at INFO) and `telegram.ext.ExtBot` (logs the
 same token-bearing URL once at DEBUG, from its own constructor — not an HTTP request, so the
-httpx floor does nothing for it). See `app/logging_setup.py`'s module docstring.
+httpx floor does nothing for it).
+
+Neither floor can help with the third leak, so `configure()` also installs a redacting formatter
+over the stderr handler: every occurrence of a secret *value* it was explicitly given — `main()`
+passes the Telegram and Notion token values, and nothing else; `configure` never sees a `Settings`
+— becomes `***` in the formatted record, message, interpolated args and traceback alike. The leak
+it exists for is `telegram.ext`'s polling retry loop
+(`telegram/ext/_utils/networkloop.py`), which logs the token-bearing `InvalidToken` at ERROR
+*with* `exc_info` when Telegram rejects the token — an ERROR on a logger the app genuinely wants
+to hear from, so no level floor could have stopped it. See `app/logging_setup.py`'s module
+docstring.

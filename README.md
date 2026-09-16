@@ -129,9 +129,12 @@ including `INBOX_MODE`'s three settings.
 | `/refresh` | Re-scans your Notion workspace right now instead of waiting for the normal cache (see `SCHEMA_CACHE_TTL_S` in `.env.example`) and replies with how many targets it found. |
 | `/targets` | Lists every page/database the bot currently sees, with the inbox one marked. |
 
+All six are published to Telegram at startup, so they show up in the "/" menu in the chat rather
+than having to be remembered.
+
 Besides commands, just talk to it — text or a voice note, in Russian. A voice note is transcribed
-locally and never echoed back to you; the reply always describes the actual Notion change, not
-the transcript.
+locally and never echoed back to you; you get a short «Расшифровываю…» acknowledgement while that
+runs, and the reply always describes the actual Notion change, not the transcript.
 
 ## Reading the audit log
 
@@ -192,7 +195,9 @@ The bot logs to the console window you started it in — there is currently no l
 that window around (or redirect it yourself, e.g. `... 2>> logs\bot.log`, if you want the output
 to survive after closing it). At the default `LOG_LEVEL=INFO` you'll see one line per notable
 event (discovery results, warnings, errors) — never your message text, and never either token,
-however verbose you make it. That second part isn't just "we try not to log tokens": Telegram's
+however verbose you make it. That second part isn't just "we try not to log tokens": every line
+the bot writes is passed through a filter that replaces your Telegram and Notion token values
+with `***` first, whoever produced the line. On top of that, Telegram's
 own client library normally puts your bot token straight into the URL of every request it makes,
 and logs that URL — so the bot deliberately holds two of that library's own loggers (`httpx`/
 `httpcore`, its HTTP layer, and `telegram.ext.ExtBot`, which logs the same URL once on its own at
@@ -207,12 +212,32 @@ If the process **exits immediately** instead of starting up, the exit code tells
 
 | Exit code | Means |
 |---|---|
-| `2` | A required `.env` value is missing (it names which one, never the value). |
+| `2` | A `.env` value is missing or unusable (it names which key, never the value). Three ways to get it: a required key missing; a `LOG_LEVEL` that isn't one of `CRITICAL`/`ERROR`/`WARNING`/`INFO`/`DEBUG`; or Telegram itself rejecting `TELEGRAM_BOT_TOKEN` (mistyped, or revoked/regenerated in @BotFather since you last pasted it). |
 | `3` | Notion rejected the token outright (401/403) — check `NOTION_TOKEN`. |
 | `4` | The database has a pending schema migration — re-run the updater (`update.cmd`) rather than the bot itself. |
 
+**The first voice message takes minutes and looks like nothing is happening.** That is expected
+once: the speech model (`large-v3-turbo`, ~1.5 GB) is downloaded from HuggingFace on first use
+and cached under your user profile, and the console shows download progress bars while it
+happens. The bot replies «Расшифровываю голосовое сообщение…» as soon as the voice note arrives
+so you can tell it is alive; the real answer follows when the model has loaded. Every later voice
+message reuses the loaded model and is fast.
+
+**A voice message kills the whole bot process on an NVIDIA machine** — the console shows
+something like `Could not locate cudnn_ops64_9.dll` and the process disappears with no Python
+traceback. That abort happens inside the CUDA library, below Python, so the bot's own
+CPU fallback never gets the chance to catch it. Either install the cuDNN 9 runtime for your CUDA
+version, or set `WHISPER_DEVICE=cpu` in `.env` and restart — voice messages then work on the CPU,
+just more slowly, and nothing else changes.
+
+**The admin page isn't there but the bot works.** Look for a `admin page could not bind
+127.0.0.1:8787` warning in the console: something else is on that port, or Windows has reserved
+it (`WinError 10013`; `netsh interface ipv4 show excludedportrange protocol=tcp` lists the
+reserved ranges). Pick another port with `ADMIN_UI_PORT` and restart. The bot itself keeps
+running either way — the page is optional.
+
 A failure that only **warns** (Ollama unreachable, a model not pulled, Notion briefly
-unreachable, no inbox target flagged) does not stop the bot — it keeps running and simply can't do
+unreachable, no inbox target flagged, the admin port unavailable) does not stop the bot — it keeps running and simply can't do
 that one thing until you fix it. `documentation/ERRORS.md` is the full table of every error code,
 what the user sees, and what the bot does about it; it's worth a look before assuming something
 is broken versus working as designed (a clarifying question is not an error).
