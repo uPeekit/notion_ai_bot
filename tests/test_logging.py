@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import inspect
 import logging
+from collections.abc import Sequence
+
+import pytest
 
 from app import logging_setup
-from app.logging_setup import bind_event, configure, event_id_var
+from app.logging_setup import REDACTED, bind_event, configure, event_id_var
 
 
 def _emit(logger: logging.Logger) -> logging.LogRecord:
@@ -61,13 +64,16 @@ def test_bind_event_none_is_the_dash():
     assert record.event_id == "-"
 
 
-def test_configure_has_no_access_to_settings_or_tokens():
-    """configure() must be unable to log a token even by accident: it never receives a Settings
-    object or any secret-shaped argument, only a level string. A formatter/filter that never sees
-    settings cannot leak one of its values into a record."""
+def test_configure_has_no_access_to_settings():
+    """configure() must be unable to *discover* a secret: it takes a level string and an explicit
+    sequence of secret values to redact, never a Settings object it could read a third token out
+    of. `redact` is keyword-only so a level can never land there by position."""
     params = inspect.signature(configure).parameters
-    assert list(params) == ["level"]
+    assert list(params) == ["level", "redact"]
     assert params["level"].annotation in (str, "str")
+    assert params["redact"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["redact"].annotation in (Sequence[str], "Sequence[str]")
+    assert not any("Settings" in str(p.annotation) for p in params.values())
 
 
 def _reset_root_and_third_party() -> None:
@@ -123,3 +129,89 @@ def test_configure_silences_extbot_debug_logging_even_at_debug(capsys):
         assert "SECRET-TOKEN" not in captured.err
     finally:
         _reset_root_and_third_party()
+
+
+# ---- redaction: the token must not reach stderr even from a logger nobody floored -------------
+
+TOKEN = "123456:AA-really-secret-bot-token"
+
+
+def test_configure_redacts_a_secret_in_a_message(capsys):
+    """Half one of the Critical leak: python-telegram-bot's polling retry loop logs on
+    `telegram.ext` — a logger that is deliberately *not* in `_THIRD_PARTY_WARNING_ONLY` and whose
+    record here is an ERROR anyway, so no level floor can stop it. Only the redacting formatter
+    can, and it has to cover the record's `%`-args, not just its format string."""
+    configure("INFO", redact=[TOKEN, ""])
+    try:
+        logging.getLogger("telegram.ext").error("token %s rejected", TOKEN)
+        err = capsys.readouterr().err
+    finally:
+        _reset_root_and_third_party()
+    assert TOKEN not in err
+    assert REDACTED in err
+    assert "rejected" in err  # the diagnosis itself survives; only the value is gone
+
+
+def test_configure_redacts_a_secret_inside_a_traceback(capsys):
+    """Half two: the token reaches stderr through `exc_info`, not through the message at all —
+    `telegram/_bot.py` re-wraps a 401 as InvalidToken("The token `<token>` was rejected by the
+    server.") and `networkloop.py` logs that with `_LOGGER.exception`. Redacting `record.msg`
+    alone would leave the traceback untouched, so this must be asserted separately."""
+    configure("INFO", redact=[TOKEN])
+    try:
+        try:
+            raise RuntimeError(f"The token `{TOKEN}` was rejected by the server.")
+        except RuntimeError:
+            logging.getLogger("telegram.ext").exception("Invalid token. Aborting retry loop.")
+        err = capsys.readouterr().err
+    finally:
+        _reset_root_and_third_party()
+    assert "Traceback" in err  # the traceback really was emitted, so the assertion below bites
+    assert TOKEN not in err
+    assert REDACTED in err
+
+
+def test_configure_without_redact_still_emits_normally(capsys):
+    configure("INFO")
+    try:
+        logging.getLogger("test.logging.noredact").warning("plain message")
+        err = capsys.readouterr().err
+    finally:
+        _reset_root_and_third_party()
+    assert "plain message" in err
+    assert REDACTED not in err
+
+
+def test_redaction_does_not_mutate_the_record():
+    """Other handlers (caplog here, a file handler later) must still see what was logged: the
+    formatter rewrites its own output string, never the shared LogRecord."""
+    record = logging.LogRecord(
+        "x", logging.WARNING, __file__, 1, "token %s", (TOKEN,), None
+    )
+    record.event_id = "-"
+    formatted = logging_setup._RedactingFormatter(logging_setup.FORMAT, [TOKEN]).format(record)
+    assert TOKEN not in formatted
+    assert record.args == (TOKEN,)
+    assert record.msg == "token %s"
+
+
+# ---- level normalisation ----------------------------------------------------------------------
+
+
+def test_configure_accepts_a_lowercase_level(capsys):
+    """LOG_LEVEL is the one key the README invites the user to edit, and `LOG_LEVEL=debug` is the
+    obvious way to mistype it. `Logger.setLevel("debug")` raises ValueError."""
+    configure("debug")
+    try:
+        assert logging.getLogger().level == logging.DEBUG
+    finally:
+        _reset_root_and_third_party()
+
+
+def test_configure_rejects_an_unknown_level_naming_the_valid_ones():
+    with pytest.raises(ValueError) as exc:
+        configure("verbose")
+    message = str(exc.value)
+    assert "verbose" in message
+    for name in logging_setup.LEVELS:
+        assert name in message

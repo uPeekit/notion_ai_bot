@@ -15,11 +15,64 @@ import sqlite3
 
 import pytest
 from pydantic import ValidationError
+from telegram.error import InvalidToken
 
-from app import main
+from app import main, texts
 from app.config import Settings
 from app.notion.errors import NotionError
 from tests.fakes import FakeLLM, FakeNotionProvider
+
+# Captured at import, before stub_command_menu monkeypatches the name: the two tests that
+# exercise the real command registration call this instead of the stubbed attribute.
+_REAL_REGISTER_COMMANDS = main._register_commands
+
+# The two secret values tests.conftest's `env` fixture puts in the environment.
+TELEGRAM_TOKEN = "tg-test-token"
+NOTION_TOKEN = "ntn-test-token"
+
+
+class FakeTelegramBot:
+    """Stands in for `Application.bot` in post_init_checks: the real ExtBot would put
+    set_my_commands on the wire, and no test here goes near the network."""
+
+    def __init__(self) -> None:
+        self.commands = None
+
+    async def set_my_commands(self, commands) -> None:
+        self.commands = commands
+
+
+class FakeApplication:
+    """The two members post_init_checks touches on the PTB Application it is handed."""
+
+    def __init__(self) -> None:
+        self.bot = FakeTelegramBot()
+        self.stopped = False
+
+    def stop_running(self) -> None:
+        self.stopped = True
+
+
+@pytest.fixture(autouse=True)
+def stub_command_menu(monkeypatch):
+    """post_init_checks publishes the Telegram command menu, which is a real API call. Every test
+    here stubs it out and records the calls; `_register_commands` itself is exercised directly by
+    test_register_commands_publishes_every_command below."""
+    calls = []
+
+    async def _stub(bot) -> None:
+        calls.append(bot)
+
+    monkeypatch.setattr(main, "_register_commands", _stub)
+    return calls
+
+
+@pytest.fixture
+def clean_logging():
+    """main() reconfigures the root logger; put it back so the rest of the suite is unaffected."""
+    yield
+    for h in list(logging.getLogger().handlers):
+        logging.getLogger().removeHandler(h)
 
 
 def _page_provider(*, page_id: str = "pg-1", title: str = "Заметки") -> FakeNotionProvider:
@@ -272,3 +325,146 @@ async def test_sweeper_stop_is_idempotent_and_cancels_the_task():
     await asyncio.sleep(0.05)
     await sweeper.stop()  # second stop: must not raise
     assert flusher.calls == calls_after_stop  # no further ticks once stopped
+
+
+# ---- Critical: a token Telegram rejects must not reach stderr ----------------------------------
+
+
+def test_invalid_telegram_token_exits_2_instead_of_printing_a_traceback(
+    env, monkeypatch, capsys, clean_logging
+):
+    """PTB raises `InvalidToken` out of run_polling() when Telegram refuses the token, and builds
+    that exception's message by interpolating the token into it ("The token `<token>` was rejected
+    by the server."). Uncaught, Python prints the whole traceback — and README tells the user to
+    redirect stderr into logs\bot.log, so it lands on disk. main() must turn it into a config
+    exit whose message names the key and never the value."""
+    app = _build(env)
+    app.store.migrate()
+
+    def _rejected(*_args, **_kwargs):
+        raise InvalidToken(f"The token `{TELEGRAM_TOKEN}` was rejected by the server.")
+
+    monkeypatch.setattr(app.telegram_app, "run_polling", _rejected)
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: app)
+
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+
+    assert exc.value.code == main.EXIT_CONFIG
+    err = capsys.readouterr().err
+    assert TELEGRAM_TOKEN not in err
+    assert "Traceback" not in err
+    assert "TELEGRAM_BOT_TOKEN" in err
+
+
+def test_main_passes_both_token_values_to_the_log_redactor(env, monkeypatch, clean_logging):
+    """The redaction only works if main() actually hands `configure` the two secret values — and
+    nothing else, no Settings object."""
+    app = _build(env)
+    app.store.migrate()
+    recorded = {}
+
+    def _configure(level, *, redact=()):
+        recorded["level"] = level
+        recorded["redact"] = tuple(redact)
+
+    monkeypatch.setattr(main, "configure", _configure)
+    monkeypatch.setattr(app.telegram_app, "run_polling", lambda *a, **k: None)
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: app)
+
+    main.main()
+
+    assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN)
+
+
+# ---- Important 1: an unusable LOG_LEVEL is a config error, not a crash -------------------------
+
+
+def test_invalid_log_level_exits_2_naming_the_valid_levels(env, monkeypatch, capsys):
+    """`LOG_LEVEL` is the one key the README invites the user to edit while debugging, and
+    `Logger.setLevel("info")` raises a bare ValueError from the first line of main()."""
+    env.setenv("LOG_LEVEL", "verbose")
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: pytest.fail("never reached"))
+
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+
+    assert exc.value.code == main.EXIT_CONFIG
+    err = capsys.readouterr().err
+    assert "verbose" in err
+    assert "DEBUG" in err and "INFO" in err
+
+
+def test_lowercase_log_level_is_accepted(env, monkeypatch, clean_logging):
+    env.setenv("LOG_LEVEL", "debug")
+    app = _build(env)
+    app.store.migrate()
+    monkeypatch.setattr(app.telegram_app, "run_polling", lambda *a, **k: None)
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: app)
+
+    main.main()
+
+    assert logging.getLogger().level == logging.DEBUG
+
+
+# ---- Important 2: a failed admin bind must not take the bot down ------------------------------
+
+
+async def test_admin_bind_failure_only_warns_and_startup_continues(env, caplog):
+    """`WinError 10013` on 8787 (an excluded port range, or something already listening) is a
+    routine Windows failure. Unguarded it escapes post_init, past Application.__run's
+    `except (KeyboardInterrupt, SystemExit)`, and out of run_polling() — losing the whole bot for
+    the sake of a page that ADMIN_UI_PORT=0 would have turned off anyway."""
+    app = _build(env, admin_port=18796)
+    app.store.migrate()
+
+    def _bind_fails() -> None:
+        raise OSError(10013, "An attempt was made to access a socket in a forbidden way")
+
+    app.admin.start = _bind_fails
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        await main.post_init_checks(app, FakeApplication())  # must not raise
+
+    assert app.fatal is None
+    assert any("admin" in m.lower() and "18796" in m for m in _messages(caplog))
+
+
+# ---- the Telegram command menu ----------------------------------------------------------------
+
+
+async def test_post_init_publishes_the_command_menu(env, stub_command_menu):
+    app = _build(env)
+    app.store.migrate()
+    application = FakeApplication()
+
+    await main.post_init_checks(app, application)
+
+    assert stub_command_menu == [application.bot]
+
+
+async def test_register_commands_publishes_every_command():
+    """Without set_my_commands, Telegram shows no "/" menu at all and the user has to remember
+    every command unaided."""
+    bot = FakeTelegramBot()
+
+    await _REAL_REGISTER_COMMANDS(bot)
+
+    assert [c.command for c in bot.commands] == list(texts.COMMANDS)
+    assert [c.description for c in bot.commands] == list(texts.COMMANDS.values())
+
+
+async def test_register_commands_survives_an_unreachable_telegram(caplog):
+    """Not fatal, and the log line carries the exception class only — an InvalidToken raised here
+    would carry the bot token in its message."""
+
+    class _Failing:
+        async def set_my_commands(self, commands):
+            raise InvalidToken("The token `123:SECRET` was rejected by the server.")
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        await _REAL_REGISTER_COMMANDS(_Failing())  # must not raise
+
+    messages = _messages(caplog)
+    assert any("command menu" in m for m in messages)
+    assert not any("SECRET" in m for m in messages)

@@ -8,9 +8,9 @@ load-bearing rather than cosmetic:
 
 * `startup_checks(app)` — settings (exit 2) and schema (exit 4) — is synchronous and runs in
   `main()` before any event loop exists.
-* `post_init_checks(app, application)` — Ollama, Notion, initial discovery, the admin server —
-  is async and runs from `Application.post_init`, i.e. inside python-telegram-bot's own event
-  loop, the same one that later does the real polling.
+* `post_init_checks(app, application)` — Ollama, Notion, initial discovery, the Telegram command
+  menu, the admin server — is async and runs from `Application.post_init`, i.e. inside
+  python-telegram-bot's own event loop, the same one that later does the real polling.
 
 The split exists because of a real, reproduced failure mode: running the async checks in a
 throwaway `asyncio.run(...)` before calling `Application.run_polling()` leaves the very same
@@ -43,8 +43,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import NoReturn
 
+from telegram import Bot, BotCommand
+from telegram.error import InvalidToken
 from telegram.ext import Application
 
+from app import texts
 from app.admin.server import AdminServer
 from app.audit.migrate import MigrationError
 from app.audit.store import AuditStore
@@ -86,6 +89,15 @@ _NOTION_AUTH_STATUSES = frozenset({401, 403})
 # job — the very first startup check, which exits the process long before polling would ever put
 # this placeholder in front of Telegram.
 _PLACEHOLDER_TOKEN = "0:MISSING-TELEGRAM-BOT-TOKEN"
+
+# What main() prints when Telegram itself rejects the token. Fixed text, never `str(e)` and never
+# `exc_info`: python-telegram-bot builds `InvalidToken`'s message by interpolating the token into
+# it (`telegram/_bot.py`: "The token `<token>` was rejected by the server."), so printing or
+# logging that exception is exactly the leak this message exists to avoid.
+_TELEGRAM_TOKEN_REJECTED = (
+    "configuration error: Telegram rejected the bot token. Check TELEGRAM_BOT_TOKEN in .env "
+    "(re-issue it with @BotFather if it was revoked) and restart."
+)
 
 ProviderFactory = Callable[[Settings], NotionProvider]
 LLMFactory = Callable[[Settings], LLMClient]
@@ -281,11 +293,26 @@ def startup_checks(app: App) -> None:
         _die(EXIT_PENDING_MIGRATION, str(e))
 
 
+async def _register_commands(bot: Bot) -> None:
+    """Publishes the command menu Telegram shows behind the "/" button. Without this call the
+    client offers no menu at all and the user has to remember every command unaided.
+
+    Never fatal: an unreachable Telegram here means the same thing it means anywhere else in this
+    function — try again later — and the bot is perfectly usable with commands typed by hand. The
+    log line carries the exception's *class* only, never its message: an `InvalidToken` raised
+    here would carry the bot token in its text (see `_TELEGRAM_TOKEN_REJECTED`)."""
+    commands = [BotCommand(name, description) for name, description in texts.COMMANDS.items()]
+    try:
+        await bot.set_my_commands(commands)
+    except Exception as e:
+        log.warning("could not publish the Telegram command menu (%s)", type(e).__name__)
+
+
 async def post_init_checks(app: App, application: Application) -> None:
-    """Everything that needs a running event loop: Ollama, Notion, initial discovery, the admin
-    server. Called from `Application.post_init` (wired in `build()`), so it shares PTB's own loop
-    with every real call `app.provider`/`app.llm` make later — see the module docstring for why
-    that is not optional.
+    """Everything that needs a running event loop: Ollama, Notion, initial discovery, the
+    Telegram command menu, the admin server. Called from `Application.post_init` (wired in
+    `build()`), so it shares PTB's own loop with every real call `app.provider`/`app.llm` make
+    later — see the module docstring for why that is not optional.
 
     A Notion auth failure is the one fatal condition in here, but it cannot be reported with
     `sys.exit()`: `Application._Application__run` wraps the whole bootstrap — including the
@@ -335,8 +362,21 @@ async def post_init_checks(app: App, application: Application) -> None:
     # Whisper (app.speech) is deliberately not touched here: the model loads lazily, off the
     # event loop, on the first voice message (app/speech/whisper_local.py).
 
+    await _register_commands(application.bot)
+
     if app.settings.admin_ui_port > 0:
-        app.admin.start()
+        # The admin page is optional by design (ADMIN_UI_PORT=0 turns it off), so losing the port
+        # — already taken, or inside a Windows excluded port range, which is a routine WinError
+        # 10013 on 8787 — must not take the bot down with it. Unguarded, this OSError would
+        # escape post_init, sail past Application.__run's `except (KeyboardInterrupt,
+        # SystemExit)` and out of run_polling().
+        try:
+            app.admin.start()
+        except OSError as e:
+            log.warning(
+                "admin page could not bind 127.0.0.1:%d (%s); continuing without it",
+                app.settings.admin_ui_port, e,
+            )
 
 
 def main() -> None:
@@ -346,10 +386,30 @@ def main() -> None:
         configure("INFO")
         _die(EXIT_CONFIG, _config_error_message(e))
 
-    configure(settings.log_level)
+    # Logging is configured before build() on purpose: build() constructs the ExtBot that logs
+    # the token-bearing API URL at DEBUG, so the floor and the redaction must already be in
+    # place. The two secret *values* go in here and nowhere else.
+    try:
+        configure(
+            settings.log_level,
+            redact=(
+                settings.telegram_bot_token.get_secret_value(),
+                settings.notion_token.get_secret_value(),
+            ),
+        )
+    except ValueError as e:
+        _die(EXIT_CONFIG, f"configuration error: {e}. Fix .env and restart.")
+
     app = build(settings)
     startup_checks(app)  # sync: settings + schema; exits 2/4 directly, no event loop involved
-    app.telegram_app.run_polling()
+    try:
+        app.telegram_app.run_polling()
+    except InvalidToken:
+        # Telegram refused the token (mistyped, revoked, regenerated). PTB re-raises this out of
+        # run_polling() — it is neither KeyboardInterrupt nor SystemExit, so without this catch
+        # Python would print the whole traceback, token and all. Nothing about `e` is printed or
+        # logged: see _TELEGRAM_TOKEN_REJECTED.
+        _die(EXIT_CONFIG, _TELEGRAM_TOKEN_REJECTED)
     if app.fatal is not None:  # post_init_checks found a fatal Notion auth failure and stopped
         _die(*app.fatal)
 

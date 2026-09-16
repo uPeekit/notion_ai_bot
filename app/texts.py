@@ -86,6 +86,10 @@ INBOX_FAILED = "Не удалось сохранить в «{target_name}»."
 INBOX_NOTE = "Причина: {reason}"
 INBOX_NOTE_UNANSWERED = "Остался без ответа вопрос: {question}"
 CANCELLED = "Отменено."
+# Sent the moment a voice note arrives, before the download and `speech.transcribe` — the first
+# one of a run loads (and, the very first time, downloads ~1.5 GB of) the Whisper model, which can
+# take minutes during which the bot would otherwise be indistinguishable from a dead one.
+VOICE_TRANSCRIBING = "Расшифровываю голосовое сообщение…"
 UNDONE = "↩️ Отменено."
 ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)
 # A delivered keyboard cannot be withdrawn, so the inbox offer can be pressed again after
@@ -125,6 +129,7 @@ HELP_TEXT = (
     "Я сохраняю и обновляю записи в Notion по текстовым и голосовым сообщениям.\n"
     "Просто напишите или наговорите, что нужно сделать — я найду подходящий раздел.\n\n"
     "Команды:\n"
+    "/start — начать работу\n"
     "/help — это сообщение\n"
     "/undo — отменить последнее действие\n"
     "/cancel — отменить текущий вопрос\n"
@@ -135,6 +140,19 @@ HELP_TEXT = (
 )
 
 REFRESH_DONE = "Обновлено. Разделов: {count}."
+
+# The command menu Telegram shows behind the "/" button, published by app.main._register_commands
+# via set_my_commands. Keys are command names without the slash; the order here is the order the
+# menu shows. Every command registered in app.telegram.handlers.register belongs here, and
+# HELP_TEXT lists the same set in prose.
+COMMANDS: dict[str, str] = {
+    "start": "Начать работу",
+    "help": "Что умеет бот и какие есть команды",
+    "undo": "Отменить последнее действие",
+    "cancel": "Отменить текущий вопрос",
+    "refresh": "Обновить список разделов Notion",
+    "targets": "Показать список разделов",
+}
 
 TARGETS_HEADER = "Разделы Notion:"
 TARGETS_NONE_YET = "Список разделов ещё не загружен. Отправьте /refresh."
