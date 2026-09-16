@@ -193,18 +193,77 @@ a follow-up prompt tweak (e.g. a title-specific counter-example) rather than a b
 benchmark, since it fully explains llama3.1's `fields`/`all` drop and is isolated to one field on
 one target.
 
+## Run 3 (2026-09-16) — context size and model capacity
+
+Question: was the 8B class a measured choice or an unexamined ceiling? Measured on the same
+machine, first in VRAM and then in accuracy.
+
+**VRAM (measured with `ollama ps`, prompts as configured, Whisper not loaded):**
+
+| config | resident | GPU/CPU split |
+|---|---|---|
+| `qwen3:8b` @ `num_ctx=16384` | 7.8 GB | 80% GPU / 20% CPU |
+| `qwen3:8b` @ `num_ctx=8192` | 6.2 GB | **100% GPU** |
+| `mistral-nemo:12b` (q4) @ 8192 | 8.6 GB | 73% GPU / 27% CPU |
+| `mistral-nemo:12b` q3_K_M @ 8192 | 7.6 GB | 83% GPU / 17% CPU |
+
+The card has 8188 MiB, so nothing in the 12B class fits: the offload *is* the latency cost.
+`qwen3:8b` at 16k was already over the line — the shipped default was paying a 20% CPU offload
+for a context window the prompts (2-4k tokens) never used.
+
+**Accuracy (44 cases, `items_per_target=15`, temperature 0, all run 2026-09-16):**
+
+| model | n | valid | intent | target | fields | all | safe | wrong | p50 ms | p95 ms |
+|---|---|---|---|---|---|---|---|---|---|---|
+| qwen3:8b @ 8192 | 44 | 100% | 86% | 91% | 84% | 68% | 75% | 6 | 7468 | 12467 |
+| qwen3:8b @ 16384 | 44 | 100% | 89% | 91% | 82% | 70% | 77% | 7 | 11468 | 20812 |
+| mistral-nemo:12b q3_K_M @ 8192 | 44 | 100% | 98% | 93% | 86% | 75% | 86% | 4 | 12593 | 21328 |
+| **mistral-nemo:12b @ 8192** | 44 | 100% | 95% | 98% | 91% | **82%** | **91%** | **2** | 15905 | 26656 |
+
+### mistral-nemo:12b failures (8)
+- `buy_shop_prisma`: Магазин: 'not_mentioned' != 'Prisma'
+- `todo_project`: Проект: 'not_mentioned' != 'Работа'
+- `date_friday`: target Покупки; Срок: None != '2026-09-11'
+- `date_time`: Срок: {'start': '2026-09-10T06:45:00+03:00', 'end': None} != '2026-09-10T09:45'
+- `update_bought`: item_candidates [] item=t2.i2
+- `update_not_found`: item_candidates [] item=t2.i1
+- `update_shop`: intent create not in ['update']; item None
+- `unknown_weather`: intent search not in ['unknown']
+
+**On run-to-run variance.** `qwen3:8b` @ 16384 scored 73% `all` / 77% `safe` in Run 2 and 70% /
+77% today at identical settings — one or two cases drift even at temperature 0. Differences of
+one or two cases are therefore noise; the 8k-vs-16k accuracy gap is within it, while the 35%
+latency difference is structural and reproducible.
+
+**Note on the failure set.** `update_bought`/`update_not_found` (collapsing to one item instead of
+returning `item_candidates`) and `unknown_weather` fail for *every* model tested, 4B through 12B.
+Capacity does not fix them; they are prompt/schema bugs. Likewise `date_friday`/`date_explicit`
+are target-selection failures wearing a date costume: the model picks Покупки, which has no date
+field, so a correctly-parsed date is silently dropped. That one is a target-description problem,
+and the descriptions in `tools/sample_workspace.py` are synthetic — it needs a live workspace to
+tune honestly.
+
 ## Decision
 
-**`qwen3:8b` is the new default**, replacing `llama3.1:8b`. Decision rule: highest `safe`, `wrong`
-as a tie-break penalty, then `all`, then p50 latency — qwen3:8b wins outright on the primary
-metric alone (`safe` 77% vs 73%), so the tie-break never engages. It also leads on every other
-axis: `all` 73% vs 57%, `intent` 93% vs 86%, `fields` 82% vs 70%, and p50 13.5 s vs 17.3 s (p95
-26.3 s vs 30.5 s). llama3.1:8b's higher `wrong` count is misleading in isolation (7 vs 8) — most of
-its failures are non-`wrong` (deferred/`not_mentioned`) title omissions caused by the Step 3
-regression noted above, not confidently-wrong values, but they still cost it `all` and `safe`
-relative to qwen3:8b's smaller, more genuine failure set (mostly real date/relation edge cases).
+**`mistral-nemo:12b` at `LLM_NUM_CTX=8192` is the default** (2026-09-16), replacing `qwen3:8b` at
+16384. Decision rule unchanged: highest `safe`, `wrong` as a tie-break penalty, then `all`, then
+p50 — and the 12B wins the primary metric outright, 91% vs 77%, with a third as many
+confidently-wrong values (2 vs 7). It also leads `intent` (95%), `target` (98%) and `fields`
+(91%).
 
-`qwen2.5:7b-instruct` and `gemma3:4b` were not re-benchmarked in Run 2 (only the top two Run 1
-models were re-run, per the tuning brief); they trailed badly in Run 1 (45% `all` each) and there
-is no reason to expect the prompt/calendar changes close that gap, but this is inference, not
-measurement — a future full re-run should confirm before treating them as ruled out.
+The cost is latency: p50 15.9 s vs 11.5 s, because 27% of the model runs on CPU. That trade was
+taken deliberately — for a fire-and-forget assistant, a wrong row written to Notion costs manual
+cleanup, while five extra seconds costs nothing but waiting. `qwen3:8b` @ 8192 remains the
+documented fast alternative (7.5 s p50, 100% GPU-resident) and is a one-line `.env` change.
+
+`mistral-nemo:12b-instruct-2407-q3_K_M` was tested specifically to see whether a smaller
+quantisation would fit fully in VRAM. It does not (7.6 GB, still 17% offloaded), and it gave back
+half the accuracy gain (`safe` 86%, `wrong` 4) to save 3.3 s. Rejected.
+
+Because the 12B leaves no VRAM spare, `.env.example` now ships `WHISPER_DEVICE=cpu`; on a larger
+GPU, or with `LLM_MODEL=qwen3:8b`, `auto` is correct again.
+
+`qwen2.5:7b-instruct` and `gemma3:4b` were not re-benchmarked in Run 2 or Run 3 (only the leading
+candidates were re-run); they trailed badly in Run 1 (45% `all` each) and there is no reason to
+expect the prompt/calendar changes close that gap, but this is inference, not measurement — a
+future full re-run should confirm before treating them as ruled out.

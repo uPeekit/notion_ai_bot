@@ -384,12 +384,12 @@ Secrets are never written. `llm_context` contains keys, not Notion ids.
 | `NOTION_TOKEN` | required | internal integration secret |
 | `NOTION_VERSION` | `2025-09-03` | |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | point at remote host later |
-| `LLM_MODEL` | `qwen3:8b` | |
+| `LLM_MODEL` | `mistral-nemo:12b` | |
 | `LLM_TEMPERATURE` | `0` | |
-| `LLM_NUM_CTX` | `16384` | |
+| `LLM_NUM_CTX` | `8192` | fits the KV cache in 8 GB VRAM |
 | `LLM_TIMEOUT_S` | `120` | |
 | `WHISPER_MODEL` | `large-v3-turbo` | |
-| `WHISPER_DEVICE` | `auto` | `cuda` / `cpu` |
+| `WHISPER_DEVICE` | `auto` | `cuda` / `cpu`; `.env.example` ships `cpu` — no VRAM left beside a 12B |
 | `WHISPER_COMPUTE_TYPE` | `int8` | |
 | `WHISPER_LANGUAGE` | `ru` | empty = autodetect |
 | `TIMEZONE` | `Europe/Tallinn` | |

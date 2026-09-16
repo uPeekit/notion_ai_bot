@@ -17,7 +17,7 @@ Complexity: S < 1 h, M 1–3 h, L 3–6 h, XL > 6 h (agent time).
 | ID | Task | Depends | Cx | Acceptance |
 |---|---|---|---|---|
 | T-001 | Install `uv`; `uv init` project, Python 3.12 pinned; `pyproject.toml` with deps: python-telegram-bot, httpx, pydantic, pydantic-settings, faster-whisper, pyyaml, pytest, pytest-asyncio, ruff | — | S | `uv sync` succeeds; `uv run pytest` runs 0 tests |
-| T-002 | Install Ollama; pull `qwen3:8b`, `qwen2.5:7b-instruct`, `llama3.1:8b`, `gemma3:4b` | — | S | `ollama list` shows models; `/api/chat` with `format` returns JSON |
+| T-002 | Install Ollama; pull `mistral-nemo:12b` (default), `qwen3:8b`, `qwen2.5:7b-instruct`, `llama3.1:8b`, `gemma3:4b` | — | S | `ollama list` shows models; `/api/chat` with `format` returns JSON |
 | T-003 | `.env.example`, `.gitignore` (data/, .env, .venv), README setup section: Notion integration creation + sharing pages, Telegram bot creation, CUDA libs for Whisper | T-001 | S | fresh clone can follow README to a running bot |
 | T-004 | `app/config.py` Settings with all keys from DATA_MODEL §7; validation of allowlist and thresholds | T-001 | S | tests: missing token fails, defaults load |
 

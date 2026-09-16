@@ -277,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--ollama", default="http://127.0.0.1:11434")
-    ap.add_argument("--num-ctx", type=int, default=16384)
+    ap.add_argument("--num-ctx", type=int, default=8192)
     ap.add_argument("--items-per-target", type=int, default=15)
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--write", type=Path)

@@ -436,7 +436,13 @@ save); `/targets` prints the tree as text, with the inbox target marked.
 
 ## 13. Model selection
 
-Candidates fitting 8 GB VRAM alongside int8 Whisper turbo (~1.5 GB): `qwen3:8b` (default; benchmark winner after prompt tuning, `think: false`, see [BENCHMARK.md](BENCHMARK.md)), `llama3.1:8b` (runner-up), `qwen2.5:7b-instruct`, `gemma3:4b` (fast fallback). `mistral-nemo:12b` and `gemma3:12b` only with CPU offload. `tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each and reports schema-validity rate, target/field accuracy, a safety-weighted `safe`/`wrong` split, and p50/p95 latency. `LLM_NUM_CTX=16384` default.
+`mistral-nemo:12b` is the default: it wins the benchmark outright on the metric that matters (`safe` 91%, only 2 confidently-wrong values in 44 cases, vs 75%/6 for `qwen3:8b`), at roughly twice the latency (p50 15.9 s vs 7.5 s). See [BENCHMARK.md](BENCHMARK.md).
+
+Nothing in the 12B class fits an 8 GB card: measured on an RTX 4070 Laptop at `LLM_NUM_CTX=8192`, `mistral-nemo:12b` occupies 8.6 GB and Ollama offloads 27% to CPU — that offload *is* the latency cost. A q3 quantisation (7.6 GB, 17% offloaded) was tested and rejected: it gave back half the accuracy gain to save 3 s. `qwen3:8b` at 8k is the only candidate that runs entirely on the GPU (6.2 GB) and stays the documented fast alternative, with `gemma3:4b` below it.
+
+`LLM_NUM_CTX=8192` is the default because 16384 costs ~1.6 GB more KV cache; on this card that pushed even `qwen3:8b` into a 20% CPU offload and ~35% more latency for no measurable accuracy gain. Prompts run 2-4k tokens, so 8k leaves ample headroom — `LLMContextOverflow` guards the rest. Because the 12B leaves no VRAM spare, `.env.example` ships `WHISPER_DEVICE=cpu`.
+
+`tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each model and reports schema-validity rate, target/field accuracy, the safety-weighted `safe`/`wrong` split, and p50/p95 latency; `think: false` is sent only to models that support it.
 
 ## 14. Security boundaries
 

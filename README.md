@@ -43,12 +43,14 @@ in one `.env` file.
    [Ollama](https://ollama.com)**.
 2. **Pull the local model:**
    ```powershell
-   ollama pull qwen3:8b
+   ollama pull mistral-nemo:12b
    ```
-   `qwen3:8b` is the default (`LLM_MODEL` in `.env`) — it's the model this project's own
-   benchmark picked as most reliable at this size; see
-   [documentation/BENCHMARK.md](documentation/BENCHMARK.md) if you're curious why. It was tuned
-   on an 8 GB VRAM laptop GPU alongside Whisper; it also runs on CPU, just more slowly.
+   `mistral-nemo:12b` is the default (`LLM_MODEL` in `.env`). This project's own benchmark
+   picked it: it makes a third as many confidently-wrong writes as the 8B alternatives, which
+   is the failure that costs you cleanup in Notion. It answers in ~16 s on an 8 GB laptop GPU.
+   If you'd rather have ~8 s and accept more mistakes, `ollama pull qwen3:8b` and set
+   `LLM_MODEL=qwen3:8b`. See [documentation/BENCHMARK.md](documentation/BENCHMARK.md) for the
+   numbers behind both.
 3. **Get a Notion token.** Follow [documentation/NOTION_SETUP.md](documentation/NOTION_SETUP.md)
    — two minutes, a personal access token from Notion's developer portal. This is what lets the
    bot see and write to your workspace; nothing is shared until you put the token in `.env`.
@@ -91,9 +93,9 @@ with a default; these are the ones worth knowing about once the bot is running:
 | `TELEGRAM_BOT_TOKEN` | — (required) | From @BotFather. |
 | `TELEGRAM_ALLOWED_USER_IDS` | — (required) | Comma-separated numeric Telegram user ids. Anyone else's message is silently ignored — no reply, nothing written anywhere. Add a second id here to let another person use the same bot. |
 | `NOTION_TOKEN` | — (required) | Your personal access token (or internal-connection secret) — see [NOTION_SETUP.md](documentation/NOTION_SETUP.md). |
-| `LLM_MODEL` | `qwen3:8b` | The Ollama model tag. Must be pulled (`ollama pull <tag>`) — a missing model only warns at startup, it doesn't stop the bot, so a typo here means every message just fails until you fix it. |
+| `LLM_MODEL` | `mistral-nemo:12b` | The Ollama model tag. Must be pulled (`ollama pull <tag>`) — a missing model only warns at startup, it doesn't stop the bot, so a typo here means every message just fails until you fix it. |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Where Ollama is listening. Point this at another machine's Ollama on your network to run the model somewhere else — see below. |
-| `WHISPER_MODEL` / `WHISPER_DEVICE` / `WHISPER_COMPUTE_TYPE` / `WHISPER_LANGUAGE` | `large-v3-turbo` / `auto` / `int8` / `ru` | Speech recognition. `WHISPER_DEVICE=auto` tries your GPU first and falls back to CPU automatically (and remembers that decision for as long as the process runs) — set it to `cpu` yourself if you'd rather not wait for the automatic fallback on a machine you know has no usable GPU. |
+| `WHISPER_MODEL` / `WHISPER_DEVICE` / `WHISPER_COMPUTE_TYPE` / `WHISPER_LANGUAGE` | `large-v3-turbo` / `auto` / `int8` / `ru` | Speech recognition. `WHISPER_DEVICE=auto` tries your GPU first and falls back to CPU automatically (and remembers that decision for as long as the process runs). **`.env.example` ships `cpu`**, because the default 12B model uses all 8 GB of an RTX 4070 Laptop and leaves nothing for Whisper — on a bigger GPU, or with `LLM_MODEL=qwen3:8b`, `auto` is fine. |
 | `INBOX_MODE` | `auto` | `auto` saves an unresolved message immediately and still offers `[Отменить]`/`[В разное]`; `button` only saves when you press `[В разное]`; `off` disables the inbox entirely. |
 | `INBOX_TARGET_ID` | (empty) | Overrides the admin page's inbox pick — see below. Leave empty and use the admin page instead unless you have a reason to hard-code a target id. |
 | `ADMIN_UI_PORT` | `8787` | The local admin page's port (`http://127.0.0.1:8787`). Set to `0` to disable the admin page entirely. |
