@@ -78,7 +78,16 @@ def _targets_payload(discovery: Discovery, *, inbox_locked: bool) -> dict[str, A
     }
 
 
-def _merge_target(existing: TargetMeta, posted: dict[str, Any]) -> TargetMeta:
+def _merge_target(
+    existing: TargetMeta, posted: dict[str, Any], *, inbox_locked: bool
+) -> TargetMeta:
+    """Folds one posted target body into the TargetMeta already in the yaml.
+
+    `inbox_locked` (INBOX_TARGET_ID is set in `.env`) makes the posted `inbox` flag a no-op: the
+    page disables the radio group but a disabled radio is still `checked`, and `collectBody`
+    reads `.checked`, so every save while the override is active would otherwise persist the
+    env-chosen target's `inbox: true` into the file. Unsetting the env var later would then leave
+    an inbox the user never picked — the override would have silently made a permanent choice."""
     fields = dict(existing.fields)
     posted_fields = posted.get("fields") or {}
     for fid, fbody in posted_fields.items():
@@ -92,11 +101,13 @@ def _merge_target(existing: TargetMeta, posted: dict[str, Any]) -> TargetMeta:
         name=existing.name,
         description=str(posted.get("description", existing.description)),
         fields=fields,
-        inbox=bool(posted.get("inbox", existing.inbox)),
+        inbox=existing.inbox if inbox_locked else bool(posted.get("inbox", existing.inbox)),
     )
 
 
-def _apply_descriptions(descriptions: Descriptions, discovery: Discovery, body: Any) -> int:
+def _apply_descriptions(
+    descriptions: Descriptions, discovery: Discovery, body: Any, *, inbox_locked: bool = False
+) -> int:
     """Validates the whole posted document against the last snapshot, merges it into the
     existing yaml (load -> merge -> save, since Descriptions.save replaces the file), and
     returns how many targets actually changed. Raises ValueError on any invalid input; the
@@ -129,7 +140,7 @@ def _apply_descriptions(descriptions: Descriptions, discovery: Discovery, body: 
     changed = 0
     for tid, tbody in posted_targets.items():
         existing = merged.get(tid, TargetMeta())
-        updated = _merge_target(existing, tbody)
+        updated = _merge_target(existing, tbody, inbox_locked=inbox_locked)
         if updated != existing:
             changed += 1
         merged[tid] = updated
@@ -213,7 +224,10 @@ class _Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         try:
             body = json.loads(raw) if raw else {}
-            saved = _apply_descriptions(self.server.descriptions, self.server.discovery, body)
+            saved = _apply_descriptions(
+                self.server.descriptions, self.server.discovery, body,
+                inbox_locked=bool(self.server.app_settings.inbox_target_id),
+            )
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
             log.warning("rejected POST /api/descriptions: %s", e)
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request"})

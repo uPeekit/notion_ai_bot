@@ -74,6 +74,7 @@
   Инбокс задан переменной окружения <code>INBOX_TARGET_ID</code> в <code>.env</code> — выбор
   ниже недоступен, пока она установлена.
 </div>
+<div id="load-error" class="notice" hidden></div>
 <div id="empty-state" class="empty" hidden>
   Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
   Запустите бота и обновите эту страницу.
@@ -201,14 +202,32 @@ function showFetchedAt(iso) {
   line.textContent = "Данные из Notion получены: " + d.toLocaleString("ru-RU");
 }
 
+function showLoadError(message) {
+  var box = document.getElementById("load-error");
+  box.textContent = message
+    ? "Не удалось загрузить список целей (" + message + "). Проверьте, что бот запущен, " +
+      "и обновите страницу."
+    : "";
+  box.hidden = !message;
+}
+
+// Always resolves: a failed /api/targets must say so on the page rather than leave a blank one
+// behind an unhandled promise rejection nobody sees without the browser console open.
 function load() {
   return fetch("/api/targets")
-    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r.ok) { throw new Error("HTTP " + r.status); }
+      return r.json();
+    })
     .then(function (data) {
       state.targets = data.targets || [];
       state.inboxLocked = !!data.inbox_locked;
+      showLoadError("");
       showFetchedAt(data.fetched_at || null);
       render();
+    })
+    .catch(function (e) {
+      showLoadError(e && e.message ? e.message : "ошибка сети");
     });
 }
 

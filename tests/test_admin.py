@@ -247,3 +247,71 @@ def test_content_length_over_cap_rejected(server, descriptions):
     )
     assert status == 400
     assert not descriptions._path.exists()
+
+
+# ---- the INBOX_TARGET_ID override must not be written into the file ----------------------------
+
+
+@pytest.fixture
+def locked_server(env, discovery, descriptions):
+    """A server whose settings carry INBOX_TARGET_ID, i.e. the page's inbox radios are disabled."""
+    s = AdminServer(
+        Settings(_env_file=None, admin_ui_port=0, inbox_target_id="ds-buy"),
+        discovery, descriptions,
+    )
+    s.start()
+    yield s
+    s.stop()
+
+
+def test_inbox_flag_is_not_persisted_while_the_env_override_is_active(
+    locked_server, descriptions
+):
+    """The page disables the radio group when INBOX_TARGET_ID is set, but a disabled radio is
+    still `checked` and `collectBody` reads `.checked` — so every save posts the env-chosen
+    target's `inbox: true`. Persisting it would leave an inbox the user never picked behind once
+    the env var is unset again."""
+    payload = {
+        "targets": {"ds-buy": {"description": "Мой список", "inbox": True, "fields": {}}},
+    }
+    status, _ = _post(locked_server, "/api/descriptions", payload)
+
+    assert status == 200
+    on_disk = yaml.safe_load(descriptions._path.read_text(encoding="utf-8"))
+    assert on_disk["ds-buy"]["description"] == "Мой список"  # the rest of the save still applies
+    assert on_disk["ds-buy"]["inbox"] is False
+
+
+def test_inbox_flag_already_in_the_file_survives_a_locked_save(locked_server, descriptions):
+    """The override hides the user's own earlier choice; a save while it is active must not
+    quietly clear it either."""
+    descriptions.save({"ds-todo": TargetMeta(description="x", inbox=True)})
+    payload = {"targets": {"ds-buy": {"description": "y", "inbox": True, "fields": {}}}}
+
+    status, _ = _post(locked_server, "/api/descriptions", payload)
+
+    assert status == 200
+    assert descriptions.load()["ds-todo"].inbox is True
+
+
+def test_inbox_flag_is_persisted_when_no_override_is_set(server, descriptions):
+    payload = {"targets": {"ds-buy": {"description": "x", "inbox": True, "fields": {}}}}
+
+    status, _ = _post(server, "/api/descriptions", payload)
+
+    assert status == 200
+    assert descriptions.load()["ds-buy"].inbox is True
+
+
+# ---- the page reports a failed load instead of going blank ------------------------------------
+
+
+def test_page_surfaces_a_failed_targets_fetch(server):
+    """An unhandled promise rejection in load() leaves a blank page and a message only visible in
+    the browser console; the page has to say something itself."""
+    _, body = _get(server, "/")
+    html = body.decode("utf-8")
+    load_fn = html.split("function load()", 1)[1].split("function collectBody", 1)[0]
+    assert ".catch(" in load_fn
+    assert "showLoadError" in load_fn
+    assert 'id="load-error"' in html

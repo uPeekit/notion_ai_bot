@@ -54,6 +54,13 @@ class Discovery:
         self._inbox_target_id = inbox_target_id
         self._last: WorkspaceSnapshot | None = None
         self._force = False
+        # Monotonic count of invalidate() calls, so get() can tell "the invalidation I started
+        # this refresh for" from "somebody invalidated the cache while I was fetching" and only
+        # clear the flag in the first case. Without it, a save on the admin page (a different
+        # thread) made during an in-flight refresh was swallowed for a whole TTL: the admin sets
+        # _force, the refresh already under way clears it, and the snapshot it stores predates
+        # the save — while the README promises the save takes effect with no restart.
+        self._invalidations = 0
         self._lock = asyncio.Lock()
 
     @property
@@ -61,11 +68,15 @@ class Discovery:
         return self._last
 
     def invalidate(self) -> None:
+        """Forces the next `get()` to refetch. Called from the admin server's HTTP thread as well
+        as from the event loop, so it does the two cheapest possible stores and nothing else."""
+        self._invalidations += 1
         self._force = True
 
     async def get(self) -> WorkspaceSnapshot:
         async with self._lock:
             now = self._clock()
+            seen = self._invalidations
             needs_refresh = (
                 self._last is None
                 or self._force
@@ -82,7 +93,8 @@ class Discovery:
                     )
                     return self._last
                 raise
-            self._force = False
+            if self._invalidations == seen:
+                self._force = False  # nobody invalidated while we were fetching
             return snap
 
     async def refresh(self) -> WorkspaceSnapshot:

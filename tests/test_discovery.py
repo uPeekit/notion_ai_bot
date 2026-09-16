@@ -212,3 +212,31 @@ async def test_two_flagged_targets_lowest_id_wins_with_warning(fake, tmp_path, c
     assert snap.target("ds-buy").is_inbox is True  # "ds-buy" < "ds-shops"
     assert snap.target("ds-shops").is_inbox is False
     assert "inbox" in caplog.text.lower()
+
+
+async def test_invalidation_during_an_in_flight_refresh_is_not_swallowed(fake, tmp_path):
+    """The admin page saves `targets.yaml` from its own HTTP thread and calls invalidate() to
+    make the change visible without a restart. If that lands while a refresh is already running,
+    the refresh must not clear the flag it never saw: the snapshot it is about to store predates
+    the save, so the *next* get() has to refetch rather than serve it for a whole TTL."""
+    t = {"now": datetime(2026, 9, 9, 12, 0, tzinfo=UTC)}
+    disco = Discovery(fake, Descriptions(tmp_path / "t.yaml"), ttl_s=600, clock=lambda: t["now"])
+    first = await disco.get()
+
+    search = fake.search
+    invalidated_mid_flight = {"done": False}
+
+    async def search_then_invalidate(*args, **kwargs):
+        results = await search(*args, **kwargs)
+        if not invalidated_mid_flight["done"]:
+            invalidated_mid_flight["done"] = True
+            disco.invalidate()  # arrives while this very refresh is still running
+        return results
+
+    fake.search = search_then_invalidate
+    disco.invalidate()
+    second = await disco.get()
+    assert second is not first
+
+    third = await disco.get()  # well inside the TTL: only the surviving flag can force this
+    assert third is not second
