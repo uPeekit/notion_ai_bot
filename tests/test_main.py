@@ -19,6 +19,9 @@ from telegram.error import InvalidToken
 
 from app import main, texts
 from app.config import Settings
+from app.llm.claude import ClaudeClient
+from app.llm.fallback import FallbackLLM
+from app.llm.ollama import OllamaClient
 from app.notion.errors import NotionError
 from tests.fakes import FakeLLM, FakeNotionProvider
 
@@ -26,9 +29,11 @@ from tests.fakes import FakeLLM, FakeNotionProvider
 # exercise the real command registration call this instead of the stubbed attribute.
 _REAL_REGISTER_COMMANDS = main._register_commands
 
-# The two secret values tests.conftest's `env` fixture puts in the environment.
+# The two secret values tests.conftest's `env` fixture puts in the environment, and the one a
+# test adds when it needs Claude configured.
 TELEGRAM_TOKEN = "tg-test-token"
 NOTION_TOKEN = "ntn-test-token"
+ANTHROPIC_KEY = "sk-ant-test-key"
 
 
 class FakeTelegramBot:
@@ -181,6 +186,27 @@ async def test_notion_5xx_only_warns_and_continues(env, caplog):
     assert app.fatal is None
     assert any("notion check failed" in m for m in _messages(caplog))
     assert app.discovery.last is not None  # startup continued past the warning into discovery
+
+
+# ---- which interpreter ------------------------------------------------------------------------
+
+
+def test_default_llm_is_local_without_an_anthropic_key(env):
+    assert isinstance(main._default_llm(Settings()), OllamaClient)
+
+
+def test_default_llm_is_claude_with_local_fallback_when_a_key_is_set(env):
+    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    llm = main._default_llm(Settings())
+    assert isinstance(llm, FallbackLLM)
+    assert isinstance(llm.primary, ClaudeClient) and llm.primary.model == "claude-haiku-4-5"
+    assert isinstance(llm.fallback, OllamaClient)
+
+
+def test_llm_cloud_false_keeps_everything_local_even_with_a_key(env):
+    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    env.setenv("LLM_CLOUD", "false")
+    assert isinstance(main._default_llm(Settings()), OllamaClient)
 
 
 # ---- post_init_checks: warnings, not fatal ------------------------------------------------------
@@ -357,9 +383,10 @@ def test_invalid_telegram_token_exits_2_instead_of_printing_a_traceback(
     assert "TELEGRAM_BOT_TOKEN" in err
 
 
-def test_main_passes_both_token_values_to_the_log_redactor(env, monkeypatch, clean_logging):
-    """The redaction only works if main() actually hands `configure` the two secret values — and
+def test_main_passes_every_token_value_to_the_log_redactor(env, monkeypatch, clean_logging):
+    """The redaction only works if main() actually hands `configure` the secret values — and
     nothing else, no Settings object."""
+    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
     app = _build(env)
     app.store.migrate()
     recorded = {}
@@ -375,7 +402,7 @@ def test_main_passes_both_token_values_to_the_log_redactor(env, monkeypatch, cle
 
     main.main()
 
-    assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN)
+    assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN, ANTHROPIC_KEY)
     assert recorded["log_file"] == "logs/bot.log"  # the default reaches the file handler
 
 

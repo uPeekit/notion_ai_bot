@@ -74,7 +74,10 @@ event_id_var: ContextVar[str] = ContextVar("event_id", default=NO_EVENT)
 # "<method> <url>" for every request (INFO), and telegram.ext.ExtBot logs the same token-bearing
 # URL once at construction time (DEBUG, via its "Set Bot API URL" lines) — see the module
 # docstring. Held at WARNING no matter what level configure() itself is given.
-_THIRD_PARTY_WARNING_ONLY = ("httpx", "httpcore", "telegram.ext.ExtBot", "telegram.Bot")
+# The Anthropic SDK (and the httpx2 it ships with) log request details at DEBUG; same floor.
+_THIRD_PARTY_WARNING_ONLY = (
+    "httpx", "httpcore", "telegram.ext.ExtBot", "telegram.Bot", "anthropic", "httpx2",
+)
 
 
 class _EventIdFilter(logging.Filter):
@@ -130,9 +133,9 @@ def configure(
     and `Logger.setLevel` would raise a bare `ValueError` on it); an unknown name raises a
     `ValueError` naming every valid one, which `app.main` turns into a config exit.
 
-    `redact` is a sequence of secret *values* — `app.main` passes the Telegram and Notion token
-    values, nothing else. It is keyword-only and deliberately not a `Settings`: this module must
-    stay unable to discover a secret it was not explicitly handed.
+    `redact` is a sequence of secret *values* — `app.main` passes the Telegram, Notion and
+    Anthropic token values, nothing else. It is keyword-only and deliberately not a `Settings`:
+    this module must stay unable to discover a secret it was not explicitly handed.
 
     `log_file`, when given, adds a rotating file handler carrying the *same* filter and the same
     redacting formatter — a file is where a leaked token would outlive the console window, so it

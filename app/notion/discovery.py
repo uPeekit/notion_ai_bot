@@ -279,6 +279,7 @@ class Discovery:
             description=m.description or t.description,
             parent_page_id=t.parent_page_id, database_id=t.database_id, fields=fields,
             items=t.items, operations=t.operations, url=t.url, is_inbox=m.inbox,
+            local_only=m.local_only,
         )
 
     @staticmethod

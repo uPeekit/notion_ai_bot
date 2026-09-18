@@ -267,3 +267,36 @@ GPU, or with `LLM_MODEL=qwen3:8b`, `auto` is correct again.
 candidates were re-run); they trailed badly in Run 1 (45% `all` each) and there is no reason to
 expect the prompt/calendar changes close that gap, but this is inference, not measurement — a
 future full re-run should confirm before treating them as ruled out.
+
+## Run 4 (2026-09-19) — reasoning first, named targets
+
+A live message, «Купи слона.», was sent to `Databases` (0.7) / `Books` (0.3) — the first two
+targets in the list — while the model's own `notes` said "a shopping item or a task". With
+opaque keys `t1…tN` the model drifts to the first keys when unsure, and `notes`, generated
+last, could only describe a choice already made. Two changes, both on by default:
+
+- **Reasoning first:** `notes` is the first property of the answer (≤ 300 characters), so the
+  choice is generated after, and conditioned on, the model's own reading of the message.
+- **Named targets:** each candidate writes `target_name` (a const `"<name> [kind]"`) before
+  `target`, so the model picks between meaningful words instead of bare keys.
+
+`tools/benchmark_llm.py --no-reasoning-first --no-target-names` reproduces the old behaviour.
+
+| cases | setting | target | all | safe | wrong | p50 |
+|---|---|---|---|---|---|---|
+| real workspace (19, private) | baseline | 58% | 32% | 42% | 8 | 32.4 s |
+| real workspace (19, private) | both on | 74% | 37% | 47% | 7 | 24.0 s |
+| synthetic (44) | Run 3 | 98% | 82% | 91% | 2 | 15.9 s |
+| synthetic (44) | both on | 98% | 84% | 89% | 1 | 32.1 s* |
+
+The real-workspace set replays a captured copy of the owner's own workspace
+(`tools/capture_workspace.py`, kept under the git-ignored `data/eval/`) with expectations not
+yet reviewed by the owner; the wrong target — the failure that prompted this — fell from 8 to 5
+cases, and the stray `Databases` pick from 3 to 0. Most of what still fails there is
+tags: tasks live in one TODO database, and pages like `дом`/`gnezdo` are views of it filtered
+by a tag, which the model cannot know (planned: marking views on the admin page).
+
+On the synthetic set the change is within run-to-run noise (1–2 cases): no regression.
+\*Latency is not comparable: the test suite ran on the same machine during this run. Writing the
+reasoning first adds up to ~100 generated tokens, so some slowdown is expected and is still
+to be measured on an idle machine.

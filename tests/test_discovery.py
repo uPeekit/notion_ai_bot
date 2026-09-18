@@ -240,3 +240,11 @@ async def test_invalidation_during_an_in_flight_refresh_is_not_swallowed(fake, t
 
     third = await disco.get()  # well inside the TTL: only the surviving flag can force this
     assert third is not second
+
+
+async def test_local_only_flag_from_yaml_reaches_the_snapshot(fake, tmp_path):
+    d = Descriptions(tmp_path / "targets.yaml")
+    d.save({"ds-buy": TargetMeta(local_only=True)})
+    snap = await Discovery(fake, d, items_per_target=10, ttl_s=60).refresh()
+    assert snap.target("ds-buy").local_only is True
+    assert snap.target("ds-shops").local_only is False

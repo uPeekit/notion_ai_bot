@@ -1,6 +1,7 @@
-"""Benchmark Ollama models on the Russian case set.
+"""Benchmark models on the Russian case set: Ollama models by name, Claude models by their API
+id (claude-...), which need ANTHROPIC_API_KEY in .env or the environment.
 
-uv run python -m tools.benchmark_llm --models qwen3:8b,qwen2.5:7b-instruct \
+uv run python -m tools.benchmark_llm --models claude-haiku-4-5,mistral-nemo:12b \
     [--limit N] [--write documentation/BENCHMARK.md]
 """
 
@@ -16,12 +17,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.interpretation.models import Candidate, Interpretation, Value
-from app.llm.base import LLMError
+from app.llm.base import LLMClient, LLMError
+from app.llm.claude import ClaudeClient
 from app.llm.context import Context, ContextBuilder
 from app.llm.ollama import OllamaClient
 from app.llm.output_schema import build_schema
+from tools import snapshot_json
 from tools.sample_workspace import SAMPLE_NOW, sample_snapshot
 
 DEFAULT_CASES = Path("tests/fixtures/ru_cases.yaml")
@@ -204,7 +209,7 @@ def summarize(model: str, results: list[CaseResult]) -> Summary:
     )
 
 
-async def run_model(client: OllamaClient, cases: list[dict], ctx: Context, schema: dict,
+async def run_model(client: LLMClient, cases: list[dict], ctx: Context, schema: dict,
                     limit: int | None = None) -> list[CaseResult]:
     out: list[CaseResult] = []
     for case in cases[:limit]:
@@ -240,18 +245,39 @@ def render_table(summaries: list[Summary]) -> str:
     return "\n".join([head, *rows])
 
 
+class _Keys(BaseSettings):
+    """Just the Anthropic key, read the way the bot reads it (.env, then the environment)."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    anthropic_api_key: SecretStr = SecretStr("")
+
+
+def _client(a: argparse.Namespace, model: str) -> ClaudeClient | OllamaClient:
+    if model.startswith("claude-"):
+        key = _Keys().anthropic_api_key.get_secret_value()
+        if not key:
+            raise SystemExit("ANTHROPIC_API_KEY is not set (.env or environment)")
+        return ClaudeClient(key, model, timeout_s=a.timeout)
+    return OllamaClient(a.ollama, model, num_ctx=a.num_ctx, timeout_s=a.timeout)
+
+
 async def main_async(a: argparse.Namespace) -> int:
     cases = load_cases(a.cases)
-    ctx = ContextBuilder("Europe/Tallinn", items_per_target=a.items_per_target).build(
-        sample_snapshot(), now=SAMPLE_NOW
-    )
+    # --workspace replays a real workspace captured by tools/capture_workspace.py; the default
+    # is the synthetic one the committed case set is written against.
+    snapshot = snapshot_json.load(a.workspace) if a.workspace else sample_snapshot()
+    workspace_label = str(a.workspace) if a.workspace else "tools/sample_workspace.py"
+    ctx = ContextBuilder(
+        "Europe/Tallinn", items_per_target=a.items_per_target,
+        reasoning_first=not a.no_reasoning_first, name_targets=not a.no_target_names,
+    ).build(snapshot, now=SAMPLE_NOW)
     schema = build_schema(ctx)
     summaries: list[Summary] = []
     failures: dict[str, list[CaseResult]] = {}
     for model in a.models.split(","):
         model = model.strip()
         print(f"\n== {model} ==", flush=True)
-        async with OllamaClient(a.ollama, model, num_ctx=a.num_ctx, timeout_s=a.timeout) as client:
+        async with _client(a, model) as client:
             results = await run_model(client, cases, ctx, schema, a.limit)
         summaries.append(summarize(model, results))
         failures[model] = [r for r in results if not r.all_ok]
@@ -259,7 +285,7 @@ async def main_async(a: argparse.Namespace) -> int:
     print("\n" + table)
     if a.write:
         lines = [f"# LLM benchmark — {datetime.now(UTC).date().isoformat()}", "",
-                 f"Cases: `{a.cases}` ({len(cases)}), context: `tools/sample_workspace.py`, "
+                 f"Cases: `{a.cases}` ({len(cases)}), context: `{workspace_label}`, "
                  f"num_ctx={a.num_ctx}, items_per_target={a.items_per_target}, temperature=0.",
                  "", table, ""]
         for model, fails in failures.items():
@@ -273,7 +299,8 @@ async def main_async(a: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--models", required=True, help="comma-separated Ollama model names")
+    ap.add_argument("--models", required=True,
+                    help="comma-separated: Ollama model names and/or Claude ids (claude-...)")
     ap.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--ollama", default="http://127.0.0.1:11434")
@@ -281,6 +308,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--items-per-target", type=int, default=15)
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--write", type=Path)
+    ap.add_argument("--no-reasoning-first", action="store_true",
+                    help="notes last, as before 2026-09-19 (baseline)")
+    ap.add_argument("--no-target-names", action="store_true",
+                    help="candidates without target_name (baseline)")
+    ap.add_argument("--workspace", type=Path,
+                    help="snapshot JSON from tools.capture_workspace (default: the sample one)")
     return asyncio.run(main_async(ap.parse_args(argv)))
 
 

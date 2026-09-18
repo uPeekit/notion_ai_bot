@@ -38,6 +38,8 @@ class TargetMeta(BaseModel):
     inbox: bool = False  # user-set fallback flag; Descriptions.ensure never touches it, so it
                          # survives every discovery round trip (editable from the admin page,
                          # Plan 3b)
+    local_only: bool = False  # user-set: Claude never sees this target's description or
+                              # contents, and a message it routes here is re-read locally
 
 
 class Descriptions:

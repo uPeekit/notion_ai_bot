@@ -365,3 +365,13 @@ def test_saving_what_the_page_shows_changes_nothing(server, descriptions):
     assert after["ds-todo"].description == "Дела"
     assert after["ds-todo"].fields["prio"].required
     assert after["ds-todo"].fields["prio"].description == "Срочность"
+
+
+def test_local_only_flag_round_trips_through_the_page(server, descriptions):
+    payload = {"targets": {"ds-buy": {"description": "", "inbox": False, "local_only": True,
+                                      "fields": {}}}}
+    status, body = _post(server, "/api/descriptions", payload)
+    assert status == 200 and json.loads(body) == {"saved": 1}
+    assert descriptions.load()["ds-buy"].local_only is True
+    by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
+    assert by_id["ds-buy"]["local_only"] is True and by_id["ds-todo"]["local_only"] is False

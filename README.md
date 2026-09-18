@@ -2,9 +2,9 @@
 
 A Telegram bot that turns a text or voice message into a change in your own Notion workspace —
 "купи молоко" becomes a row in your shopping list, "в идеи: ..." becomes a paragraph on your
-ideas page, and so on. Everything runs on your own machine: speech recognition (faster-whisper)
-and the language model (a local [Ollama](https://ollama.com) model) are both local; only the
-Notion API call itself leaves the machine. Anything the bot can't confidently classify gets a
+ideas page, and so on. Speech recognition (faster-whisper) always runs on your own machine. The
+language model is a local [Ollama](https://ollama.com) model, or — if you add an Anthropic API
+key — Claude, with the local model as the automatic fallback (see "Using Claude", below). Anything the bot can't confidently classify gets a
 follow-up question with buttons — never a silent guess — and, if you flag one, an "inbox" page
 that nothing is ever dropped into oblivion for.
 
@@ -103,6 +103,50 @@ with a default; these are the ones worth knowing about once the bot is running:
 | `UNDO_WINDOW_S` | `300` (5 min) | How long the `[Отменить]` button on a reply keeps working. |
 | `LOG_LEVEL` | `INFO` | See "Logging", below. |
 | `POLICY_INTENT_MIN`, `POLICY_TARGET_MIN`, `POLICY_TARGET_MARGIN`, `POLICY_FIELD_MIN`, `POLICY_DATE_MIN` | `0.85` / `0.85` / `0.10` / `0.75` / `0.80` | How cautious the bot is before acting without asking — see "Tuning how cautious the bot is", below. |
+
+## Using Claude (optional, recommended)
+
+Claude understands messages noticeably better than any model an 8 GB laptop GPU can run, and
+answers in a few seconds instead of ~16. With a key in `.env`, the bot asks Claude first and
+falls back to the local model on its own whenever Claude can't answer — no internet, a rate
+limit, an outage, credit run out. After such a failure it stays on the local model for five
+minutes, then tries Claude again. Every answer, from either model, goes through the same checks
+before anything is written.
+
+**This needs an API key, not your claude.ai subscription.** Anthropic's Consumer Terms don't
+allow a bot or script to use a Pro/Max subscription; automated access has to go through an
+API key, which is billed separately, per use.
+
+1. Open **[platform.claude.com](https://platform.claude.com)** and sign in (the same email as
+   your claude.ai account works; it is a separate account area).
+2. **Billing** → add a payment method and buy credits. The minimum top-up is plenty: at ~20
+   messages a day, Claude Haiku 4.5 costs about half a cent a message, roughly $3 a month.
+3. **Limits** → set a monthly spend limit (say, $10), so a bug can never run up a bill.
+4. **API keys** → **Create key**, name it `notion-bot`, and copy it. It is shown only once.
+5. Put it in `.env` and restart the bot:
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+   The console window then shows `interpreter: claude-haiku-4-5, falling back to local
+   mistral-nemo:12b`. With a wrong key it says `primary LLM check failed (claude 401: ...)` and
+   the bot keeps running on the local model.
+
+| Key | Default | What it does |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | (empty) | Empty: local model only. Like the other tokens, it is never logged. |
+| `CLAUDE_MODEL` | `claude-haiku-4-5` | `claude-sonnet-5` is smarter and about twice the price. |
+| `LLM_CLOUD` | `true` | `false` keeps everything on this machine even with a key set. |
+
+**What Claude sees.** Each message's text, plus your workspace's structure: page and database
+names, the descriptions you wrote on the admin page, field names and options, and up to
+`ITEMS_PER_TARGET` item titles per database. Not the pages' contents. Anthropic's API does not
+train on API traffic by default.
+
+**Keeping a page to yourself.** On the admin page, tick **только локально** on a target (a
+page of passwords, say). Claude then gets only its name and fields — no description, no item
+titles — and when Claude routes a message there, the local model reads that message again with
+the full details and decides instead. The text of the message itself has still been sent to
+Claude by then; to keep a message entirely local, set `LLM_CLOUD=false`.
 
 ## Flagging the inbox page
 

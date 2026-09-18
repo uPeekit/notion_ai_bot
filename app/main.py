@@ -57,7 +57,9 @@ from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.base import LLMClient, LLMError
+from app.llm.claude import ClaudeClient
 from app.llm.context import ContextBuilder
+from app.llm.fallback import FallbackLLM
 from app.llm.ollama import OllamaClient
 from app.logging_setup import configure
 from app.notion.descriptions import Descriptions
@@ -116,11 +118,22 @@ def _default_provider(settings: Settings) -> NotionProvider:
 
 
 def _default_llm(settings: Settings) -> LLMClient:
-    return OllamaClient(
+    local = OllamaClient(
         settings.ollama_base_url, settings.llm_model,
         temperature=settings.llm_temperature, num_ctx=settings.llm_num_ctx,
         timeout_s=settings.llm_timeout_s, keep_alive=settings.llm_keep_alive,
     )
+    if not uses_cloud(settings):
+        return local
+    claude = ClaudeClient(
+        settings.anthropic_api_key.get_secret_value(), settings.claude_model,
+        timeout_s=settings.claude_timeout_s,
+    )
+    return FallbackLLM(claude, local)
+
+
+def uses_cloud(settings: Settings) -> bool:
+    return settings.llm_cloud and bool(settings.anthropic_api_key.get_secret_value())
 
 
 def _default_speech(settings: Settings) -> SpeechToText:
@@ -330,6 +343,11 @@ async def post_init_checks(app: App, application: Application) -> None:
     is what actually stops polling from starting; `main()` checks `app.fatal` once `run_polling()`
     returns and exits with the right code only then, once PTB's own shutdown/post_shutdown have
     already run cleanly."""
+    if uses_cloud(app.settings):
+        log.info("interpreter: %s, falling back to local %s",
+                 app.settings.claude_model, app.settings.llm_model)
+    else:
+        log.info("interpreter: local %s", app.settings.llm_model)
     try:
         models = await app.llm.models()
     except LLMError as e:
@@ -402,6 +420,7 @@ def main() -> None:
             redact=(
                 settings.telegram_bot_token.get_secret_value(),
                 settings.notion_token.get_secret_value(),
+                settings.anthropic_api_key.get_secret_value(),
             ),
             log_file=settings.log_file or None,
         )

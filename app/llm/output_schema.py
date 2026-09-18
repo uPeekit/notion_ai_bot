@@ -9,6 +9,9 @@ STRING = {"type": "string"}
 NUMBER = {"type": "number"}
 CONFIDENCE = {"type": "number", "minimum": 0, "maximum": 1}
 MAX_ITEM_CANDIDATES = 8
+# Bounds the reasoning the model writes before it answers: one or two sentences, not an essay
+# (every character is generated, and generation is where the latency is).
+NOTES_MAX_CHARS = 300
 
 
 def _obj(props: dict, required: list[str] | None = None) -> dict:
@@ -78,8 +81,15 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
         if items
         else {"type": "array", "maxItems": 0}
     )
+    props: dict = {}
+    if ctx.name_targets:
+        # Generated before the key and fixed per branch, so choosing a *name* ("TODO [database]")
+        # is what selects the branch: the model decides among meaningful words instead of
+        # opaque keys t1..tN, which it drifts to the first of when unsure. The key follows.
+        props["target_name"] = {"const": ctx.target_labels[target_key]}
     return _obj(
         {
+            **props,
             "target": {"const": target_key},
             "confidence": dict(CONFIDENCE),
             "item": item,
@@ -95,15 +105,19 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
 def build_schema(ctx: Context) -> dict:
     if not ctx.target_keys():
         raise ValueError("no targets in context")
-    return _obj(
-        {
-            "intent": _obj({"value": {"enum": INTENTS}, "confidence": dict(CONFIDENCE)}),
-            "candidates": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 3,
-                "items": {"anyOf": [candidate_schema(ctx, tk) for tk in ctx.target_keys()]},
-            },
-            "notes": dict(STRING),
-        }
-    )
+    notes = {**STRING, "maxLength": NOTES_MAX_CHARS} if ctx.reasoning_first else dict(STRING)
+    body = {
+        "intent": _obj({"value": {"enum": INTENTS}, "confidence": dict(CONFIDENCE)}),
+        "candidates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {"anyOf": [candidate_schema(ctx, tk) for tk in ctx.target_keys()]},
+        },
+    }
+    # Output is generated in property order. Last, notes could only explain a choice already
+    # made — the model once wrote "a shopping item or a task" there after having picked the
+    # first two targets in the list. First, it is the reasoning the choice follows from.
+    if ctx.reasoning_first:
+        return _obj({"notes": notes, **body})
+    return _obj({**body, "notes": notes})

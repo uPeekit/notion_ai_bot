@@ -69,9 +69,32 @@ null.
 Отвечай только JSON."""
 
 
-def build_messages(text: str, ctx: Context) -> list[dict]:
-    user = f"Контекст:\n{ctx.json()}\n\nСообщение пользователя:\n«{text.strip()}»"
-    return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
+NOTES_LAST = "- notes — короткая заметка о сомнениях, может быть пустой строкой.\n"
+NOTES_FIRST = (
+    "- notes пиши ПЕРВЫМ, до intent: одно-два коротких предложения — что это за запрос и в "
+    "какую цель он относится по её описанию (например: «покупка — это дело, значит база задач "
+    "с тегом personal»). Затем выбирай intent и кандидатов согласно этому рассуждению.\n"
+)
+TARGET_NAME_RULE = (
+    "- target_name кандидата — имя цели из контекста; выбирай его по смыслу и по описанию цели, "
+    "ключ target идёт следом и должен ему соответствовать.\n"
+)
+
+
+def system_prompt(ctx: Context) -> str:
+    """SYSTEM_PROMPT adjusted to the answer shape ctx asks for (output_schema reads the same two
+    switches). With both off it is SYSTEM_PROMPT exactly — the baseline the benchmark compares
+    against."""
+    assert NOTES_LAST in SYSTEM_PROMPT
+    extra = TARGET_NAME_RULE if ctx.name_targets else ""
+    notes = NOTES_FIRST if ctx.reasoning_first else NOTES_LAST
+    return SYSTEM_PROMPT.replace(NOTES_LAST, notes + extra)
+
+
+def build_messages(text: str, ctx: Context, *, cloud: bool = False) -> list[dict]:
+    """`cloud`: the context as a cloud model may see it (`Context.cloud_payload`)."""
+    user = f"Контекст:\n{ctx.json(cloud=cloud)}\n\nСообщение пользователя:\n«{text.strip()}»"
+    return [{"role": "system", "content": system_prompt(ctx)}, {"role": "user", "content": user}]
 
 
 def retry_message(error: str) -> str:

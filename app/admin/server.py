@@ -99,6 +99,7 @@ def _targets_payload(
                 # never as a value, so an untouched box is posted back empty and stays empty.
                 "notion_description": "" if saved_desc(t.id) else t.description,
                 "is_inbox": _is_inbox(t.id),
+                "local_only": bool(meta.get(t.id) and meta[t.id].local_only),
                 "fields": [_field(t.id, f) for f in t.fields],
             }
             for t in snap.targets
@@ -130,6 +131,7 @@ def _merge_target(
         description=str(posted.get("description", existing.description)),
         fields=fields,
         inbox=existing.inbox if inbox_locked else bool(posted.get("inbox", existing.inbox)),
+        local_only=bool(posted.get("local_only", existing.local_only)),
     )
 
 

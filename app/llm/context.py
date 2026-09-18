@@ -62,9 +62,34 @@ class Context:
     fields_by_target: dict[str, list[str]] = field(default_factory=dict)
     options_by_field: dict[str, list[str]] = field(default_factory=dict)
     items_by_target: dict[str, list[str]] = field(default_factory=dict)
+    # target key -> "<name> [database|page]": what a candidate names before its key (see
+    # output_schema.candidate_schema). The kind tells apart two targets sharing a name.
+    target_labels: dict[str, str] = field(default_factory=dict)
+    # How the model is asked to answer; both output_schema.build_schema and prompts read them,
+    # so the schema and the instructions can never disagree. True is the production setting;
+    # tools/benchmark_llm.py turns them off to measure what each one is worth.
+    reasoning_first: bool = True
+    name_targets: bool = True
+    # Target keys the user marked local-only: the cloud model gets their name, kind and fields
+    # (enough to route a message there), never their description or items.
+    local_only: frozenset[str] = frozenset()
 
-    def json(self) -> str:
-        return json.dumps(self.payload, ensure_ascii=False, separators=(",", ":"))
+    def json(self, *, cloud: bool = False) -> str:
+        payload = self.cloud_payload() if cloud else self.payload
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    def cloud_payload(self) -> dict:
+        if not self.local_only:
+            return self.payload
+        targets = []
+        for entry in self.payload.get("targets", []):
+            if entry["key"] in self.local_only:
+                entry = {k: v for k, v in entry.items()
+                         if k not in ("description", "items", "children")}
+                entry["fields"] = [{k: v for k, v in f.items() if k != "description"}
+                                   for f in entry["fields"]]
+            targets.append(entry)
+        return {**self.payload, "targets": targets}
 
     def ref(self, key: str) -> KeyRef | None:
         return self.keys.get(key)
@@ -109,9 +134,14 @@ class Context:
 
 
 class ContextBuilder:
-    def __init__(self, timezone: str = "Europe/Tallinn", items_per_target: int = 50) -> None:
+    def __init__(
+        self, timezone: str = "Europe/Tallinn", items_per_target: int = 50, *,
+        reasoning_first: bool = True, name_targets: bool = True,
+    ) -> None:
         self._tz = ZoneInfo(timezone)
         self._items_per_target = items_per_target
+        self._reasoning_first = reasoning_first
+        self._name_targets = name_targets
 
     def build(
         self, snapshot: WorkspaceSnapshot, now: datetime | None = None, pending: dict | None = None
@@ -119,10 +149,15 @@ class ContextBuilder:
         if now is not None and now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         now = (now or datetime.now(self._tz)).astimezone(self._tz)
-        ctx = Context(payload={}, keys={}, now=now, pending=pending)
+        ctx = Context(payload={}, keys={}, now=now, pending=pending,
+                      reasoning_first=self._reasoning_first, name_targets=self._name_targets)
         targets = []
+        local_only: set[str] = set()
         for ti, t in enumerate(snapshot.targets, start=1):
             tk = f"t{ti}"
+            if t.local_only:
+                local_only.add(tk)
+            ctx.target_labels[tk] = f"{t.name} [{t.kind}]"
             ctx.keys[tk] = KeyRef("target", t.id, t.name)
             entry: dict = {
                 "key": tk, "kind": t.kind, "name": t.name, "path": t.path,
@@ -146,6 +181,7 @@ class ContextBuilder:
             "calendar": build_calendar(now),
             "targets": targets,
         }
+        ctx.local_only = frozenset(local_only)
         if pending:
             ctx.payload["pending"] = pending
         return ctx

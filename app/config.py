@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     # keeps it loaded for good (always fast, but holds the GPU); "0" unloads right away.
     llm_keep_alive: str = "30m"
 
+    # Claude answers first when a key is set; the local model above is the fallback (offline,
+    # rate-limited, out of credit). LLM_CLOUD=false keeps everything on this machine.
+    anthropic_api_key: SecretStr = SecretStr("")
+    claude_model: str = "claude-haiku-4-5"
+    claude_timeout_s: float = 30.0
+    llm_cloud: bool = True
+
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"

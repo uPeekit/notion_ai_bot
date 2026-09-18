@@ -176,6 +176,20 @@ function targetBox(target) {
   }));
   box.appendChild(inboxRow);
 
+  var localRow = el("div", { class: "inbox-row" });
+  var localId = "local-" + target.id;
+  var local = el("input", { type: "checkbox", id: localId });
+  local.className = "target-local-only";
+  local.dataset.targetId = target.id;
+  local.checked = !!target.local_only;
+  localRow.appendChild(local);
+  localRow.appendChild(el("label", {
+    for: localId,
+    text: " только локально — описание и содержимое не уходят в Claude; такие сообщения " +
+      "разбирает локальная модель (сам текст сообщения Claude всё равно видит)",
+  }));
+  box.appendChild(localRow);
+
   return box;
 }
 
@@ -256,9 +270,13 @@ function collectBody() {
         required: reqEl ? reqEl.checked : false,
       };
     });
+    var localEl = document.querySelector(
+      '.target-local-only[data-target-id="' + t.id + '"]'
+    );
     targets[t.id] = {
       description: descEl ? descEl.value : "",
       inbox: t.id === inboxId,
+      local_only: localEl ? localEl.checked : false,
       fields: fields,
     };
   });

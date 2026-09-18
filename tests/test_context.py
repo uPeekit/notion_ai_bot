@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -126,3 +127,30 @@ def test_build_calendar_sunday_next_week_starts_tomorrow():
     cal = build_calendar(sunday)
     assert cal["завтра"] == "2026-09-14 (понедельник)"
     assert cal["следующая неделя"] == "2026-09-14 … 2026-09-20"
+
+
+def _with_local_only(target_id: str):
+    snap = sample_snapshot()
+    targets = [replace(t, local_only=t.id == target_id) for t in snap.targets]
+    return replace(snap, targets=targets)
+
+
+def test_cloud_payload_hides_a_local_only_targets_description_and_items():
+    ctx = ContextBuilder().build(_with_local_only("ds-buy"), now=SAMPLE_NOW)
+    tk = ctx.target_key("ds-buy")
+    assert ctx.local_only == frozenset({tk})
+    local = next(t for t in ctx.payload["targets"] if t["key"] == tk)
+    cloud = next(t for t in json.loads(ctx.json(cloud=True))["targets"] if t["key"] == tk)
+    assert local["description"] and local["items"]
+    assert "description" not in cloud and "items" not in cloud
+    assert [f["key"] for f in cloud["fields"]] == [f["key"] for f in local["fields"]]
+    assert not any("description" in f for f in cloud["fields"])
+    # everything else, and the local view itself, unchanged
+    others = [t for t in ctx.payload["targets"] if t["key"] != tk]
+    assert [t for t in json.loads(ctx.json(cloud=True))["targets"] if t["key"] != tk] == others
+    assert json.loads(ctx.json()) == ctx.payload
+
+
+def test_cloud_payload_is_the_payload_when_nothing_is_local_only():
+    ctx = ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW)
+    assert ctx.local_only == frozenset() and ctx.json(cloud=True) == ctx.json()

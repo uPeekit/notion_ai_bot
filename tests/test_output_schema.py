@@ -60,6 +60,7 @@ def test_valid_response_passes_schema_and_pydantic(ctx):
         "intent": {"value": "create", "confidence": 0.95},
         "candidates": [
             {
+                "target_name": ctx.target_labels["t2"],
                 "target": "t2",
                 "confidence": 0.9,
                 "item": None,
@@ -99,6 +100,7 @@ def test_item_text_accepted_and_required(ctx):
         "intent": {"value": "update", "confidence": 0.95},
         "candidates": [
             {
+                "target_name": ctx.target_labels["t2"],
                 "target": "t2",
                 "confidence": 0.9,
                 "item": None,
@@ -142,6 +144,7 @@ def test_invalid_responses_fail_schema(ctx, mutate):
         "intent": {"value": "create", "confidence": 0.95},
         "candidates": [
             {
+                "target_name": ctx.target_labels["t2"],
                 "target": "t2",
                 "confidence": 0.9,
                 "item": None,
@@ -154,6 +157,7 @@ def test_invalid_responses_fail_schema(ctx, mutate):
         ],
         "notes": "",
     }
+    jsonschema.validate(raw, schema)  # the unmutated answer is valid, so each mutation must bite
     mutate(raw)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(raw, schema)
@@ -163,3 +167,45 @@ def test_schema_size_reasonable(ctx):
     import json
 
     assert len(json.dumps(build_schema(ctx))) < 60_000
+
+
+
+def test_notes_come_first_so_the_model_reasons_before_it_chooses(ctx):
+    """Generated in property order: last, notes could only explain a choice already made."""
+    props = build_schema(ctx)["properties"]
+    assert list(props)[0] == "notes"
+    assert props["notes"]["maxLength"] > 0
+
+
+def test_baseline_shape_keeps_notes_last():
+    off = ContextBuilder(reasoning_first=False, name_targets=False).build(
+        sample_snapshot(), now=SAMPLE_NOW)
+    props = build_schema(off)["properties"]
+    assert list(props)[-1] == "notes"
+    assert "target_name" not in props["candidates"]["items"]["anyOf"][0]["properties"]
+
+
+def test_each_candidate_names_its_target_before_its_key(ctx):
+    branches = build_schema(ctx)["properties"]["candidates"]["items"]["anyOf"]
+    for branch in branches:
+        props = branch["properties"]
+        assert list(props)[:2] == ["target_name", "target"]
+        assert props["target_name"]["const"] == ctx.target_labels[props["target"]["const"]]
+    labels = [b["properties"]["target_name"]["const"] for b in branches]
+    assert len(set(labels)) == len(labels)  # the [kind] suffix keeps same-named targets apart
+
+
+def test_a_name_that_does_not_match_its_key_is_rejected(ctx):
+    """The name selects the branch; a key from another branch cannot ride along with it."""
+    raw = {
+        "notes": "",
+        "intent": {"value": "create", "confidence": 0.95},
+        "candidates": [{
+            "target_name": ctx.target_labels["t3"], "target": "t2", "confidence": 0.9,
+            "item": None, "item_candidates": [], "item_text": None,
+            "fields": {k: {"status": "not_mentioned"} for k in ctx.field_keys("t2")},
+            "content": None, "search_query": None,
+        }],
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(raw, build_schema(ctx))
