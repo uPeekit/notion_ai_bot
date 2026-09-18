@@ -55,9 +55,10 @@ class RecordingFactory:
         self._results = list(results)
         self.calls: list[dict] = []
 
-    def __call__(self, model_size_or_path, *, device, compute_type):
+    def __call__(self, model_size_or_path, *, device, compute_type, local_files_only=False):
         self.calls.append(
-            {"model": model_size_or_path, "device": device, "compute_type": compute_type}
+            {"model": model_size_or_path, "device": device, "compute_type": compute_type,
+             "local_files_only": local_files_only}
         )
         result = self._results.pop(0)
         if isinstance(result, Exception):
@@ -218,7 +219,7 @@ async def test_concurrent_transcriptions_construct_the_model_only_once():
             self._model = model
             self.calls: list[dict] = []
 
-        def __call__(self, model_size_or_path, *, device, compute_type):
+        def __call__(self, model_size_or_path, *, device, compute_type, local_files_only=False):
             self.calls.append(
                 {"model": model_size_or_path, "device": device, "compute_type": compute_type}
             )
@@ -241,3 +242,34 @@ async def test_concurrent_transcriptions_construct_the_model_only_once():
     assert first == "hi"
     assert second == "hi"
     assert len(factory.calls) == 1
+
+
+async def test_a_cached_model_loads_without_asking_huggingface():
+    """faster-whisper otherwise checks the Hub for a newer revision on every start: a network
+    call that fails offline and prints an "unauthenticated requests" warning each time."""
+    factory = RecordingFactory([FakeModel([FakeSegment("привет")])])
+    stt = WhisperLocal(settings(), model_factory=factory)
+
+    assert await stt.transcribe(Path("x.ogg")) == "привет"
+
+    assert len(factory.calls) == 1
+    assert factory.calls[0]["local_files_only"] is True
+
+
+async def test_first_ever_voice_note_downloads_once_and_is_not_a_cuda_failure(caplog):
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    factory = RecordingFactory([
+        LocalEntryNotFoundError("not in the cache yet"),
+        FakeModel([FakeSegment("привет")]),
+    ])
+    # "auto", not the "cpu" default: only there could a cache miss wrongly trip the fallback.
+    stt = WhisperLocal(settings(device="auto"), model_factory=factory)
+
+    with caplog.at_level(logging.WARNING):
+        assert await stt.transcribe(Path("x.ogg")) == "привет"
+
+    assert [c["local_files_only"] for c in factory.calls] == [True, False]
+    # A cache miss must not trip the CUDA-to-CPU fallback: same device both times.
+    assert [c["device"] for c in factory.calls] == ["auto", "auto"]
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]

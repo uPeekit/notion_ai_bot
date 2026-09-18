@@ -15,12 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from faster_whisper import WhisperModel
+# Windows without Developer Mode cannot create the symlinks the HuggingFace cache prefers, so it
+# stores plain copies instead and warns about it on every download. Nothing is wrong and the
+# user can do nothing useful about it; huggingface_hub reads this once, when it is imported.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+from faster_whisper import WhisperModel  # noqa: E402 (must follow the env default above)
+from huggingface_hub.errors import LocalEntryNotFoundError  # noqa: E402
 
 from app.config import Settings
 from app.speech.base import SpeechEmpty, SpeechError
@@ -83,10 +90,19 @@ class WhisperLocal:
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     def _ensure_model(self) -> Any:
+        """Loads from the local cache first. Without `local_files_only`, faster-whisper asks
+        HuggingFace for the model's current revision on every start — a network call that fails
+        offline, and that prints an "unauthenticated requests to the HF Hub" warning each time.
+        Only a genuine cache miss (the very first voice note) goes to the network. Any other
+        load error, a CUDA one included, propagates unchanged to the CPU fallback."""
         if self._model is None:
-            self._model = self._model_factory(
-                self._settings.whisper_model,
-                device=self._device,
-                compute_type=self._settings.whisper_compute_type,
-            )
+            name = self._settings.whisper_model
+            kwargs = {"device": self._device,
+                      "compute_type": self._settings.whisper_compute_type}
+            try:
+                self._model = self._model_factory(name, local_files_only=True, **kwargs)
+            except LocalEntryNotFoundError:
+                log.info("whisper model %s is not cached yet; downloading it once (~1.5 GB)",
+                         name)
+                self._model = self._model_factory(name, **kwargs)
         return self._model

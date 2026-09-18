@@ -225,7 +225,10 @@ once: the speech model (`large-v3-turbo`, ~1.5 GB) is downloaded from HuggingFac
 and cached under your user profile, and the console shows download progress bars while it
 happens. The bot replies «Расшифровываю голосовое сообщение…» as soon as the voice note arrives
 so you can tell it is alive; the real answer follows when the model has loaded. Every later voice
-message reuses the loaded model and is fast.
+message reuses the loaded model and is fast. During that one download HuggingFace may print a
+warning about *unauthenticated requests* — harmless, it only means no `HF_TOKEN` is set, which a
+public model doesn't need. After that the model loads from the local cache with no network
+request at all, so the warning does not come back.
 
 **A voice message kills the whole bot process on an NVIDIA machine** — the console shows
 something like `Could not locate cudnn_ops64_9.dll` and the process disappears with no Python
