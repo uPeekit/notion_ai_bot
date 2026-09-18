@@ -17,7 +17,7 @@ from typing import Literal
 NAME = "notion_ai_bot"
 ROOT = Path(__file__).resolve().parent
 INCLUDE_GLOBS = [
-    "app/**/*.py", "tools/**/*.py", "migrations/*.sql", "deploy/*.ps1",
+    "app/**/*.py", "app/**/*.html", "tools/**/*.py", "migrations/*.sql", "deploy/*.ps1",
     "apply_update.py", "pyproject.toml", "uv.lock", ".env.example", "README.md", "RELEASE.md",
     "documentation/NOTION_SETUP.md", ".python-version", "update.cmd", "start.cmd",
 ]

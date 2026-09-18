@@ -45,3 +45,18 @@ def test_start_script_does_not_stop_on_native_stderr():
     script = (ROOT / "deploy" / "start.ps1").read_text(encoding="ascii")
     assert '$ErrorActionPreference = "Continue"' in script
     assert '$ErrorActionPreference = "Stop"' not in script
+
+
+def test_release_ships_every_tracked_runtime_file():
+    """0.1.1 shipped without app/admin/page.html — the globs only matched *.py — and the bot died
+    at import. Any file git tracks under the runtime trees must reach the zip, whatever its
+    extension, so the next non-Python asset can't repeat that."""
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "app", "tools", "migrations", "deploy"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    shipped = {p.as_posix() for p in release.collect_files(ROOT)}
+    missing = sorted(set(tracked) - shipped)
+    assert not missing, f"tracked but never released: {missing}"

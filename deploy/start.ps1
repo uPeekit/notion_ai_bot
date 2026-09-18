@@ -73,6 +73,8 @@ switch ($code) {
     }
   }
   5 { Write-Host "The bot is already running - look for its other window." -ForegroundColor Yellow }
-  default { Write-Host "The bot stopped unexpectedly (exit $code). Details are in the log file." -ForegroundColor Red }
+  # A crash before logging starts (e.g. at import) never reaches the log file - the traceback
+  # printed above is the only record of it.
+  default { Write-Host "The bot stopped unexpectedly (exit $code). The error is printed above; later failures are also in the log file." -ForegroundColor Red }
 }
 exit $code
