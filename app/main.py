@@ -119,7 +119,7 @@ def _default_llm(settings: Settings) -> LLMClient:
     return OllamaClient(
         settings.ollama_base_url, settings.llm_model,
         temperature=settings.llm_temperature, num_ctx=settings.llm_num_ctx,
-        timeout_s=settings.llm_timeout_s,
+        timeout_s=settings.llm_timeout_s, keep_alive=settings.llm_keep_alive,
     )
 
 

@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     llm_num_ctx: int = 8192
     llm_timeout_s: float = 120.0
+    # How long Ollama keeps the model loaded after a request. Its own default, 5m, means a
+    # message after any short pause reloads the model: measured 32 s instead of 16 s. "-1"
+    # keeps it loaded for good (always fast, but holds the GPU); "0" unloads right away.
+    llm_keep_alive: str = "30m"
 
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"

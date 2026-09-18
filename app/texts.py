@@ -30,7 +30,11 @@ UNTITLED = "(без названия)"  # title fallback for a page with no titl
 # ---- clarification questions, keyed by Question.type (QType) --------------------------------
 
 QUESTION: dict[QType, str] = {
-    "target": "Уточните, к какой записи это относится.",
+    # Says what the bot understood (a misread intent is invisible otherwise) and points at
+    # [Другое], so a single-candidate question is never a choice between one wrong answer and
+    # throwing the message away.
+    "target": "Не уверен, куда это: понял как «{intent}». Выберите вариант или нажмите "
+              "«Другое» и напишите, что имели в виду.",
     "intent_confirm": "Похоже, вы хотите {intent}. Верно?",
     "item": "Какой элемент?",
     "item_not_found": "Не нашёл «{item_text}» в списке.",
@@ -61,6 +65,7 @@ INTENT_LABELS: dict[str, str] = {
     "append": "дописать текст",
     "search": "найти",
 }
+INTENT_UNKNOWN_LABEL = "запрос"
 
 # ---- execution results ------------------------------------------------------------------------
 
@@ -85,13 +90,22 @@ INBOX_FAILED = "Не удалось сохранить в «{target_name}»."
 # inbox keeps the note as a second paragraph under the text.
 INBOX_NOTE = "Причина: {reason}"
 INBOX_NOTE_UNANSWERED = "Остался без ответа вопрос: {question}"
-CANCELLED = "Отменено."
+CANCELLED = "Отменено — ничего не записал."
+# Appended to CANCELLED only while no inbox page is flagged: that is exactly when the user has
+# just thrown away a message they may have wanted kept, with no [В разное] button to offer.
+CANCELLED_NO_INBOX = ("Чтобы такие сообщения можно было сохранить кнопкой «В разное», "
+                      "выберите страницу для них в настройках: {admin_url}")
+CANCELLED_NO_INBOX_NO_ADMIN = ("Чтобы такие сообщения можно было сохранить кнопкой «В разное», "
+                               "укажите страницу для них в INBOX_TARGET_ID в .env.")
 # Sent the moment a voice note arrives, before the download and `speech.transcribe` — the first
 # one of a run loads (and, the very first time, downloads ~1.5 GB of) the Whisper model, which can
 # take minutes during which the bot would otherwise be indistinguishable from a dead one.
 VOICE_TRANSCRIBING = "Расшифровываю голосовое сообщение…"
 UNDONE = "↩️ Отменено."
 ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)
+# [Другое] on a target or intent question: the next message is re-read together with the
+# original one, so a short correction is enough.
+ENTER_CORRECTION = "Напишите, что имели в виду — например: «добавь в TODO»."
 # A delivered keyboard cannot be withdrawn, so the inbox offer can be pressed again after
 # it has already done its job; the second press is refused with this instead of saving twice.
 INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."

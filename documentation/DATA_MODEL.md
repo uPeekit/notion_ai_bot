@@ -388,6 +388,7 @@ Secrets are never written. `llm_context` contains keys, not Notion ids.
 | `LLM_TEMPERATURE` | `0` | |
 | `LLM_NUM_CTX` | `8192` | fits the KV cache in 8 GB VRAM |
 | `LLM_TIMEOUT_S` | `120` | |
+| `LLM_KEEP_ALIVE` | `30m` | Ollama `keep_alive`: reloading the 12B costs ~16 s (32 s cold vs 16 s warm); `-1` keeps it loaded, holding the GPU |
 | `WHISPER_MODEL` | `large-v3-turbo` | |
 | `WHISPER_DEVICE` | `auto` | `cuda` / `cpu`; `.env.example` ships `cpu` — no VRAM left beside a 12B |
 | `WHISPER_COMPUTE_TYPE` | `int8` | |

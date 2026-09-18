@@ -25,8 +25,8 @@ SEARCH_LIMIT = 20
 # content_required, nothing_to_write) or with just their option buttons (target, item,
 # field_ambiguous, field_required with options).
 _EXTRAS: dict[QType, list[tuple[str, str]]] = {
-    "target": [],
-    "intent_confirm": [("confirm", texts.BTN_CONFIRM)],
+    "target": [("other", texts.BTN_OTHER)],
+    "intent_confirm": [("confirm", texts.BTN_CONFIRM), ("other", texts.BTN_OTHER)],
     "item": [],
     "item_not_found": [("add_new", texts.BTN_ADD_NEW)],
     "field_required": [],
@@ -107,8 +107,9 @@ def _question_text(q: Question, target_name: str | None) -> str:
     if target_name is not None and q.type in texts.QUESTION_WITH_TARGET:
         template = texts.QUESTION_WITH_TARGET[q.type]
     kwargs: dict[str, Any] = {"target_name": target_name, "field_name": q.field_name}
-    if q.type == "intent_confirm":
-        kwargs["intent"] = texts.INTENT_LABELS.get(q.proposed, str(q.proposed))
+    if q.type in ("intent_confirm", "target"):
+        # A target question persisted before `proposed` carried the intent has None here.
+        kwargs["intent"] = texts.INTENT_LABELS.get(q.proposed, texts.INTENT_UNKNOWN_LABEL)
     elif q.type in ("date", "field_confirm"):
         kwargs["value"] = _proposed_label(q.proposed)
     elif q.type == "item_not_found":

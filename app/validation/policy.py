@@ -117,9 +117,12 @@ class Policy:
                 qs.append(Question(type="intent_confirm", target_key=best.key,
                                     proposed=r.intent))
             else:
+                # `proposed` carries the intent so the question can say how the message was
+                # read — a misread intent is otherwise invisible behind a list of places.
                 qs.append(Question(
                     type="target", target_key=best.key,
                     options=[QOption(key=c.key, label=c.target.name) for c in r.candidates],
+                    proposed=r.intent,
                 ))
 
         if r.intent == "update" and best.item is None:

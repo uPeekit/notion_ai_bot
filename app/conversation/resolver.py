@@ -206,6 +206,9 @@ def options_for(
                                      value=to_json_value(field.candidates[idx])))
     elif q.type == "intent_confirm":
         out.append(AnswerOption(id="confirm", label=texts.BTN_CONFIRM))
+        out.append(AnswerOption(id="other", label=texts.BTN_OTHER))
+    if q.type == "target":
+        out.append(AnswerOption(id="other", label=texts.BTN_OTHER))
     elif q.type in ("date", "field_confirm"):
         fref = ctx.ref(q.field_key) if q.field_key else None
         field_id = fref.field_id if fref else None
@@ -245,7 +248,7 @@ def apply_answer(s: PendingSession, option_id: str) -> tuple[PendingSession, str
         return s, None  # stale/unknown button: no-op
 
     q = s.question
-    if option_id == "other" and q.type in ("date", "field_confirm"):
+    if option_id == "other" and q.type in ("date", "field_confirm", "target", "intent_confirm"):
         return s, "free_text"
 
     # The asked-key's field component only exists when the question itself is field-keyed

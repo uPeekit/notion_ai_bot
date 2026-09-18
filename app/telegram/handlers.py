@@ -31,6 +31,7 @@ import tempfile
 from pathlib import Path
 
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -184,7 +185,20 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await query.answer()  # Telegram's 10-second budget; never carries text
     orch: Orchestrator = context.bot_data[_ORCH]
     reply = await orch.handle_callback(update.effective_chat.id, user_id, query.data)
+    await _clear_keyboard(query)
     await _send(update, context, reply, context.bot_data[_STORE])
+
+
+async def _clear_keyboard(query) -> None:
+    """The pressed button's question is dealt with: take its keyboard away, so it visibly
+    resolves (a bare cancel confirmation under a question still showing its buttons reads as
+    nothing having happened) and a stale button cannot be pressed again. If the orchestrator
+    needs to ask again, its reply carries a fresh keyboard. Best effort: Telegram refuses to edit a
+    message older than 48 hours, and that is no reason to lose the reply itself."""
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except TelegramError as e:
+        log.debug("could not clear the answered keyboard: %s", type(e).__name__)
 
 
 # ---- commands ----------------------------------------------------------------------------------

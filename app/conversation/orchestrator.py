@@ -452,7 +452,7 @@ class Orchestrator:
         if verb == "cancel":
             self._sessions.drop(turn.chat_id)
             turn.audit(decision=_kind("CANCEL"))
-            return Reply(texts.CANCELLED)
+            return await self._cancelled()
         if verb == "inbox":
             turn.audit(decision=_kind("INBOX"))
             reply, saved = await self._to_inbox(turn, session.original_text, None, forced=True,
@@ -468,7 +468,11 @@ class Orchestrator:
             return self._resend(session, failed, self._target_name(session))
         if verb == "free_text":
             turn.audit(decision=_kind("FREE_TEXT"))
-            return Reply(texts.ENTER_VALUE)  # the session stays: the next message answers it
+            # The session stays: the next message answers it. A correction to where or what
+            # (target/intent) is re-read together with the original message, so say so.
+            if session.question.type in ("target", "intent_confirm"):
+                return Reply(texts.ENTER_CORRECTION)
+            return Reply(texts.ENTER_VALUE)
         return await self._resume(turn, answered)
 
     @staticmethod
@@ -520,7 +524,19 @@ class Orchestrator:
     async def _cancel(self, turn: _Turn) -> Reply:
         self._sessions.drop(turn.chat_id)
         turn.audit(decision=_kind("CANCEL"))
-        return Reply(texts.CANCELLED)
+        return await self._cancelled()
+
+    async def _cancelled(self) -> Reply:
+        """Cancel throws the message away. While no inbox page is flagged there was no inbox
+        button to keep it instead, and nothing in the chat says why — so the reply
+        says where to set one up. Once one is flagged, or the inbox is switched off on purpose
+        (INBOX_MODE=off), it is just the one line."""
+        if self._s.inbox_mode == "off" or await self._inbox_target(forced=True) is not None:
+            return Reply(texts.CANCELLED)
+        port = self._s.admin_ui_port
+        hint = (texts.CANCELLED_NO_INBOX.format(admin_url=f"http://127.0.0.1:{port}")
+                if port > 0 else texts.CANCELLED_NO_INBOX_NO_ADMIN)
+        return Reply(f"{texts.CANCELLED}\n{hint}")
 
     # ---- inbox fallback ----------------------------------------------------------------------
 

@@ -207,3 +207,24 @@ async def test_null_content_becomes_empty_raw(ctx):
         with pytest.raises(LLMInvalidOutput) as ei:
             await c.interpret("x", ctx, build_schema(ctx))
     assert ei.value.raw == ""
+
+
+async def test_keep_alive_is_sent_only_when_configured(ctx):
+    """Ollama unloads a model 5 minutes after its last request by default, and reloading the
+    12B cost 32 s instead of 16 s on the target machine — so the bot asks it to stay loaded.
+    Left as None (the benchmark, tests), the request says nothing and Ollama's default applies."""
+    bodies = []
+
+    def handler(req: httpx.Request):
+        bodies.append(json.loads(req.content))
+        return httpx.Response(200, json={"message": {"role": "assistant",
+                                                     "content": json.dumps(good_answer(ctx))}})
+
+    transport = httpx.MockTransport(handler)
+    async with OllamaClient("http://ollama.test", "mistral-nemo:12b", transport=transport,
+                            keep_alive="30m") as c:
+        await c.interpret("купи молоко", ctx, build_schema(ctx))
+    async with OllamaClient("http://ollama.test", "mistral-nemo:12b", transport=transport) as c:
+        await c.interpret("купи молоко", ctx, build_schema(ctx))
+    assert bodies[0]["keep_alive"] == "30m"
+    assert "keep_alive" not in bodies[1]

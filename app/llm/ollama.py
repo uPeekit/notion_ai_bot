@@ -29,11 +29,13 @@ class OllamaClient:
         temperature: float = 0.0,
         num_ctx: int = 16384,
         timeout_s: float = 120.0,
+        keep_alive: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.model = model
         self._temperature = temperature
         self._num_ctx = num_ctx
+        self._keep_alive = keep_alive
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"), timeout=timeout_s, transport=transport
         )
@@ -69,6 +71,8 @@ class OllamaClient:
             }
             if wants_think_flag(self.model):
                 body["think"] = False
+            if self._keep_alive is not None:  # None: leave it to Ollama's own default
+                body["keep_alive"] = self._keep_alive
             data = await self._call("POST", "/api/chat", body)
             raw = data.get("message", {}).get("content") or ""
             prompt_tokens = data.get("prompt_eval_count")

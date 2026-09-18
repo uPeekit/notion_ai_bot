@@ -226,9 +226,10 @@ async def test_f2_target_ambiguous_then_button_executes(bot):
     ))
     question = await bot.orch.handle_text(CHAT, USER, "добавь хлеб")
 
-    assert question.text == texts.QUESTION["target"]
+    assert question.text == texts.QUESTION["target"].format(
+        intent=texts.INTENT_LABELS["create"])
     labels = [b.label for row in question.buttons for b in row]
-    assert labels == ["Покупки", "Задачи", texts.BTN_CANCEL, texts.BTN_INBOX]
+    assert labels == ["Покупки", "Задачи", texts.BTN_OTHER, texts.BTN_CANCEL, texts.BTN_INBOX]
     assert question.undo_id is None
     assert bot.sessions.get(CHAT, NOW) is not None
 
@@ -375,7 +376,8 @@ async def test_target_then_item_keeps_the_items_the_first_question_found(bot):
         cand(bot.ctx, "t3", 0.82, fields={"t3.f4": val("t3.f4.o2", 1.0)}),
     ))
     target_q = await bot.orch.handle_text(CHAT, USER, "отметь молоко купленным")
-    assert target_q.text == texts.QUESTION["target"]
+    assert target_q.text == texts.QUESTION["target"].format(
+        intent=texts.INTENT_LABELS["update"])
 
     item_q = await bot.orch.handle_callback(CHAT, USER, press(target_q, "o0"))
     assert item_q.text == texts.QUESTION_WITH_TARGET["item"].format(target_name="Покупки")
@@ -1188,3 +1190,58 @@ def test_orchestrator_holds_no_russian_literals():
     root = Path(__file__).resolve().parents[1]
     source = (root / "app" / "conversation" / "orchestrator.py").read_text(encoding="utf-8")
     assert not re.search(r"[Ѐ-ӿ]", source), "every user string belongs in app/texts.py"
+
+
+# ---- a target question is never a dead end ----------------------------------------------------
+
+
+async def test_other_on_a_target_question_lets_the_user_say_where(bot):
+    """The first real message, «надо забрать посылки», came back as one wrong option (Books)
+    with nothing between accepting it and throwing the message away. [Другое] asks for a
+    correction, which is re-read together with the original message."""
+    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.7, search_query="посылки")))
+    question = await bot.orch.handle_text(CHAT, USER, "надо забрать посылки")
+    assert texts.INTENT_LABELS["search"] in question.text
+
+    prompt = await bot.orch.handle_callback(CHAT, USER, press(question, "other"))
+    assert prompt.text == texts.ENTER_CORRECTION
+    assert bot.llm.calls == 1  # the button itself asks nothing of the model
+    assert bot.sessions.get(CHAT, NOW) is not None  # the question is still open
+
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95, fields={
+        "t3.f1": val("Забрать посылки", 1.0), "t3.f2": val("t3.f2.o1", 1.0)})))  # f2 required
+    done = await bot.orch.handle_text(CHAT, USER, "это задача, в TODO")
+
+    assert bot.llm.calls == 2
+    text, _context = bot.llm.seen[-1][:2]
+    assert "надо забрать посылки" in text and "это задача, в TODO" in text
+    assert notion_calls(bot, "create_page"), done.text  # written to the corrected target
+    assert done.undo_id is not None
+
+
+# ---- cancel says what happened, and where the inbox would have been ----------------------------
+
+
+async def test_cancel_without_an_inbox_says_where_to_set_one_up(make):
+    bot = make(inbox=None)
+    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.7, search_query="посылки")))
+    question = await bot.orch.handle_text(CHAT, USER, "надо забрать посылки")
+    assert texts.BTN_INBOX not in [b.label for row in question.buttons for b in row]
+
+    reply = await bot.orch.handle_callback(CHAT, USER, press(question, "cancel"))
+
+    assert reply.text.startswith(texts.CANCELLED)
+    assert f"http://127.0.0.1:{bot.orch._s.admin_ui_port}" in reply.text
+
+
+async def test_cancel_with_an_inbox_is_one_line(bot):
+    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.7, search_query="посылки")))
+    question = await bot.orch.handle_text(CHAT, USER, "надо забрать посылки")
+    reply = await bot.orch.handle_callback(CHAT, USER, press(question, "cancel"))
+    assert reply.text == texts.CANCELLED
+
+
+async def test_cancel_with_the_inbox_switched_off_does_not_nag(make):
+    bot = make(inbox=None, inbox_mode="off")
+    reply = await bot.orch.cancel(CHAT)
+    assert reply.text == texts.CANCELLED

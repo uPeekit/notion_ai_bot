@@ -296,8 +296,8 @@ Clarification question types (each rendered by `conversation/reply.py:format_que
 
 | Type | Trigger | Buttons |
 |---|---|---|
-| `target` | target margin < threshold | one per candidate target + Отмена (+ В разное) |
-| `intent_confirm` | only trigger is `intent.confidence < POLICY_INTENT_MIN`, exactly one candidate | Да + Отмена (+ В разное) |
+| `target` | target confidence or margin below threshold | one per candidate target + Другое + Отмена (+ В разное). The text names the intent it read ("понял как «найти»") — a misread intent is otherwise invisible. `Другое` asks for a correction, which the next message supplies and the LLM re-reads together with the original text, so a single-candidate question is never "the one wrong option or throw it away". |
+| `intent_confirm` | only trigger is `intent.confidence < POLICY_INTENT_MIN`, exactly one candidate | Да + Другое + Отмена (+ В разное) |
 | `item` | update: item missing or several candidates; append: several candidates (no item means append to the page itself) | one per candidate item (max 8) + Отмена (+ В разное) |
 | `field_required` | required field `not_mentioned` | options for select/status/relation; free-text prompt for others |
 | `field_ambiguous` | field status `ambiguous` | one per candidate value |

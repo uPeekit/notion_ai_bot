@@ -190,14 +190,38 @@ def test_format_search_three_hits():
 # ---- format_question -------------------------------------------------------------------------
 
 def test_format_question_target_two_options():
-    q = Question(type="target", target_key="t2")
+    q = Question(type="target", target_key="t2", proposed="create")
     reply = format_question(q, [("t2", "Покупки"), ("t3", "Задачи")], TOKEN, inbox=True)
     assert reply.buttons == [
         [Button(f"a:{TOKEN}:t2", "Покупки")],
         [Button(f"a:{TOKEN}:t3", "Задачи")],
-        [Button(f"a:{TOKEN}:cancel", "Отмена"), Button(f"a:{TOKEN}:inbox", "В разное")],
+        [Button(f"a:{TOKEN}:other", "Другое"), Button(f"a:{TOKEN}:cancel", "Отмена"),
+         Button(f"a:{TOKEN}:inbox", "В разное")],
     ]
     _assert_ids_ok(reply)
+
+
+def test_target_question_says_how_the_message_was_read():
+    """The first real clarification read «надо забрать посылки» as a *search* in Books, and the
+    question never said so — the user saw one option and could not tell the intent was wrong."""
+    q = Question(type="target", target_key="t2", proposed="search")
+    reply = format_question(q, [("t2", "Books")], TOKEN, inbox=False)
+    assert "«найти»" in reply.text
+    assert "Другое" in reply.text  # points at the escape hatch it offers
+
+
+def test_single_candidate_target_question_is_not_a_dead_end():
+    """One candidate used to mean one wrong option or throwing the message away."""
+    q = Question(type="target", target_key="t2", proposed="search")
+    reply = format_question(q, [("t2", "Books")], TOKEN, inbox=False)
+    ids = [b.id.rsplit(":", 1)[1] for row in reply.buttons for b in row]
+    assert ids == ["t2", "other", "cancel"]
+
+
+def test_target_question_persisted_before_it_carried_the_intent_still_renders():
+    q = Question(type="target", target_key="t2")  # proposed=None, as in an older session
+    reply = format_question(q, [("t2", "Books")], TOKEN, inbox=False)
+    assert "{" not in reply.text and "None" not in reply.text
 
 
 def test_format_question_field_required_with_options():

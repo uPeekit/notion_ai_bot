@@ -150,6 +150,17 @@ class FakeBot:
     async def get_file(self, file_id):
         return self.file
 
+    edit_error: Exception | None = None
+
+    async def edit_message_reply_markup(self, chat_id=None, message_id=None,
+                                        inline_message_id=None, reply_markup=None, **kwargs):
+        if self.edit_error is not None:
+            raise self.edit_error
+        if self.order is not None:
+            self.order.append("keyboard_cleared")
+        self.cleared = getattr(self, "cleared", []) + [(chat_id, message_id, reply_markup)]
+        return True
+
 
 # ---- Update/Message builders ---------------------------------------------------------------
 
@@ -417,7 +428,7 @@ async def test_callback_answered_before_orchestrator_called_then_dispatched():
 
     assert await dispatch(hs.app, update, hs.context)
 
-    assert order == ["answered", "orchestrator"]
+    assert order == ["answered", "orchestrator", "keyboard_cleared"]
     assert hs.bot.answered == ["cbq-1"]
     assert hs.orch.calls == [("handle_callback", CHAT_ID, ALLOWED_USER, "a:tok:opt1")]
     assert len(hs.bot.sent) == 1
@@ -630,3 +641,29 @@ def test_every_registered_command_is_in_the_published_menu_and_the_help_text():
     assert registered == set(texts.COMMANDS)
     for name in registered:
         assert f"/{name}" in texts.HELP_TEXT
+
+
+async def test_answered_question_loses_its_keyboard_before_the_reply():
+    """A reply such as «Отменено.» under a question still showing its buttons reads as nothing
+    having happened — which is exactly how the first real cancel was reported."""
+    order: list[str] = []
+    hs = build(reply=Reply("Отменено."), order=order)
+    update = callback_update(ALLOWED_USER, "a:tok:cancel", hs.bot, update_id=77)
+
+    assert await dispatch(hs.app, update, hs.context)
+
+    assert hs.bot.cleared == [(CHAT_ID, 77, None)]  # that message, keyboard removed
+    assert order == ["answered", "orchestrator", "keyboard_cleared"]
+    assert [m["text"] for m in hs.bot.sent] == ["Отменено."]
+
+
+async def test_a_keyboard_telegram_will_not_edit_does_not_cost_the_reply():
+    from telegram.error import BadRequest
+
+    hs = build(reply=Reply("ok"))
+    hs.bot.edit_error = BadRequest("Message can't be edited")
+    update = callback_update(ALLOWED_USER, "a:tok:opt1", hs.bot)
+
+    assert await dispatch(hs.app, update, hs.context)
+
+    assert [m["text"] for m in hs.bot.sent] == ["ok"]
