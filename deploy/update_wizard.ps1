@@ -37,8 +37,6 @@ Write-Host "installed version : $version"
 Write-Host "install dir       : $root"
 Write-Host "schema            : " -NoNewline
 & $py -m tools.migrate --status --db "data\bot.sqlite" 2>&1 | Select-Object -First 1 | ForEach-Object { Write-Host $_ }
-$pid_file = Join-Path $root "data\bot.pid"
-if (Test-Path $pid_file) { Write-Host "note: data\bot.pid exists - stop the bot before updating" -ForegroundColor Yellow }
 Write-Host ""
 Write-Host "  1) Update this install"
 Write-Host "  2) Dry run (show what an update would do)"
@@ -61,7 +59,7 @@ switch ($choice) {
     Write-Host "> deploy\update.ps1 -Zip $zip" -ForegroundColor Cyan
     & (Join-Path $root "deploy\update.ps1") -Zip $zip
     $code = $LASTEXITCODE
-    if ($code -eq 0) { Write-Host "updated. Start the bot with deploy\run.ps1" -ForegroundColor Green }
+    if ($code -eq 0) { Write-Host "updated. Start the bot: double-click start.cmd" -ForegroundColor Green }
     elseif ($code -eq 2) { Write-Host "update FAILED after files were copied. Run this wizard again and choose 3 (roll back)." -ForegroundColor Red }
     else { Write-Host "update refused (exit $code)" -ForegroundColor Red }
     exit $code

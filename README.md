@@ -60,25 +60,24 @@ in one `.env` file.
    - Message [@userinfobot](https://t.me/userinfobot) (or any similar "what's my id" bot) to get
      your own numeric Telegram user id. Without this the bot will not talk to you — see
      `TELEGRAM_ALLOWED_USER_IDS` below.
-5. **Install a release.** Build one from this repo (`release.cmd`, see
-   [RELEASE.md](RELEASE.md)) or use a zip you already have, then, from **this repo's root**:
-   ```powershell
-   deploy\install.ps1 -Zip dist\notion_ai_bot-X.Y.Z.zip -Dest C:\apps\notion_ai_bot
-   ```
-   This creates the install directory, syncs its own Python environment, copies `.env.example` to
-   `.env` if one doesn't already exist, and applies the database schema. It does **not** fill in
-   your tokens for you — do that next.
+5. **Build and install a release.** Double-click **`release.cmd`** in this repo and accept the
+   defaults (see [RELEASE.md](RELEASE.md)). When it asks *"Update the production install now"*,
+   say yes: with no install there yet, it offers a fresh one in `C:\apps\notion_ai_bot` — its own
+   Python environment, the database schema, and a `.env` copied from `.env.example`, which it
+   offers to open in Notepad. It does **not** fill in your tokens for you — do that next.
 6. **Fill in `.env`** in the install directory (`C:\apps\notion_ai_bot\.env` in the example
    above) with the Notion token, the Telegram bot token, and your Telegram user id (see the table
    below for exactly which keys).
-7. **Start the bot:**
-   ```powershell
-   C:\apps\notion_ai_bot\deploy\run.ps1
-   ```
-   Leave that window open — that's where the bot's own log goes (see "Logging", below). The first
-   thing it does is discover your workspace and write `data\targets.yaml`; watch the console for
-   `discovery: N targets` to confirm it saw what you expected. If it exits immediately instead,
-   see "When something breaks" below.
+7. **Start the bot:** double-click **`start.cmd`** in the install folder
+   (`C:\apps\notion_ai_bot\start.cmd`). The bot runs in that window; stop it with Ctrl+C (then
+   `Y`) or by closing the window. The first thing it does is discover your workspace and write
+   `data\targets.yaml` — watch for `discovery: N targets` to confirm it saw what you expected. If
+   it stops instead, the window says why in one line and offers the fix (open `.env`, or apply a
+   pending migration); the exit codes are under "When something breaks" below.
+
+   Only one copy runs per install: a second `start.cmd` refuses with "already running", because
+   two copies would fight over the same Telegram bot and database. `deploy\run.ps1` still exists
+   for unattended starts (Task Scheduler and the like) — it has no prompts.
 
 To upgrade later, see [RELEASE.md](RELEASE.md) — `update.cmd` in the install directory walks you
 through it.
@@ -193,13 +192,14 @@ built. If your machine has no usable GPU, voice messages still work, just more s
 
 ## Logging
 
-The bot logs to the console window you started it in — there is currently no log file, so keep
-that window around (or redirect it yourself, e.g. `... 2>> logs\bot.log`, if you want the output
-to survive after closing it). At the default `LOG_LEVEL=INFO` you'll see one line per notable
+The bot logs to its console window **and** to `logs\bot.log` in the install folder, rotated at
+5 MB with five old files kept (`bot.log.1` … `bot.log.5`), so the log survives closing the window
+and never grows without bound. Change the location with `LOG_FILE` in `.env`; set it empty to
+switch the file off. At the default `LOG_LEVEL=INFO` you'll see one line per notable
 event (discovery results, warnings, errors) — never your message text, and never either token,
 however verbose you make it. That second part isn't just "we try not to log tokens": every line
 the bot writes is passed through a filter that replaces your Telegram and Notion token values
-with `***` first, whoever produced the line. On top of that, Telegram's
+with `***` first, whoever produced the line — in the file exactly as on screen. On top of that, Telegram's
 own client library normally puts your bot token straight into the URL of every request it makes,
 and logs that URL — so the bot deliberately holds two of that library's own loggers (`httpx`/
 `httpcore`, its HTTP layer, and `telegram.ext.ExtBot`, which logs the same URL once on its own at
@@ -216,7 +216,8 @@ If the process **exits immediately** instead of starting up, the exit code tells
 |---|---|
 | `2` | A `.env` value is missing or unusable (it names which key, never the value). Three ways to get it: a required key missing; a `LOG_LEVEL` that isn't one of `CRITICAL`/`ERROR`/`WARNING`/`INFO`/`DEBUG`; or Telegram itself rejecting `TELEGRAM_BOT_TOKEN` (mistyped, or revoked/regenerated in @BotFather since you last pasted it). |
 | `3` | Notion rejected the token outright (401/403) — check `NOTION_TOKEN`. |
-| `4` | The database has a pending schema migration — re-run the updater (`update.cmd`) rather than the bot itself. |
+| `4` | The database has a pending schema migration. `start.cmd` offers to apply it on the spot (backing the database up first); otherwise run `.venv\Scripts\python.exe -m tools.migrate --apply` in the install folder. |
+| `5` | The bot is already running for this install — look for its other window. |
 
 **The first voice message takes minutes and looks like nothing is happening.** That is expected
 once: the speech model (`large-v3-turbo`, ~1.5 GB) is downloaded from HuggingFace on first use

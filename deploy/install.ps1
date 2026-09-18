@@ -13,7 +13,7 @@ try {
   New-Item -ItemType Directory -Force "data","logs" | Out-Null
   & ".venv\Scripts\python.exe" -m tools.migrate --apply --db "data\bot.sqlite"
   if ($LASTEXITCODE -ne 0) { throw "migration failed ($LASTEXITCODE)" }
-  Write-Host "installed $(Get-Content VERSION) into $Dest. Start with deploy\run.ps1"
+  Write-Host "installed $(Get-Content VERSION) into $Dest. Start the bot: double-click start.cmd there."
   Pop-Location
   exit 0
 } catch {

@@ -108,10 +108,13 @@ if (AskYN "Update the production install now" $state.update_prod) {
       Write-Host "> deploy\install.ps1 -Zip $zip -Dest $prod" -ForegroundColor Cyan
       & (Join-Path $root "deploy\install.ps1") -Zip $zip -Dest $prod
       if ($LASTEXITCODE -ne 0) { Write-Host "install failed (exit $LASTEXITCODE)" -ForegroundColor Red; exit 1 }
+      Write-Host ""
+      Write-Host "First install: .env needs TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS and NOTION_TOKEN." -ForegroundColor Yellow
+      if (AskYN "Open $prod\.env in Notepad now" $true) { Start-Process notepad.exe (Join-Path $prod ".env") }
     }
   }
   Write-Host ""
-  Write-Host "Start the bot with: $prod\deploy\run.ps1"
+  Write-Host "Start the bot: double-click $prod\start.cmd"
 } else { $state.update_prod = $false }
 Save-State $state
 Write-Host ""

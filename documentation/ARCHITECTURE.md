@@ -110,8 +110,8 @@ notion_ai_bot/
 │   ├── migrate.py              apply/inspect migrations from the command line
 │   └── sample_workspace.py     fixed workspace used by tests and the benchmark
 ├── migrations/                 NNNN_name.sql, applied only by tools/migrate.py or the installer
-├── deploy/                     install.ps1, run.ps1, update.ps1, *_wizard.ps1 (RELEASE.md)
-├── release.py, apply_update.py, release.cmd, update.cmd
+├── deploy/                     install.ps1, run.ps1, start.ps1, update.ps1, *_wizard.ps1 (RELEASE.md)
+├── release.py, apply_update.py, release.cmd, update.cmd, start.cmd
 ├── tests/
 ├── data/                        runtime files (gitignored): bot.sqlite, targets.yaml
 ├── documentation/

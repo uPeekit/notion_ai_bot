@@ -57,9 +57,13 @@ separate loop would leave the same httpx-backed Notion/Ollama clients holding id
 connections bound to it, and the first real call on them once polling starts would raise
 `RuntimeError: Event loop is closed`.
 
-0. `logging_setup.configure(LOG_LEVEL, redact=(telegram token, notion token))`; an unknown
-   `LOG_LEVEL` → exit 2 naming the valid levels (the name is normalised to upper case first, so
-   `LOG_LEVEL=info` is accepted rather than crashing on `Logger.setLevel`).
+0. `logging_setup.configure(LOG_LEVEL, redact=(telegram token, notion token), log_file=LOG_FILE)`;
+   an unknown `LOG_LEVEL` → exit 2 naming the valid levels (the name is normalised to upper case
+   first, so `LOG_LEVEL=info` is accepted rather than crashing on `Logger.setLevel`).
+0a. `InstanceLock(<db dir>/bot.pid).acquire()`; another process already holding it → exit 5. One
+   bot per database: two pollers on one token get Telegram `409 Conflict`s and race each other's
+   sessions. The lock is an OS byte-range lock (released by the OS when the process dies, crash
+   included), not the file's existence — a `bot.pid` left behind never blocks a restart.
 1. Settings load (`Settings.require_telegram()`); missing required → exit 2.
 2. `AuditStore.assert_schema_current()`; a pending migration → exit 4 with the hint to run the
    updater. Migrations are never applied here — never `AuditStore.migrate()` — only by the
@@ -80,7 +84,15 @@ connections bound to it, and the first real call on them once polling starts wou
 9. Telegram polling start. If Telegram rejects the bot token, python-telegram-bot raises
    `InvalidToken` out of `run_polling()` → exit 2 naming `TELEGRAM_BOT_TOKEN`. Neither that
    exception's message nor its traceback is ever printed or logged: PTB builds it as
-   ``InvalidToken(f"The token `{token}` was rejected by the server.")``.
+   ``InvalidToken(f"The token `{token}` was rejected by the server.")``. PTB's own ERROR line
+   ("Invalid token. Aborting retry loop.") is kept, but the formatter drops its ~40-line
+   traceback — a rejected token is a config mistake, not a crash.
+
+Exit codes: `0` stopped normally, `2` configuration (`.env`, or a token Telegram rejected), `3`
+Notion auth, `4` pending migration, `5` already running. `deploy/start.ps1` (behind `start.cmd`)
+turns each into one plain-English line and, for `2`/`3`, offers to open `.env`; for `4` it offers
+to run `tools.migrate --apply` on an explicit yes — still never implicitly.
+`tests/test_deploy_scripts.py` fails if `main.py` gains an `EXIT_*` the launcher doesn't explain.
 
 ## Logging
 
@@ -96,8 +108,12 @@ client logs every request's full URL, token and all, at INFO) and `telegram.ext.
 same token-bearing URL once at DEBUG, from its own constructor — not an HTTP request, so the
 httpx floor does nothing for it).
 
+Records also go to `LOG_FILE` (default `logs/bot.log`, rotated at 5 MB × 5; empty disables it)
+through the same filter and the same redacting formatter as stderr — a file is where a leaked
+token would outlive the console window.
+
 Neither floor can help with the third leak, so `configure()` also installs a redacting formatter
-over the stderr handler: every occurrence of a secret *value* it was explicitly given — `main()`
+over the stderr handler (and the file handler): every occurrence of a secret *value* it was explicitly given — `main()`
 passes the Telegram and Notion token values, and nothing else; `configure` never sees a `Settings`
 — becomes `***` in the formatted record, message, interpolated args and traceback alike. The leak
 it exists for is `telegram.ext`'s polling retry loop

@@ -55,6 +55,7 @@ from app.commands.executor import Executor
 from app.config import Settings, load_settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
+from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.base import LLMClient, LLMError
 from app.llm.context import ContextBuilder
 from app.llm.ollama import OllamaClient
@@ -75,6 +76,12 @@ log = logging.getLogger(__name__)
 EXIT_CONFIG = 2
 EXIT_NOTION_AUTH = 3
 EXIT_PENDING_MIGRATION = 4
+EXIT_ALREADY_RUNNING = 5
+
+_ALREADY_RUNNING = (
+    "the bot is already running for this install (look for its other window). "
+    "Close that one first - two copies would fight over Telegram and the database."
+)
 
 # Only an actual auth failure is fatal (documentation/ERRORS.md: "exit 3 on 401"; 403 reads the
 # same way — a token that is simply forbidden rather than merely absent). Anything else from
@@ -396,22 +403,33 @@ def main() -> None:
                 settings.telegram_bot_token.get_secret_value(),
                 settings.notion_token.get_secret_value(),
             ),
+            log_file=settings.log_file or None,
         )
     except ValueError as e:
         _die(EXIT_CONFIG, f"configuration error: {e}. Fix .env and restart.")
 
-    app = build(settings)
-    startup_checks(app)  # sync: settings + schema; exits 2/4 directly, no event loop involved
+    # One bot per database: the lock sits next to the file it protects. Taken before build(),
+    # which opens that database. `_die` raises SystemExit, so the `finally` still releases it.
+    lock = InstanceLock(settings.db_path.parent / "bot.pid")
     try:
-        app.telegram_app.run_polling()
-    except InvalidToken:
-        # Telegram refused the token (mistyped, revoked, regenerated). PTB re-raises this out of
-        # run_polling() — it is neither KeyboardInterrupt nor SystemExit, so without this catch
-        # Python would print the whole traceback, token and all. Nothing about `e` is printed or
-        # logged: see _TELEGRAM_TOKEN_REJECTED.
-        _die(EXIT_CONFIG, _TELEGRAM_TOKEN_REJECTED)
-    if app.fatal is not None:  # post_init_checks found a fatal Notion auth failure and stopped
-        _die(*app.fatal)
+        lock.acquire()
+    except AlreadyRunning:
+        _die(EXIT_ALREADY_RUNNING, _ALREADY_RUNNING)
+    try:
+        app = build(settings)
+        startup_checks(app)  # sync: settings + schema; exits 2/4 directly, no event loop involved
+        try:
+            app.telegram_app.run_polling()
+        except InvalidToken:
+            # Telegram refused the token (mistyped, revoked, regenerated). PTB re-raises this out
+            # of run_polling() — it is neither KeyboardInterrupt nor SystemExit, so without this
+            # catch Python would print the whole traceback, token and all. Nothing about `e` is
+            # printed or logged: see _TELEGRAM_TOKEN_REJECTED.
+            _die(EXIT_CONFIG, _TELEGRAM_TOKEN_REJECTED)
+        if app.fatal is not None:  # post_init_checks found a fatal Notion auth failure, stopped
+            _die(*app.fatal)
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

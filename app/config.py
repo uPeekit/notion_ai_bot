@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     session_ttl_s: int = 900
     undo_window_s: int = 300
     log_level: str = "INFO"
+    log_file: str = "logs/bot.log"  # rotating, redacted like stderr; empty disables it
 
     # auto: save on every unresolvable path and offer the button; button: only on button press;
     # off: no inbox, no button.

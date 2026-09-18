@@ -61,23 +61,40 @@ def installed_manifest(root: Path) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+# Must match app/instance_lock.py, which cannot be imported from here (this script replaces
+# `app` while it runs). tests/test_apply_update.py holds a real InstanceLock and asserts this
+# probe sees it, so the two copies cannot drift apart unnoticed.
+_LOCK_OFFSET = 1 << 30
+
+
 def bot_running(root: Path) -> bool:
+    """True while a bot process holds its lock on data/bot.pid. Asks the OS rather than trusting
+    the pid inside the file: a crash leaves the file behind, and its pid may since have been
+    reused by an unrelated process — but the lock dies with the process that held it."""
     pid_file = root / "data" / "bot.pid"
     if not pid_file.exists():
         return False
     try:
-        pid = int(pid_file.read_text().strip())
-    except ValueError:
-        return False
-    if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True,
-                             text=True).stdout
-        return str(pid) in out
-    try:
-        os.kill(pid, 0)
-        return True
+        f = open(pid_file, "a+", encoding="utf-8")
     except OSError:
+        return True
+    try:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(_LOCK_OFFSET)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                f.seek(_LOCK_OFFSET)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            return True
         return False
+    finally:
+        f.close()
 
 
 def _protected(rel: str) -> bool:
@@ -178,8 +195,8 @@ def apply(zip_path: Path, root: Path, *, force: bool = False, dry_run: bool = Fa
               file=sys.stderr)
         return 1
     if bot_running(root) and not force:
-        print("refused: bot is running (data/bot.pid); stop it first or use --force",
-              file=sys.stderr)
+        print("refused: the bot is running - close its window (or press Ctrl+C in it) and try "
+              "again", file=sys.stderr)
         return 1
     need_sync = new["lock_hash"] != old.get("lock_hash")
     print(f"update {cur} -> {new['version']} ({new['kind']}); runtime sync: {need_sync}")
@@ -208,6 +225,10 @@ def apply(zip_path: Path, root: Path, *, force: bool = False, dry_run: bool = Fa
 
 
 def rollback(root: Path) -> int:
+    if bot_running(root):
+        print("refused: the bot is running - close its window (or press Ctrl+C in it) and try "
+              "again", file=sys.stderr)
+        return 1
     backup_dir = root / ".backup"
     backups = _sorted_backups(backup_dir) if backup_dir.exists() else []
     if not backups:

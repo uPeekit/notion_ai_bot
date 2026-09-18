@@ -407,5 +407,6 @@ Secrets are never written. `llm_context` contains keys, not Notion ids.
 | `SESSION_TTL_S` | `900` | pending clarification lifetime |
 | `UNDO_WINDOW_S` | `300` | |
 | `LOG_LEVEL` | `INFO` | |
+| `LOG_FILE` | `logs/bot.log` | rotating 5 MB × 5, redacted like stderr; empty = console only |
 | `INBOX_MODE` | `auto` | `auto`\|`button`\|`off` — `auto` saves on every unresolvable path and still offers the button; `button` saves only on a button press; `off` disables the inbox entirely |
 | `INBOX_TARGET_ID` | `` | Notion page/data-source id; overrides every `targets.yaml` `inbox: true` flag when set; logs a WARNING if it matches no discovered target |

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import inspect
 import logging
+import logging.handlers
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
@@ -69,16 +71,20 @@ def test_configure_has_no_access_to_settings():
     sequence of secret values to redact, never a Settings object it could read a third token out
     of. `redact` is keyword-only so a level can never land there by position."""
     params = inspect.signature(configure).parameters
-    assert list(params) == ["level", "redact"]
+    assert list(params) == ["level", "redact", "log_file"]
     assert params["level"].annotation in (str, "str")
     assert params["redact"].kind is inspect.Parameter.KEYWORD_ONLY
     assert params["redact"].annotation in (Sequence[str], "Sequence[str]")
+    # A path, not a Settings: the file handler gets a location, never a way to find a secret.
+    assert params["log_file"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["log_file"].annotation in (str | Path | None, "str | Path | None")
     assert not any("Settings" in str(p.annotation) for p in params.values())
 
 
 def _reset_root_and_third_party() -> None:
     for h in list(logging.getLogger().handlers):
         logging.getLogger().removeHandler(h)
+        h.close()  # a file handler left open keeps its tmp_path file locked on Windows
     for name in logging_setup._THIRD_PARTY_WARNING_ONLY:
         logging.getLogger(name).setLevel(logging.NOTSET)
 
@@ -215,3 +221,91 @@ def test_configure_rejects_an_unknown_level_naming_the_valid_ones():
     assert "verbose" in message
     for name in logging_setup.LEVELS:
         assert name in message
+
+
+def test_log_file_receives_records_with_the_event_id(tmp_path):
+    log_file = tmp_path / "logs" / "bot.log"  # parent does not exist yet
+    configure("INFO", log_file=log_file)
+    try:
+        with bind_event(7):
+            logging.getLogger("test.logging.file").info("written to disk")
+    finally:
+        _reset_root_and_third_party()
+    text = log_file.read_text(encoding="utf-8")
+    assert "written to disk" in text
+    assert "[event=7]" in text
+
+
+def test_log_file_is_redacted_like_stderr(tmp_path):
+    """The file is where a leaked token would outlive the console window, so it must get the
+    same redacting formatter — message, args and traceback alike."""
+    log_file = tmp_path / "bot.log"
+    secret = "7654321:AAH-FILE-SECRET"
+    configure("INFO", redact=(secret,), log_file=log_file)
+    try:
+        log = logging.getLogger("test.logging.file.redact")
+        log.error("token in message %s", secret)
+        try:
+            raise RuntimeError(f"The token `{secret}` was rejected by the server.")
+        except RuntimeError:
+            log.exception("token in traceback")
+    finally:
+        _reset_root_and_third_party()
+    text = log_file.read_text(encoding="utf-8")
+    assert "Traceback" in text  # the traceback really was written, so the check is not vacuous
+    assert secret not in text
+    assert REDACTED in text
+
+
+def test_log_file_rotates_within_its_bounds(tmp_path):
+    configure("INFO", log_file=tmp_path / "bot.log")
+    try:
+        handlers = [h for h in logging.getLogger().handlers
+                    if isinstance(h, logging.handlers.RotatingFileHandler)]
+    finally:
+        _reset_root_and_third_party()
+    assert len(handlers) == 1
+    assert handlers[0].maxBytes == logging_setup.LOG_FILE_MAX_BYTES
+    assert handlers[0].backupCount == logging_setup.LOG_FILE_BACKUPS
+
+
+def test_reconfigure_closes_the_previous_log_file(tmp_path):
+    first = tmp_path / "first.log"
+    configure("INFO", log_file=first)
+    handler = next(h for h in logging.getLogger().handlers
+                   if isinstance(h, logging.FileHandler))
+    configure("INFO", log_file=tmp_path / "second.log")
+    try:
+        assert handler.stream is None  # closed, not merely detached
+        assert sum(isinstance(h, logging.FileHandler)
+                   for h in logging.getLogger().handlers) == 1
+    finally:
+        _reset_root_and_third_party()
+
+
+def test_no_log_file_means_stderr_only(tmp_path):
+    configure("INFO")
+    try:
+        assert not any(isinstance(h, logging.FileHandler)
+                       for h in logging.getLogger().handlers)
+    finally:
+        _reset_root_and_third_party()
+
+
+def test_rejected_token_logs_one_line_not_a_traceback(capsys):
+    """A mistyped bot token is the most likely first-run mistake. PTB logs it at ERROR with a
+    ~40-line traceback; the user needs the one line, and app.main prints the remedy after it."""
+    from telegram.error import InvalidToken
+
+    configure("INFO", redact=[TOKEN])
+    try:
+        try:
+            raise InvalidToken(f"The token `{TOKEN}` was rejected by the server.")
+        except InvalidToken:
+            logging.getLogger("telegram.ext").exception("Invalid token. Aborting retry loop.")
+        err = capsys.readouterr().err
+    finally:
+        _reset_root_and_third_party()
+    assert "Invalid token. Aborting retry loop." in err
+    assert "Traceback" not in err
+    assert TOKEN not in err

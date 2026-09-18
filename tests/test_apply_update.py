@@ -99,6 +99,37 @@ def test_refuses_when_running(tmp_path, calls, monkeypatch):
     assert au.apply(z2, prod) == 1
 
 
+def test_bot_running_sees_the_bots_real_lock(tmp_path):
+    """apply_update.py carries its own copy of the lock probe (it cannot import `app`), so this
+    holds a real app InstanceLock and asserts the copy agrees — the two cannot drift silently."""
+    from app.instance_lock import InstanceLock
+
+    root = tmp_path / "prod"
+    assert not au.bot_running(root)  # no data/bot.pid at all
+    lock = InstanceLock(root / "data" / "bot.pid")
+    lock.acquire()
+    try:
+        assert au.bot_running(root)
+    finally:
+        lock.release()
+    assert not au.bot_running(root)  # file still there, lock gone: not running
+
+
+def test_leftover_pid_file_does_not_block_an_update(tmp_path):
+    """A crash leaves data/bot.pid behind, possibly naming a pid since reused by an unrelated
+    process; the old pid-based check would have refused forever."""
+    root = tmp_path / "prod"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "bot.pid").write_text(str(__import__("os").getpid()), encoding="utf-8")
+    assert not au.bot_running(root)
+
+
+def test_rollback_refuses_while_running(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(au, "bot_running", lambda root: True)
+    assert au.rollback(tmp_path) == 1
+    assert "running" in capsys.readouterr().err
+
+
 def test_refuses_non_release_zip(tmp_path, calls):
     prod, _ = install(tmp_path)
     bad = tmp_path / "bad.zip"

@@ -46,7 +46,9 @@ existing install: unlike `apply_update.py`, it does no version check, takes no b
 not prune files the new zip removed, and offers no rollback if something goes wrong
 mid-extract. To upgrade an existing install, use `deploy\update.ps1` (see Update, below).
 
-Does, in order: locate `uv` (`PATH`, else `%USERPROFILE%\.local\bin\uv.exe`), extract the zip into `-Dest`, `uv sync --frozen --no-dev`, create `.env` from `.env.example` if missing (fill in tokens before running), create `data\` and `logs\`, then `.venv\Scripts\python.exe -m tools.migrate --apply --db data\bot.sqlite`. Start the bot with `deploy\run.ps1`.
+Does, in order: locate `uv` (`PATH`, else `%USERPROFILE%\.local\bin\uv.exe`), extract the zip into `-Dest`, `uv sync --frozen --no-dev`, create `.env` from `.env.example` if missing (fill in tokens before running), create `data\` and `logs\`, then `.venv\Scripts\python.exe -m tools.migrate --apply --db data\bot.sqlite`. `release.cmd` runs exactly this for you when its "Update the production install now" step finds no install, then offers to open the new `.env` in Notepad.
+
+**Start the bot** by double-clicking `start.cmd` in the install directory. It runs the bot in that window, writes `logs\bot.log`, refuses to start a second copy (exit 5), and explains any startup failure in one line — offering to open `.env` for a config problem, or to apply a pending migration on an explicit yes. `deploy\run.ps1` is the same start without prompts, for unattended use.
 
 ## Update
 
@@ -56,7 +58,7 @@ From the **install directory** (not the repo):
 C:\apps\notion_ai_bot\deploy\update.ps1 dist\notion_ai_bot-0.0.3.zip
 ```
 
-Wraps `apply_update.py <zip> --root <install dir>`. Refuses (exit 1) if the zip's version is not newer than the installed `VERSION`, or if the bot looks running (`data\bot.pid` resolves to a live pid) — pass `-Force` to override either check. On success: backs up the current app layer to `.backup\<old-version>\` (keeps the 2 most recent), extracts the new files (protected paths skipped), deletes files present in the old manifest but absent from the new one, runs `uv sync --frozen --no-dev` only if `uv.lock`'s hash changed, then `python -m tools.migrate --apply`, then writes the new `VERSION`. Exit codes: `0` success, `1` refused (not newer / bot running / bad archive), `2` failure mid-update (partially applied — see Rollback). `-DryRun` reports what would happen and exits before any of that (still exits 1 if the "not newer"/"bot running" refusal applies, since that check runs before the dry-run short-circuit).
+Wraps `apply_update.py <zip> --root <install dir>`. Refuses (exit 1) if the zip's version is not newer than the installed `VERSION`, or if the bot is running (a process holds the OS lock on `data\bot.pid` — the file's mere presence, e.g. left behind by a crash, does not count) — pass `-Force` to override either check. Rollback refuses while the bot is running too. On success: backs up the current app layer to `.backup\<old-version>\` (keeps the 2 most recent), extracts the new files (protected paths skipped), deletes files present in the old manifest but absent from the new one, runs `uv sync --frozen --no-dev` only if `uv.lock`'s hash changed, then `python -m tools.migrate --apply`, then writes the new `VERSION`. Exit codes: `0` success, `1` refused (not newer / bot running / bad archive), `2` failure mid-update (partially applied — see Rollback). `-DryRun` reports what would happen and exits before any of that (still exits 1 if the "not newer"/"bot running" refusal applies, since that check runs before the dry-run short-circuit).
 
 ## What updates never touch
 

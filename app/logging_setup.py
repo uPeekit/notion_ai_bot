@@ -49,10 +49,12 @@ that point (a Telegram handler receiving an update) can know it in advance.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 
 FORMAT = "%(asctime)s %(levelname)s %(name)s [event=%(event_id)s] %(message)s"
 NO_EVENT = "-"
@@ -61,6 +63,10 @@ REDACTED = "***"
 # The level names configure() accepts, in the order the error message lists them. NOTSET is
 # deliberately absent: "no level" is not a log level a user can mean.
 LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
+# Five files of 5 MB: weeks of normal use at INFO, and a hard ceiling on disk use when
+# something starts logging in a loop.
+LOG_FILE_MAX_BYTES = 5 * 1024 * 1024
+LOG_FILE_BACKUPS = 5
 
 event_id_var: ContextVar[str] = ContextVar("event_id", default=NO_EVENT)
 
@@ -99,8 +105,22 @@ class _RedactingFormatter(logging.Formatter):
             text = text.replace(secret, REDACTED)
         return text
 
+    def formatException(self, ei) -> str:  # noqa: N802 (stdlib name)
+        """A rejected bot token is a config mistake, not a crash: PTB logs it with a ~40-line
+        traceback before `app.main` prints the one line that says what to fix. The message line
+        ("Invalid token. Aborting retry loop.") is kept; only the traceback goes. Matched by name
+        so this module never imports telegram. An empty result is falsy, so `Formatter.format`
+        neither appends nor caches it, and other handlers still see the full exception."""
+        exc = ei[1]
+        if (exc is not None and type(exc).__name__ == "InvalidToken"
+                and type(exc).__module__ == "telegram.error"):
+            return ""
+        return super().formatException(ei)
 
-def configure(level: str = "INFO", *, redact: Sequence[str] = ()) -> None:
+
+def configure(
+    level: str = "INFO", *, redact: Sequence[str] = (), log_file: str | Path | None = None,
+) -> None:
     """(Re)configures the root logger: one stderr handler carrying the event_id filter, the
     format above and a `_RedactingFormatter` over `redact`, plus the httpx/httpcore silencing
     described in the module docstring. Idempotent — safe to call more than once (tests do), since
@@ -113,6 +133,10 @@ def configure(level: str = "INFO", *, redact: Sequence[str] = ()) -> None:
     `redact` is a sequence of secret *values* — `app.main` passes the Telegram and Notion token
     values, nothing else. It is keyword-only and deliberately not a `Settings`: this module must
     stay unable to discover a secret it was not explicitly handed.
+
+    `log_file`, when given, adds a rotating file handler carrying the *same* filter and the same
+    redacting formatter — a file is where a leaked token would outlive the console window, so it
+    must never get a cheaper formatter than stderr does.
     """
     name = (level or "").strip().upper()
     if name not in LEVELS:
@@ -121,10 +145,19 @@ def configure(level: str = "INFO", *, redact: Sequence[str] = ()) -> None:
     root.setLevel(name)
     for h in list(root.handlers):
         root.removeHandler(h)
-    handler = logging.StreamHandler(stream=sys.stderr)
-    handler.addFilter(_EventIdFilter())
-    handler.setFormatter(_RedactingFormatter(FORMAT, redact))
-    root.addHandler(handler)
+        if isinstance(h, logging.FileHandler):
+            h.close()  # reconfiguring must not leak an open file (or keep it locked on Windows)
+    handlers: list[logging.Handler] = [logging.StreamHandler(stream=sys.stderr)]
+    if log_file:
+        path = Path(log_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.handlers.RotatingFileHandler(
+            path, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUPS, encoding="utf-8",
+        ))
+    for handler in handlers:
+        handler.addFilter(_EventIdFilter())
+        handler.setFormatter(_RedactingFormatter(FORMAT, redact))
+        root.addHandler(handler)
     for name in _THIRD_PARTY_WARNING_ONLY:
         logging.getLogger(name).setLevel(logging.WARNING)
 

@@ -364,9 +364,10 @@ def test_main_passes_both_token_values_to_the_log_redactor(env, monkeypatch, cle
     app.store.migrate()
     recorded = {}
 
-    def _configure(level, *, redact=()):
+    def _configure(level, *, redact=(), log_file=None):
         recorded["level"] = level
         recorded["redact"] = tuple(redact)
+        recorded["log_file"] = log_file
 
     monkeypatch.setattr(main, "configure", _configure)
     monkeypatch.setattr(app.telegram_app, "run_polling", lambda *a, **k: None)
@@ -375,6 +376,62 @@ def test_main_passes_both_token_values_to_the_log_redactor(env, monkeypatch, cle
     main.main()
 
     assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN)
+    assert recorded["log_file"] == "logs/bot.log"  # the default reaches the file handler
+
+
+# ---- one bot per install ----------------------------------------------------------------------
+
+
+def test_second_instance_exits_5_without_building(env, monkeypatch, capsys, clean_logging):
+    """Double-clicking start.cmd twice is the easy mistake: two pollers on one token get
+    Telegram 409 Conflicts and race each other's sessions in one database."""
+    from app.config import Settings
+    from app.instance_lock import InstanceLock
+
+    held = InstanceLock(Settings().db_path.parent / "bot.pid")
+    held.acquire()
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: pytest.fail("never reached"))
+    try:
+        with pytest.raises(SystemExit) as exc:
+            main.main()
+    finally:
+        held.release()
+
+    assert exc.value.code == main.EXIT_ALREADY_RUNNING
+    assert "already running" in capsys.readouterr().err
+
+
+def test_lock_is_released_when_main_exits(env, monkeypatch, clean_logging):
+    from app.config import Settings
+    from app.instance_lock import is_locked
+
+    app = _build(env)
+    app.store.migrate()
+    monkeypatch.setattr(app.telegram_app, "run_polling", lambda *a, **k: None)
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: app)
+
+    main.main()
+
+    assert not is_locked(Settings().db_path.parent / "bot.pid")
+
+
+def test_lock_is_released_on_a_fatal_exit_too(env, monkeypatch, clean_logging):
+    from app.config import Settings
+    from app.instance_lock import is_locked
+
+    app = _build(env)
+    app.store.migrate()
+
+    def _rejected(*_args, **_kwargs):
+        raise InvalidToken("rejected")
+
+    monkeypatch.setattr(app.telegram_app, "run_polling", _rejected)
+    monkeypatch.setattr(main, "build", lambda settings, **_kw: app)
+
+    with pytest.raises(SystemExit):
+        main.main()
+
+    assert not is_locked(Settings().db_path.parent / "bot.pid")
 
 
 # ---- Important 1: an unusable LOG_LEVEL is a config error, not a crash -------------------------
