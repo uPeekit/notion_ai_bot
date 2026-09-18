@@ -47,10 +47,44 @@ def _loopback_host(host_header: str | None) -> bool:
     return host in _LOOPBACK_HOSTS
 
 
-def _targets_payload(discovery: Discovery, *, inbox_locked: bool) -> dict[str, Any]:
+def _targets_payload(
+    discovery: Discovery, descriptions: Descriptions, *, inbox_target_id: str,
+) -> dict[str, Any]:
+    """The page's view of the workspace: its *structure* (which targets and fields exist) from
+    the last snapshot, its *editable values* from targets.yaml itself.
+
+    Reading the values from the snapshot showed what was saved as of the last discovery — and
+    discovery only re-runs when a Telegram message arrives. So after a save, or a reload, the page
+    showed the old (at first, empty) values, as if nothing had been saved; and because Save posts
+    every field on the page, saving again from that stale view would have written the blanks
+    back over the real descriptions. The file is what Save writes, so it is what the page shows.
+    """
     snap = discovery.last
+    inbox_locked = bool(inbox_target_id)
     if snap is None:
         return {"targets": [], "inbox_locked": inbox_locked}
+    meta = descriptions.load()
+
+    def _is_inbox(tid: str) -> bool:
+        if inbox_locked:  # the .env override wins outright, whatever the file says
+            return tid == inbox_target_id
+        m = meta.get(tid)
+        return bool(m and m.inbox)
+
+    def saved_desc(tid: str) -> str:
+        return meta[tid].description if tid in meta else ""
+
+    def _field(tid: str, f) -> dict[str, Any]:
+        fm = meta[tid].fields.get(f.id) if tid in meta else None
+        return {
+            "id": f.id,
+            "name": f.name,
+            "type": f.type,
+            # Notion's only mandatory property is the title; everything else is the file's flag.
+            "required": f.type == "title" or bool(fm and fm.required),
+            "description": fm.description if fm else "",
+        }
+
     return {
         "fetched_at": snap.fetched_at.isoformat(),
         "inbox_locked": inbox_locked,
@@ -60,18 +94,12 @@ def _targets_payload(discovery: Discovery, *, inbox_locked: bool) -> dict[str, A
                 "kind": t.kind,
                 "name": t.name,
                 "path": t.path,
-                "description": t.description,
-                "is_inbox": t.is_inbox,
-                "fields": [
-                    {
-                        "id": f.id,
-                        "name": f.name,
-                        "type": f.type,
-                        "required": f.required,
-                        "description": f.description,
-                    }
-                    for f in t.fields
-                ],
+                "description": saved_desc(t.id),
+                # What the LLM falls back to while the file has nothing: shown as a hint only,
+                # never as a value, so an untouched box is posted back empty and stays empty.
+                "notion_description": "" if saved_desc(t.id) else t.description,
+                "is_inbox": _is_inbox(t.id),
+                "fields": [_field(t.id, f) for f in t.fields],
             }
             for t in snap.targets
         ],
@@ -202,10 +230,10 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/":
             self._send_html(HTTPStatus.OK, _PAGE_HTML)
         elif self.path == "/api/targets":
-            inbox_locked = bool(self.server.app_settings.inbox_target_id)
-            self._send_json(
-                HTTPStatus.OK, _targets_payload(self.server.discovery, inbox_locked=inbox_locked)
-            )
+            self._send_json(HTTPStatus.OK, _targets_payload(
+                self.server.discovery, self.server.descriptions,
+                inbox_target_id=self.server.app_settings.inbox_target_id,
+            ))
         else:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 

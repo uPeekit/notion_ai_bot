@@ -145,7 +145,11 @@ function targetBox(target) {
 
   var desc = el("textarea");
   desc.value = target.description || "";
-  desc.placeholder = "Для чего эта база или страница — своими словами, для LLM";
+  // Notion's own description is what the LLM sees until you write one here, so show it as the
+  // hint rather than as a value: saving an untouched box then keeps it untouched.
+  desc.placeholder = target.notion_description
+    ? "Из Notion: " + target.notion_description
+    : "Для чего эта база или страница — своими словами, для LLM";
   desc.className = "target-description";
   desc.dataset.targetId = target.id;
   box.appendChild(desc);

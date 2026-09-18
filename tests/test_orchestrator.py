@@ -1245,3 +1245,22 @@ async def test_cancel_with_the_inbox_switched_off_does_not_nag(make):
     bot = make(inbox=None, inbox_mode="off")
     reply = await bot.orch.cancel(CHAT)
     assert reply.text == texts.CANCELLED
+
+
+# ---- the inbox gets the whole phrase, never the model's extraction ----------------------------
+
+
+@pytest.mark.parametrize("inbox", [INBOX, "ds-todo"], ids=["page inbox", "database inbox"])
+async def test_inbox_keeps_the_whole_message_not_what_the_model_extracted(make, inbox):
+    """The model had pulled «посылки» out of «надо забрать посылки» (item_text and a search
+    query). Whatever lands in the inbox is for a human to sort out later, so it must be the
+    message exactly as sent. The user's own inbox is a database (TODO), so both kinds count."""
+    bot = make(inbox=inbox)
+    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.7, search_query="посылки",
+                                             item_text="посылки")))
+    question = await bot.orch.handle_text(CHAT, USER, "надо забрать посылки")
+
+    await bot.orch.handle_callback(CHAT, USER, press(question, "inbox"))
+
+    written = json.dumps(bot.notion.calls, ensure_ascii=False)
+    assert "надо забрать посылки" in written

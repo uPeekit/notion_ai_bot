@@ -90,7 +90,9 @@ def test_targets_mirrors_snapshot(server):
     buy = by_id["ds-buy"]
     assert buy["path"] == "Дом / Покупки"
     assert buy["is_inbox"] is False
-    assert buy["description"].startswith("Список покупок")
+    # Nothing in targets.yaml yet: the value is empty, Notion's own text is only the hint.
+    assert buy["description"] == ""
+    assert buy["notion_description"].startswith("Список покупок")
     title_field = next(f for f in buy["fields"] if f["id"] == "title")
     assert title_field["required"] is True
     shop_field = next(f for f in buy["fields"] if f["id"] == "shop")
@@ -315,3 +317,51 @@ def test_page_surfaces_a_failed_targets_fetch(server):
     assert ".catch(" in load_fn
     assert "showLoadError" in load_fn
     assert 'id="load-error"' in html
+
+
+
+def test_saved_values_show_immediately_even_with_a_stale_snapshot(server, discovery):
+    """The page used to redraw from the snapshot, which discovery refreshes only when a Telegram
+    message arrives — so a save looked lost after every reload."""
+    stale = discovery.last
+    status, _ = _post(server, "/api/descriptions", {"targets": {
+        "ds-buy": {"description": "Покупки для дома", "inbox": True,
+                   "fields": {"shop": {"description": "Где купить", "required": True}}},
+    }})
+    assert status == 200
+    assert discovery.last is stale  # nothing re-ran discovery
+
+    data = json.loads(_get(server, "/api/targets")[1])
+    buy = next(t for t in data["targets"] if t["id"] == "ds-buy")
+    assert buy["description"] == "Покупки для дома"
+    assert buy["notion_description"] == ""  # a saved value needs no hint
+    assert buy["is_inbox"] is True
+    shop = next(f for f in buy["fields"] if f["id"] == "shop")
+    assert shop["description"] == "Где купить" and shop["required"] is True
+
+
+def test_saving_what_the_page_shows_changes_nothing(server, descriptions):
+    """Save posts every box on the page. If the page showed anything other than the file, a
+    save would write that back over it — the stale-snapshot version wrote blanks over real
+    descriptions. Load, post it back unchanged, and every saved value must survive."""
+    _post(server, "/api/descriptions", {"targets": {
+        "ds-buy": {"description": "Покупки для дома", "inbox": True, "fields": {}},
+        "ds-todo": {"description": "Дела", "inbox": False,
+                    "fields": {"prio": {"description": "Срочность", "required": True}}},
+    }})
+    shown = json.loads(_get(server, "/api/targets")[1])
+    echoed = {"targets": {
+        t["id"]: {
+            "description": t["description"], "inbox": t["is_inbox"],
+            "fields": {f["id"]: {"description": f["description"], "required": f["required"]}
+                       for f in t["fields"]},
+        }
+        for t in shown["targets"]
+    }}
+    assert _post(server, "/api/descriptions", echoed)[0] == 200
+
+    after = descriptions.load()
+    assert after["ds-buy"].description == "Покупки для дома" and after["ds-buy"].inbox
+    assert after["ds-todo"].description == "Дела"
+    assert after["ds-todo"].fields["prio"].required
+    assert after["ds-todo"].fields["prio"].description == "Срочность"
