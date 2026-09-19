@@ -667,3 +667,40 @@ async def test_a_keyboard_telegram_will_not_edit_does_not_cost_the_reply():
     assert await dispatch(hs.app, update, hs.context)
 
     assert [m["text"] for m in hs.bot.sent] == ["ok"]
+
+
+async def test_polling_network_errors_log_one_line_a_minute_without_a_traceback(
+    caplog, monkeypatch
+):
+    """Offline (DNS fails, Wi-Fi drops) PTB's polling raises NetworkError every ~2 s and retries
+    by itself; each used to log as an "unhandled exception" with a 100-line traceback."""
+    from telegram.error import NetworkError
+
+    now = [1000.0]
+    monkeypatch.setattr(h.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(h, "_last_network_warning", float("-inf"))
+    bot = FakeBot()
+    context = SimpleNamespace(bot=bot, error=NetworkError("httpx.ConnectError: getaddrinfo failed"),
+                              bot_data={})
+    with caplog.at_level(logging.WARNING, logger="app.telegram.handlers"):
+        for _ in range(10):
+            await h.error_handler(None, context)
+            now[0] += 2
+        now[0] += 60
+        await h.error_handler(None, context)
+    records = [r for r in caplog.records if r.name == "app.telegram.handlers"]
+    assert len(records) == 2
+    assert all(r.levelno == logging.WARNING and r.exc_info is None for r in records)
+    assert "getaddrinfo failed" in records[0].getMessage()
+    assert bot.sent == []
+
+
+async def test_a_network_error_inside_a_turn_is_still_an_error(caplog):
+    from telegram.error import NetworkError
+
+    bot = FakeBot()
+    update = text_update(ALLOWED_USER, "hi", bot)
+    context = SimpleNamespace(bot=bot, error=NetworkError("boom"), bot_data={})
+    with caplog.at_level(logging.ERROR, logger="app.telegram.handlers"):
+        await h.error_handler(update, context)
+    assert any(r.levelno == logging.ERROR for r in caplog.records)

@@ -28,10 +28,11 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from telegram import Update
-from telegram.error import TelegramError
+from telegram.error import NetworkError, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -259,12 +260,29 @@ def _targets_text(snapshot: WorkspaceSnapshot) -> str:
 # ---- errors --------------------------------------------------------------------------------
 
 
+# Polling hits NetworkError every couple of seconds while the machine is offline (Wi-Fi drop,
+# sleep); PTB retries on its own and resumes when the network is back. One line a minute says so.
+NETWORK_WARNING_INTERVAL_S = 60.0
+_last_network_warning = float("-inf")
+
+
+def _log_network_blip(error: BaseException) -> None:
+    global _last_network_warning
+    now = time.monotonic()
+    if now - _last_network_warning >= NETWORK_WARNING_INTERVAL_S:
+        _last_network_warning = now
+        log.warning("Telegram unreachable (%s); retrying until the network is back", error)
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """PTB's global error hook: the one place in this module a broad exception is caught, by
     design (see module docstring). Never re-raises. The audit `event_id` comes from
     `logging_setup.event_id_var` — the same contextvar the root filter stamps onto every record —
     so an exception raised while a turn is in flight names the row it belongs to, and one raised
     outside any turn logs `-`."""
+    if update is None and isinstance(context.error, NetworkError):
+        _log_network_blip(context.error)  # polling, not a turn: nobody to tell, nothing lost
+        return
     event_id = event_id_var.get()
     log.error("unhandled exception (event_id=%s)", event_id, exc_info=context.error)
     chat = update.effective_chat if isinstance(update, Update) else None
