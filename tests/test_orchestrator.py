@@ -1529,3 +1529,22 @@ async def test_steps_are_never_offered_the_plan_intent(make):
     intent_enum = lambda schema: schema["properties"]["intent"]["properties"]["value"]["enum"]  # noqa: E731
     assert "plan" in intent_enum(first[2]) and "plan" not in intent_enum(step[2])
     assert step[1]["pending"]["plan"]["цель"] == "Всё разложено"
+
+
+async def test_a_plan_with_a_side_question_still_starts(make):
+    """Live: «Планируй поездку во Вьетнам…» came back as plan + clarify «укажи дату начала» and
+    fell through to the validator, which raised KeyError('plan')."""
+    bot = make(planner=FakePlanner(["добавь в покупки хлеб"]))
+    bot.llm.queue(plan_interp(bot).model_copy(update={"clarify": "Укажи дату начала поездки"}))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Хлеб", 1.0)})))
+    reply = await bot.orch.handle_text(CHAT, USER, "планируй поездку", progress=collect([]))
+    assert reply.text.startswith("🏁")
+
+
+async def test_a_plan_intent_that_reaches_the_validator_is_rejected_not_raised(bot):
+    from app.validation.semantic import SemanticValidator
+
+    result = SemanticValidator().validate(
+        make_interp("plan", cand(bot.ctx, "t3", 0.9)), bot.ctx, bot.snapshot)
+    assert result.rejected and result.issues[0].code == "INTENT_UNKNOWN"

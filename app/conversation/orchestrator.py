@@ -349,7 +349,9 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
-        if interp.intent.value == "plan" and not interp.clarify and turn.plan is None:
+        if interp.intent.value == "plan" and turn.plan is None:
+            # Even with a clarifying question attached: a plan's side question ("which dates?")
+            # is not worth stopping for, and each step can still ask what it really needs.
             return _prefixed(await self._start_plan(turn, prompt, snapshot), prefix)
         result = self._validator.validate(interp, ctx, snapshot)
         decision = self._policy.evaluate(result)

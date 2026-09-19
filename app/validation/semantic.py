@@ -178,6 +178,11 @@ class SemanticValidator:
         if intent == "unknown":
             issues.append(Issue("INTENT_UNKNOWN", "message is not a Notion request"))
             return result
+        if intent not in INTENT_OPS:
+            # "plan" is the orchestrator's to run, never a single write; reaching here means a
+            # path forgot that, and it must end as a rejection, not a KeyError.
+            issues.append(Issue("INTENT_UNKNOWN", f"intent {intent} is not a single action"))
+            return result
 
         by_target: dict[str, VCandidate] = {}
         for cand in interp.candidates:
