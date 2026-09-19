@@ -1,5 +1,6 @@
 # Interactive release wizard. Double-click release.cmd in the repo root.
-# Wraps release.py; remembers your answers in %USERPROFILE%\.notion_ai_bot\wizard.json
+# Wraps release.py; remembers your answers in %USERPROFILE%\.notion_ai_bot\wizard.json,
+# except the release kind, which always defaults to auto (override it when auto is wrong).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -27,10 +28,10 @@ function AskYN([string]$prompt, [bool]$default) {
 
 function Load-State {
   $file = Join-Path $env:USERPROFILE ".notion_ai_bot\wizard.json"
-  $state = @{ kind = "auto"; push = $true; update_prod = $true; prod_dir = "C:\apps\notion_ai_bot"; dist_dir = (Join-Path $root "dist") }
+  $state = @{ push = $true; update_prod = $true; prod_dir = "C:\apps\notion_ai_bot"; dist_dir = (Join-Path $root "dist") }
   if (Test-Path $file) {
     $saved = Get-Content $file -Raw | ConvertFrom-Json
-    foreach ($k in @("kind", "push", "update_prod", "prod_dir")) {
+    foreach ($k in @("push", "update_prod", "prod_dir")) {
       if ($null -ne $saved.$k) { $state[$k] = $saved.$k }
     }
   }
@@ -65,7 +66,7 @@ Write-Host ""
 
 $kind = ""
 while ($kind -notin @("auto", "patch", "full")) {
-  $kind = (Ask "Release kind (auto = decide from changes, patch = 0.0.x, full = 0.x.0)" $state.kind).ToLower()
+  $kind = (Ask "Release kind (auto = decide from changes, patch = 0.0.x, full = 0.x.0)" "auto").ToLower()
 }
 $dryRun = AskYN "Dry run only (show what would happen, change nothing)" $false
 $skipTests = AskYN "Skip tests and lint" $false
@@ -77,7 +78,6 @@ Write-Host ""
 Write-Host "> uv $($relArgs -join ' ')" -ForegroundColor Cyan
 & $uv @relArgs
 if ($LASTEXITCODE -ne 0) { Write-Host "release failed (exit $LASTEXITCODE)" -ForegroundColor Red; exit 1 }
-$state.kind = $kind
 Save-State $state
 if ($dryRun) { exit 0 }
 
