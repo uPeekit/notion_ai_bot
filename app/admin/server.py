@@ -9,13 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta
+from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta, WorkspaceNote
 from app.notion.discovery import Discovery
 
 log = logging.getLogger(__name__)
 
 _PAGE_HTML = (Path(__file__).parent / "page.html").read_bytes()  # read once at import
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+# Fields whose options can carry a description (a relation's "options" are rows of another
+# database, not a fixed vocabulary).
+DESCRIBED_OPTION_TYPES = frozenset({"select", "multi_select", "status"})
 # Generous cap for a hand-edited descriptions document; also bounds the blocking rfile.read()
 # below so a hostile/huge Content-Length can't force an unbounded read.
 MAX_BODY_BYTES = 512 * 1024
@@ -83,6 +86,11 @@ def _targets_payload(
             # Notion's only mandatory property is the title; everything else is the file's flag.
             "required": f.type == "title" or bool(fm and fm.required),
             "description": fm.description if fm else "",
+            "options": [
+                {"id": o.id, "name": o.name,
+                 "description": fm.options.get(o.id, "") if fm else ""}
+                for o in f.options
+            ] if f.type in DESCRIBED_OPTION_TYPES else [],
         }
 
     return {
@@ -100,6 +108,7 @@ def _targets_payload(
                 "notion_description": "" if saved_desc(t.id) else t.description,
                 "is_inbox": _is_inbox(t.id),
                 "local_only": bool(meta.get(t.id) and meta[t.id].local_only),
+                "hidden": bool(meta.get(t.id) and meta[t.id].hidden),
                 "fields": [_field(t.id, f) for f in t.fields],
             }
             for t in snap.targets
@@ -121,10 +130,20 @@ def _merge_target(
     posted_fields = posted.get("fields") or {}
     for fid, fbody in posted_fields.items():
         cur = fields.get(fid, FieldMeta())
+        posted_options = fbody.get("options")
+        options = dict(cur.options)
+        if isinstance(posted_options, dict):
+            for oid, text in posted_options.items():
+                text = str(text).strip()
+                if text:
+                    options[oid] = text
+                else:
+                    options.pop(oid, None)  # an emptied box removes the description
         fields[fid] = FieldMeta(
             name=cur.name,
             description=str(fbody.get("description", cur.description)),
             required=bool(fbody.get("required", cur.required)),
+            options=options,
         )
     return TargetMeta(
         name=existing.name,
@@ -132,6 +151,7 @@ def _merge_target(
         fields=fields,
         inbox=existing.inbox if inbox_locked else bool(posted.get("inbox", existing.inbox)),
         local_only=bool(posted.get("local_only", existing.local_only)),
+        hidden=bool(posted.get("hidden", existing.hidden)),
     )
 
 
@@ -160,10 +180,19 @@ def _apply_descriptions(
         posted_fields = tbody.get("fields") or {}
         if not isinstance(posted_fields, dict):
             raise ValueError(f"invalid fields for target: {tid}")
-        known_field_ids = {f.id for f in target.fields}
-        for fid in posted_fields:
-            if fid not in known_field_ids:
+        known_fields = {f.id: f for f in target.fields}
+        for fid, fbody in posted_fields.items():
+            if fid not in known_fields:
                 raise ValueError(f"field {fid!r} does not belong to target {tid!r}")
+            if not isinstance(fbody, dict):
+                raise ValueError(f"invalid body for field: {fid}")
+            posted_options = fbody.get("options") or {}
+            if not isinstance(posted_options, dict):
+                raise ValueError(f"invalid options for field: {fid}")
+            known_options = {o.id for o in known_fields[fid].options}
+            for oid in posted_options:
+                if oid not in known_options:
+                    raise ValueError(f"option {oid!r} does not belong to field {fid!r}")
 
     meta = descriptions.load()
     merged = dict(meta)
@@ -194,11 +223,13 @@ class _AdminHTTPServer(ThreadingHTTPServer):
         settings: Settings,
         discovery: Discovery,
         descriptions: Descriptions,
+        note: WorkspaceNote | None,
     ) -> None:
         super().__init__(server_address, handler_cls)
         self.app_settings = settings
         self.discovery = discovery
         self.descriptions = descriptions
+        self.note = note
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -232,10 +263,13 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/":
             self._send_html(HTTPStatus.OK, _PAGE_HTML)
         elif self.path == "/api/targets":
-            self._send_json(HTTPStatus.OK, _targets_payload(
+            payload = _targets_payload(
                 self.server.discovery, self.server.descriptions,
                 inbox_target_id=self.server.app_settings.inbox_target_id,
-            ))
+            )
+            if self.server.note is not None:
+                payload["workspace_note"] = self.server.note.load()
+            self._send_json(HTTPStatus.OK, payload)
         else:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
@@ -244,6 +278,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden_host"})
             return
         if self.path != "/api/descriptions":
+            # Read (and drop) a bounded body first: closing a socket with unread data makes
+            # Windows reset the connection, and the client never sees the 404.
+            length = _parse_content_length(self.headers.get("Content-Length"))
+            if length:
+                self.rfile.read(length)
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         length = _parse_content_length(self.headers.get("Content-Length"))
@@ -254,10 +293,17 @@ class _Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         try:
             body = json.loads(raw) if raw else {}
+            note = body.get("workspace_note") if isinstance(body, dict) else None
+            if note is not None and not isinstance(note, str):
+                raise ValueError("'workspace_note' must be a string")
             saved = _apply_descriptions(
                 self.server.descriptions, self.server.discovery, body,
                 inbox_locked=bool(self.server.app_settings.inbox_target_id),
             )
+            if note is not None and self.server.note is not None:
+                if note.strip() != self.server.note.load():
+                    self.server.note.save(note)
+                    saved += 1
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
             log.warning("rejected POST /api/descriptions: %s", e)
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request"})
@@ -271,11 +317,13 @@ class AdminServer:
     live Discovery snapshot and writes through Descriptions; never touches Notion itself."""
 
     def __init__(
-        self, settings: Settings, discovery: Discovery, descriptions: Descriptions
+        self, settings: Settings, discovery: Discovery, descriptions: Descriptions,
+        note: WorkspaceNote | None = None,
     ) -> None:
         self._settings = settings
         self._discovery = discovery
         self._descriptions = descriptions
+        self._note = note
         self._httpd: _AdminHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -294,6 +342,7 @@ class AdminServer:
             self._settings,
             self._discovery,
             self._descriptions,
+            self._note,
         )
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="admin-http", daemon=True

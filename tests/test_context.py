@@ -154,3 +154,54 @@ def test_cloud_payload_hides_a_local_only_targets_description_and_items():
 def test_cloud_payload_is_the_payload_when_nothing_is_local_only():
     ctx = ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW)
     assert ctx.local_only == frozenset() and ctx.json(cloud=True) == ctx.json()
+
+
+def _with(target_id: str, **changes):
+    snap = sample_snapshot()
+    return replace(snap, targets=[replace(t, **changes) if t.id == target_id else t
+                                  for t in snap.targets])
+
+
+def test_hidden_targets_are_left_out_of_the_context():
+    ctx = ContextBuilder().build(_with("ds-buy", hidden=True), now=SAMPLE_NOW)
+    assert ctx.target_key("ds-buy") is None
+    assert "Покупки" not in ctx.json()
+    assert len(ctx.target_keys()) == len(sample_snapshot().targets) - 1
+
+
+def test_described_options_are_listed_beside_the_options():
+    snap = sample_snapshot()
+    todo = snap.target("ds-todo")
+    tags = todo.field("tags")
+    described = [replace(o, description="всё по дому") if o.name == "дом" else o
+                 for o in tags.options]
+    fields = [replace(f, options=described) if f.id == "tags" else f for f in todo.fields]
+    ctx = ContextBuilder().build(_with("ds-todo", fields=fields), now=SAMPLE_NOW)
+    fk = ctx.field_key("ds-todo", "tags")
+    entry = next(f for t in ctx.payload["targets"] for f in t["fields"] if f["key"] == fk)
+    home = ctx.option_key("ds-todo", "tags", "o-дом")
+    assert entry["option_descriptions"] == {home: "всё по дому"}
+    assert entry["options"][home] == "дом"
+    # a field with no described option carries no empty block
+    prio = next(f for t in ctx.payload["targets"] for f in t["fields"]
+                if f["key"] == ctx.field_key("ds-todo", "prio"))
+    assert "option_descriptions" not in prio
+
+
+def test_local_only_hides_option_descriptions_from_the_cloud():
+    snap = sample_snapshot()
+    todo = snap.target("ds-todo")
+    fields = [replace(f, options=[replace(o, description="x") for o in f.options])
+              if f.id == "tags" else f for f in todo.fields]
+    ctx = ContextBuilder().build(_with("ds-todo", fields=fields, local_only=True), now=SAMPLE_NOW)
+    assert "option_descriptions" in ctx.json()
+    assert "option_descriptions" not in ctx.json(cloud=True)
+
+
+def test_workspace_note_is_read_for_every_build_and_omitted_when_empty():
+    note = ["Все задачи — в TODO."]
+    builder = ContextBuilder(note=lambda: note[0])
+    assert builder.build(sample_snapshot(), now=SAMPLE_NOW).payload["workspace_note"] == note[0]
+    note[0] = ""
+    assert "workspace_note" not in builder.build(sample_snapshot(), now=SAMPLE_NOW).payload
+    assert "workspace_note" not in ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW).payload

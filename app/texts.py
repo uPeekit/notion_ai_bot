@@ -173,6 +173,7 @@ TARGETS_NONE_YET = "Список разделов ещё не загружен. 
 # t.kind ("database"/"page") -> a Russian noun for the /targets tree line.
 TARGET_KIND_LABELS: dict[str, str] = {"database": "база данных", "page": "страница"}
 TARGETS_INBOX_MARKER = "(разное)"
+TARGETS_HIDDEN_MARKER = "(скрыта от бота)"
 
 # ---- LLM-facing keys --------------------------------------------------------------------------
 

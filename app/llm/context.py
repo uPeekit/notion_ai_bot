@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
@@ -86,8 +87,10 @@ class Context:
             if entry["key"] in self.local_only:
                 entry = {k: v for k, v in entry.items()
                          if k not in ("description", "items", "children")}
-                entry["fields"] = [{k: v for k, v in f.items() if k != "description"}
-                                   for f in entry["fields"]]
+                entry["fields"] = [
+                    {k: v for k, v in f.items() if k not in ("description", "option_descriptions")}
+                    for f in entry["fields"]
+                ]
             targets.append(entry)
         return {**self.payload, "targets": targets}
 
@@ -137,8 +140,10 @@ class ContextBuilder:
     def __init__(
         self, timezone: str = "Europe/Tallinn", items_per_target: int = 50, *,
         reasoning_first: bool = True, name_targets: bool = True,
+        note: Callable[[], str] | None = None,
     ) -> None:
         self._tz = ZoneInfo(timezone)
+        self._note = note  # the user's workspace note, read afresh for every message
         self._items_per_target = items_per_target
         self._reasoning_first = reasoning_first
         self._name_targets = name_targets
@@ -153,7 +158,10 @@ class ContextBuilder:
                       reasoning_first=self._reasoning_first, name_targets=self._name_targets)
         targets = []
         local_only: set[str] = set()
-        for ti, t in enumerate(snapshot.targets, start=1):
+        # Hidden targets are not offered at all: a page that is only a filtered view of a database
+        # would otherwise compete with the database itself for every message.
+        visible = [t for t in snapshot.targets if not t.hidden]
+        for ti, t in enumerate(visible, start=1):
             tk = f"t{ti}"
             if t.local_only:
                 local_only.add(tk)
@@ -181,6 +189,9 @@ class ContextBuilder:
             "calendar": build_calendar(now),
             "targets": targets,
         }
+        note = self._note() if self._note else ""
+        if note:
+            ctx.payload["workspace_note"] = note
         ctx.local_only = frozenset(local_only)
         if pending:
             ctx.payload["pending"] = pending
@@ -212,6 +223,12 @@ class ContextBuilder:
                     opts[ok] = o.name
                 ctx.options_by_field[fk] = list(opts)
                 entry["options"] = opts
+                described = {
+                    ok: o.description
+                    for ok, o in zip(opts, f.options, strict=True) if o.description
+                }
+                if described:
+                    entry["option_descriptions"] = described
             out.append(entry)
         ctx.fields_by_target[tk] = [e["key"] for e in out]
         return out

@@ -267,9 +267,11 @@ async def main_async(a: argparse.Namespace) -> int:
     # is the synthetic one the committed case set is written against.
     snapshot = snapshot_json.load(a.workspace) if a.workspace else sample_snapshot()
     workspace_label = str(a.workspace) if a.workspace else "tools/sample_workspace.py"
+    note = a.note.read_text(encoding="utf-8").strip() if a.note else ""
     ctx = ContextBuilder(
         "Europe/Tallinn", items_per_target=a.items_per_target,
         reasoning_first=not a.no_reasoning_first, name_targets=not a.no_target_names,
+        note=lambda: note,
     ).build(snapshot, now=SAMPLE_NOW)
     schema = build_schema(ctx)
     summaries: list[Summary] = []
@@ -286,6 +288,7 @@ async def main_async(a: argparse.Namespace) -> int:
     if a.write:
         lines = [f"# LLM benchmark — {datetime.now(UTC).date().isoformat()}", "",
                  f"Cases: `{a.cases}` ({len(cases)}), context: `{workspace_label}`, "
+                 f"note: `{a.note or '-'}`, "
                  f"num_ctx={a.num_ctx}, items_per_target={a.items_per_target}, temperature=0.",
                  "", table, ""]
         for model, fails in failures.items():
@@ -312,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="notes last, as before 2026-09-19 (baseline)")
     ap.add_argument("--no-target-names", action="store_true",
                     help="candidates without target_name (baseline)")
+    ap.add_argument("--note", type=Path, help="workspace note file sent with every message")
     ap.add_argument("--workspace", type=Path,
                     help="snapshot JSON from tools.capture_workspace (default: the sample one)")
     return asyncio.run(main_async(ap.parse_args(argv)))

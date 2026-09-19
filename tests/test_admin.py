@@ -6,7 +6,7 @@ import yaml
 
 from app.admin.server import MAX_BODY_BYTES, AdminServer
 from app.config import Settings
-from app.notion.descriptions import Descriptions, TargetMeta
+from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta, WorkspaceNote
 from tools.sample_workspace import sample_snapshot
 
 
@@ -375,3 +375,60 @@ def test_local_only_flag_round_trips_through_the_page(server, descriptions):
     assert descriptions.load()["ds-buy"].local_only is True
     by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
     assert by_id["ds-buy"]["local_only"] is True and by_id["ds-todo"]["local_only"] is False
+
+
+def test_targets_lists_options_of_select_fields_only(server, descriptions):
+    descriptions.save({"ds-todo": TargetMeta(fields={
+        "tags": FieldMeta(options={"o-дом": "всё по дому"})})})
+    by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
+    fields = {f["id"]: f for f in by_id["ds-todo"]["fields"]}
+    assert {o["name"]: o["description"] for o in fields["tags"]["options"]} == {
+        "дом": "всё по дому", "работа": "", "здоровье": ""}
+    assert fields["project"]["options"] == []  # a relation's options are rows, not a vocabulary
+    assert fields["title"]["options"] == []
+
+
+def test_option_descriptions_save_and_an_emptied_box_removes_one(server, descriptions):
+    def post(options):
+        payload = {"targets": {"ds-todo": {"description": "", "inbox": False,
+                                           "fields": {"tags": {"options": options}}}}}
+        return _post(server, "/api/descriptions", payload)
+
+    assert post({"o-дом": "всё по дому", "o-работа": "  "})[0] == 200
+    assert descriptions.load()["ds-todo"].fields["tags"].options == {"o-дом": "всё по дому"}
+    assert post({"o-дом": ""})[0] == 200
+    assert descriptions.load()["ds-todo"].fields["tags"].options == {}
+
+
+def test_unknown_option_is_rejected_and_nothing_written(server, descriptions):
+    payload = {"targets": {"ds-todo": {"description": "x", "fields": {
+        "tags": {"options": {"o-nope": "?"}}}}}}
+    status, _ = _post(server, "/api/descriptions", payload)
+    assert status == 400 and descriptions.load() == {}
+
+
+def test_hidden_flag_round_trips(server, descriptions):
+    payload = {"targets": {"ds-buy": {"description": "", "hidden": True, "fields": {}}}}
+    assert _post(server, "/api/descriptions", payload)[0] == 200
+    assert descriptions.load()["ds-buy"].hidden is True
+    by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
+    assert by_id["ds-buy"]["hidden"] is True and by_id["ds-todo"]["hidden"] is False
+
+
+def test_workspace_note_is_served_and_saved(settings, discovery, descriptions, tmp_path):
+    note = WorkspaceNote(tmp_path / "workspace_note.md")
+    s = AdminServer(settings, discovery, descriptions, note)
+    s.start()
+    try:
+        assert json.loads(_get(s, "/api/targets")[1])["workspace_note"] == ""
+        status, body = _post(s, "/api/descriptions",
+                             {"targets": {}, "workspace_note": "Все задачи — в TODO."})
+        assert status == 200 and json.loads(body) == {"saved": 1}
+        assert note.load() == "Все задачи — в TODO."
+        assert json.loads(_get(s, "/api/targets")[1])["workspace_note"] == "Все задачи — в TODO."
+        status, body = _post(s, "/api/descriptions",
+                             {"targets": {}, "workspace_note": "Все задачи — в TODO."})
+        assert json.loads(body) == {"saved": 0}  # unchanged: nothing rewritten
+        assert _post(s, "/api/descriptions", {"targets": {}, "workspace_note": 5})[0] == 400
+    finally:
+        s.stop()

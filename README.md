@@ -148,6 +148,26 @@ titles — and when Claude routes a message there, the local model reads that me
 the full details and decides instead. The text of the message itself has still been sent to
 Claude by then; to keep a message entirely local, set `LLM_CLOUD=false`.
 
+## Teaching the bot your workspace
+
+The admin page (**`http://127.0.0.1:8787`**, on the machine the bot runs on) is where you tell
+the bot how your Notion is organised. Everything is saved locally, next to `data/targets.yaml`,
+and applies from the next message — no restart.
+
+- **Заметка о воркспейсе** (top of the page): a few sentences in your own words, sent with
+  every message. Example: «Все задачи — в базе TODO. Страницы дом, gnezdo, knub — это виды TODO
+  по тегам. Покупки — тоже задачи.»
+- **Descriptions of options.** Every select, multi-select and status field lists its options,
+  read from Notion (new tags appear by themselves). An option with a description may be chosen
+  by meaning — `home`: «ремонт, уборка, покупки для дома» lets «купить лампочки в ванную» get
+  the tag without you naming it. An option without a description is only used when the message
+  names it. Writing "по умолчанию" into one (e.g. `personal`) makes it the fallback.
+- **скрыть от бота**: the target is left out entirely. Use it for pages that only show a
+  database through a filter (a `дом` page that lists TODO filtered by `home`): with the page
+  hidden and the tag described, the bot writes to the database with the right tag instead of
+  asking which of the two you meant. `/targets` still lists hidden targets, marked.
+- **только локально**: see "Using Claude", above.
+
 ## Flagging the inbox page
 
 Anything the bot can't resolve — a message it can't parse, a question nobody answered in time,

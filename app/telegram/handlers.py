@@ -253,6 +253,8 @@ def _targets_text(snapshot: WorkspaceSnapshot) -> str:
     lines = [texts.TARGETS_HEADER]
     for t in snapshot.targets:
         marker = f" {texts.TARGETS_INBOX_MARKER}" if t.is_inbox else ""
+        if t.hidden:
+            marker += f" {texts.TARGETS_HIDDEN_MARKER}"
         lines.append(f"{t.path} — {texts.TARGET_KIND_LABELS[t.kind]}{marker}")
     return "\n".join(lines)
 

@@ -248,3 +248,14 @@ async def test_local_only_flag_from_yaml_reaches_the_snapshot(fake, tmp_path):
     snap = await Discovery(fake, d, items_per_target=10, ttl_s=60).refresh()
     assert snap.target("ds-buy").local_only is True
     assert snap.target("ds-shops").local_only is False
+
+
+async def test_option_descriptions_and_hidden_flag_reach_the_snapshot(fake, tmp_path):
+    d = Descriptions(tmp_path / "targets.yaml")
+    d.save({"ds-buy": TargetMeta(hidden=True, fields={
+        "shop": FieldMeta(options={"o1": "супермаркет у дома"})})})
+    snap = await Discovery(fake, d, items_per_target=10, ttl_s=60).refresh()
+    shop = snap.target("ds-buy").field("shop")
+    assert [(o.name, o.description) for o in shop.options] == [
+        ("Rimi", "супермаркет у дома"), ("Prisma", "")]
+    assert snap.target("ds-buy").hidden is True and snap.target("ds-shops").hidden is False

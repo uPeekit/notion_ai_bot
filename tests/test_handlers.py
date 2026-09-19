@@ -704,3 +704,14 @@ async def test_a_network_error_inside_a_turn_is_still_an_error(caplog):
     with caplog.at_level(logging.ERROR, logger="app.telegram.handlers"):
         await h.error_handler(update, context)
     assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+async def test_targets_command_marks_hidden_targets():
+    from dataclasses import replace
+
+    snap = sample_snapshot()
+    snap = replace(snap, targets=[replace(t, hidden=t.id == "ds-shop") for t in snap.targets])
+    hs = build(snapshot=snap)
+    assert await dispatch(hs.app, command_update(ALLOWED_USER, "targets", hs.bot), hs.context)
+    buy = next(line for line in hs.bot.sent[0]["text"].splitlines() if "Покупки" in line)
+    assert texts.TARGETS_HIDDEN_MARKER in buy

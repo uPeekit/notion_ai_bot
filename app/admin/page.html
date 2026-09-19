@@ -44,6 +44,12 @@
     border-bottom: 1px solid #ddd;
   }
   table.fields input[type="text"] { width: 100%; font: inherit; padding: 2px 4px; }
+  table.fields tr.options td { border-bottom: 1px solid #ddd; padding-left: 24px; }
+  .option-row { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
+  .option-row .option-name { min-width: 10em; font-size: 0.85rem; }
+  .option-row input { flex: 1; }
+  #workspace-note { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
+  .target.is-hidden { opacity: 0.55; }
   .inbox-row { margin: 8px 0; font-size: 0.9rem; }
   .inbox-row label { margin-left: 4px; }
   #save-bar {
@@ -79,6 +85,14 @@
   Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
   Запустите бота и обновите эту страницу.
 </div>
+<h2>Заметка о воркспейсе</h2>
+<p class="hint">
+  Как устроен ваш Notion — своими словами. Бот получает её с каждым сообщением. Например:
+  «Все задачи — в базе TODO. Страницы дом, gnezdo, knub — это виды TODO по тегам. Покупки —
+  тоже задачи».
+</p>
+<textarea id="workspace-note"></textarea>
+<h2>Цели</h2>
 <div id="targets"></div>
 <div id="save-bar">
   <button id="save-button" type="button">Сохранить</button>
@@ -138,6 +152,34 @@ function fieldRow(target, field) {
   return row;
 }
 
+// Options of a select/multi-select/status field, each with its own description: an option
+// with one may be chosen by meaning ("home" for anything about the house), one without only
+// when the message names it.
+function optionsRow(target, field) {
+  var row = el("tr", { class: "options" });
+  var cell = el("td", { colspan: "3" });
+  cell.appendChild(el("div", {
+    class: "hint",
+    text: "Варианты «" + field.name + "»: с описанием бот выбирает по смыслу, без — только " +
+      "если вариант назван",
+  }));
+  field.options.forEach(function (o) {
+    var line = el("div", { class: "option-row" });
+    line.appendChild(el("span", { class: "option-name", text: o.name }));
+    var input = el("input", { type: "text" });
+    input.value = o.description || "";
+    input.placeholder = "когда выбирать «" + o.name + "»";
+    input.className = "option-description";
+    input.dataset.targetId = target.id;
+    input.dataset.fieldId = field.id;
+    input.dataset.optionId = o.id;
+    line.appendChild(input);
+    cell.appendChild(line);
+  });
+  row.appendChild(cell);
+  return row;
+}
+
 function targetBox(target) {
   var box = el("div", { class: "target" });
   box.appendChild(el("div", { class: "path", text: target.path }));
@@ -161,7 +203,10 @@ function targetBox(target) {
       el("th", { text: "Обязательно" }),
       el("th", { text: "Описание поля" }),
     ]));
-    target.fields.forEach(function (f) { table.appendChild(fieldRow(target, f)); });
+    target.fields.forEach(function (f) {
+      table.appendChild(fieldRow(target, f));
+      if (f.options && f.options.length) { table.appendChild(optionsRow(target, f)); }
+    });
     box.appendChild(table);
   }
 
@@ -189,6 +234,24 @@ function targetBox(target) {
       "разбирает локальная модель (сам текст сообщения Claude всё равно видит)",
   }));
   box.appendChild(localRow);
+
+  var hiddenRow = el("div", { class: "inbox-row" });
+  var hiddenId = "hidden-" + target.id;
+  var hidden = el("input", { type: "checkbox", id: hiddenId });
+  hidden.className = "target-hidden";
+  hidden.dataset.targetId = target.id;
+  hidden.checked = !!target.hidden;
+  if (target.hidden) { box.classList.add("is-hidden"); }
+  hidden.addEventListener("change", function () {
+    box.classList.toggle("is-hidden", hidden.checked);
+  });
+  hiddenRow.appendChild(hidden);
+  hiddenRow.appendChild(el("label", {
+    for: hiddenId,
+    text: " скрыть от бота — например, страница, которая лишь показывает базу с фильтром " +
+      "(бот тогда пишет в саму базу)",
+  }));
+  box.appendChild(hiddenRow);
 
   return box;
 }
@@ -240,6 +303,7 @@ function load() {
     .then(function (data) {
       state.targets = data.targets || [];
       state.inboxLocked = !!data.inbox_locked;
+      document.getElementById("workspace-note").value = data.workspace_note || "";
       showLoadError("");
       showFetchedAt(data.fetched_at || null);
       render();
@@ -253,6 +317,10 @@ function collectBody() {
   var checkedInbox = document.querySelector('input[name="inbox"]:checked');
   var inboxId = checkedInbox ? checkedInbox.value : "";
   var targets = {};
+  // Matched by dataset rather than a selector: Notion option ids are free-form strings.
+  var optionInputs = Array.prototype.slice.call(
+    document.querySelectorAll(".option-description")
+  );
   state.targets.forEach(function (t) {
     var descEl = document.querySelector(
       '.target-description[data-target-id="' + t.id + '"]'
@@ -265,22 +333,34 @@ function collectBody() {
       var fdescEl = document.querySelector(
         '.field-description[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
       );
+      var options = {};
+      optionInputs.forEach(function (input) {
+        if (input.dataset.targetId === t.id && input.dataset.fieldId === f.id) {
+          options[input.dataset.optionId] = input.value;
+        }
+      });
       fields[f.id] = {
         description: fdescEl ? fdescEl.value : "",
         required: reqEl ? reqEl.checked : false,
+        options: options,
       };
     });
     var localEl = document.querySelector(
       '.target-local-only[data-target-id="' + t.id + '"]'
     );
+    var hiddenEl = document.querySelector('.target-hidden[data-target-id="' + t.id + '"]');
     targets[t.id] = {
       description: descEl ? descEl.value : "",
       inbox: t.id === inboxId,
       local_only: localEl ? localEl.checked : false,
+      hidden: hiddenEl ? hiddenEl.checked : false,
       fields: fields,
     };
   });
-  return { targets: targets };
+  return {
+    targets: targets,
+    workspace_note: document.getElementById("workspace-note").value,
+  };
 }
 
 document.getElementById("save-button").addEventListener("click", function () {

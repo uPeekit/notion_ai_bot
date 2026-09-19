@@ -22,6 +22,7 @@ PAGE_OPERATIONS: frozenset[str] = frozenset({"create_page", "append", "search"})
 class Option:
     id: str
     name: str
+    description: str = ""  # user-written (targets.yaml): lets the model pick it by meaning
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class Target:
                             # working. The one target the user flagged as the fallback inbox
                             # (Discovery._resolve_inbox resolves ties and the env override).
     local_only: bool = False  # user-set (targets.yaml): keep its contents off the cloud model
+    hidden: bool = False  # user-set (targets.yaml): never offered to the model at all
 
     def field(self, field_id: str) -> Field | None:
         return next((f for f in self.fields if f.id == field_id), None)

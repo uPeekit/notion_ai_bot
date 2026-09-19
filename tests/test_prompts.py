@@ -41,3 +41,8 @@ def test_system_prompt_mentions_rules():
 
 def test_retry_message_contains_error():
     assert "поле X" in retry_message("поле X")
+
+
+def test_prompt_lets_described_options_be_chosen_by_meaning_and_follows_the_note():
+    assert "option_descriptions" in SYSTEM_PROMPT and "workspace_note" in SYSTEM_PROMPT
+    assert "Варианты без описания не угадывай" in SYSTEM_PROMPT

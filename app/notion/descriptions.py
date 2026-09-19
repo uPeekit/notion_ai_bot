@@ -29,6 +29,9 @@ class FieldMeta(BaseModel):
     name: str = ""
     description: str = ""
     required: bool = False
+    # option id -> what the option means, for select/multi_select/status fields. An option with
+    # a description may be chosen by meaning; one without only when the message names it.
+    options: dict[str, str] = Field(default_factory=dict)
 
 
 class TargetMeta(BaseModel):
@@ -40,6 +43,8 @@ class TargetMeta(BaseModel):
                          # Plan 3b)
     local_only: bool = False  # user-set: Claude never sees this target's description or
                               # contents, and a message it routes here is re-read locally
+    hidden: bool = False  # user-set: left out of the model's context entirely (e.g. a page
+                          # that is only a filtered view of a database)
 
 
 class Descriptions:
@@ -88,22 +93,8 @@ class Descriptions:
         behind for as long as it takes to write the bytes. The temp file is created in the same
         directory so the replace stays within one filesystem, and is removed again if anything
         between its creation and the swap fails."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: v.model_dump() for k, v in meta.items()}
-        text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=self._path.parent, prefix=self._path.name + ".", suffix=".tmp"
-        )
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self._path)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        _atomic_write(self._path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 
     def _ensure_locked(
         self, discovered: dict[str, tuple[str, dict[str, str]]]
@@ -120,3 +111,44 @@ class Descriptions:
         if not broken and {k: v.model_dump() for k, v in meta.items()} != before:
             self._save_locked(meta)
         return meta
+
+
+class WorkspaceNote:
+    """The user's free-text note about how their workspace is organised ("all tasks live in
+    TODO; the per-topic pages are views of it by tag"), sent with every message. A plain text
+    file beside targets.yaml; read on each message, so an edit applies to the next one."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    def load(self) -> str:
+        try:
+            return self._path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return ""
+        except OSError as e:
+            log.warning("workspace note %s unreadable (%s); sending none", self._path, e)
+            return ""
+
+    def save(self, text: str) -> None:
+        text = text.strip()
+        _atomic_write(self._path, text + "\n" if text else "")
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write through a temp file in the same directory and swap it in with `os.replace`, atomic
+    on POSIX and Windows alike: a reader sees the whole old file or the whole new one, never the
+    truncated middle `Path.write_text` leaves behind while it writes. The temp file is removed
+    again if anything before the swap fails."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise

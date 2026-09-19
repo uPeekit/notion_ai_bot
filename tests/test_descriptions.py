@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from app.notion import descriptions
-from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta
+from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta, WorkspaceNote
 
 
 def test_load_missing_file_is_empty(tmp_path):
@@ -167,3 +167,22 @@ def test_ensure_and_save_do_not_interleave_across_threads(tmp_path):
     assert on_disk.description == "user wrote this"
     assert on_disk.inbox is True
     assert on_disk.name == "Покупки"
+
+
+def test_option_descriptions_and_hidden_survive_ensure(tmp_path):
+    d = Descriptions(tmp_path / "t.yaml")
+    d.save({"ds1": TargetMeta(name="Old", hidden=True, fields={
+        "tags": FieldMeta(name="Tags", options={"o-home": "всё по дому"})})})
+    merged = d.ensure({"ds1": ("New", {"tags": "Теги"})})
+    assert merged["ds1"].hidden is True
+    assert merged["ds1"].fields["tags"].options == {"o-home": "всё по дому"}
+    assert d.load()["ds1"].fields["tags"].name == "Теги"
+
+
+def test_workspace_note_round_trip_and_missing_file(tmp_path):
+    note = WorkspaceNote(tmp_path / "workspace_note.md")
+    assert note.load() == ""
+    note.save("  Все задачи — в TODO.  \n")
+    assert note.load() == "Все задачи — в TODO."
+    note.save("   ")
+    assert note.load() == ""

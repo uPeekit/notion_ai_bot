@@ -268,10 +268,11 @@ class Discovery:
             if fm is None:
                 fields.append(f)
                 continue
+            options = [replace(o, description=fm.options.get(o.id, "")) for o in f.options]
             fields.append(Field(
                 id=f.id, name=f.name, type=f.type,
                 required=f.required or fm.required,
-                options=f.options, relation_data_source_id=f.relation_data_source_id,
+                options=options, relation_data_source_id=f.relation_data_source_id,
                 description=fm.description,
             ))
         return Target(
@@ -279,7 +280,7 @@ class Discovery:
             description=m.description or t.description,
             parent_page_id=t.parent_page_id, database_id=t.database_id, fields=fields,
             items=t.items, operations=t.operations, url=t.url, is_inbox=m.inbox,
-            local_only=m.local_only,
+            local_only=m.local_only, hidden=m.hidden,
         )
 
     @staticmethod
