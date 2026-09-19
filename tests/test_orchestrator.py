@@ -24,6 +24,7 @@ from app.audit.store import AuditStore
 from app.commands.executor import Executor
 from app.config import Settings
 from app.conversation.orchestrator import MAX_PROMPT, Orchestrator
+from app.conversation.plan import StepField, StepSpec
 from app.conversation.session import SessionStore
 from app.llm.base import LLMInvalidOutput, LLMUnavailable
 from app.llm.context import ContextBuilder
@@ -1389,11 +1390,17 @@ async def test_the_requested_media_reaches_the_researcher(make):
 # ---- multi-step plans ---------------------------------------------------------------------------
 
 
-class FakePlanner:
-    """plan() returns the given steps; next() walks them, then says done."""
+def free(text: str) -> StepSpec:
+    """A step the bot has to read with the model (the planner could not express it)."""
+    return StepSpec(text=text)
 
-    def __init__(self, steps: list[str], *, fail: bool = False):
-        self.steps, self.fail = steps, fail
+
+class FakePlanner:
+    """plan() returns the given steps; next() offers `then` in turn, then says done."""
+
+    def __init__(self, steps, *, fail: bool = False, then: list[str] | None = None):
+        self.steps = [free(s) if isinstance(s, str) else s for s in steps]
+        self.fail, self.then = fail, list(then or [])
         self.checks: list[list[str]] = []
 
     async def plan(self, request, workspace):
@@ -1408,9 +1415,8 @@ class FakePlanner:
         from app.llm.planner import Verdict
 
         self.checks.append([s.status for s in state.history])
-        n = len(state.history)
-        if n < len(self.steps):
-            return Verdict(done=False, summary="", next_step=self.steps[n])
+        if self.then:
+            return Verdict(done=False, summary="", next_step=self.then.pop(0))
         return Verdict(done=True, summary="сделано всё", next_step="")
 
 
@@ -1442,7 +1448,7 @@ async def test_a_plan_runs_every_step_reports_each_and_offers_undo_all(make):
     assert sent[2].text.startswith("Шаг 2.") and "Молоко" in sent[2].text
     assert reply.text == texts.PLAN_DONE.format(summary="сделано всё", done=2, total=2)
     assert [b.label for row in reply.buttons for b in row] == [texts.BTN_UNDO_ALL]
-    assert planner.checks == [["done"], ["done", "done"]]  # asked after every step
+    assert planner.checks == [["done", "done"]]  # asked once, after the planned steps
     assert len(notion_calls(bot, "create_page")) == 2
 
     await bot.orch.handle_callback(CHAT, USER, reply.buttons[0][0].id)
@@ -1478,7 +1484,8 @@ async def test_a_step_that_asks_pauses_the_plan_and_the_answer_resumes_it(make):
 
 
 async def test_a_failed_step_is_reported_not_filed_and_the_plan_goes_on(make):
-    planner = FakePlanner(["расскажи анекдот", "добавь в покупки молоко"])
+    planner = FakePlanner(["расскажи анекдот", "добавь в покупки молоко"],
+                          then=["добавь в покупки молоко"])
     bot = make(planner=planner)
     bot.llm.queue(plan_interp(bot))
     bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.9)))
@@ -1486,7 +1493,7 @@ async def test_a_failed_step_is_reported_not_filed_and_the_plan_goes_on(make):
                                              fields={"t2.f1": val("Молоко", 1.0)})))
     reply = await bot.orch.handle_text(CHAT, USER, "план", progress=collect([]))
 
-    assert planner.checks == [["failed"], ["failed", "done"]]
+    assert planner.checks == [["failed"], ["failed", "done"]]  # after the failure, and at the end
     assert notion_calls(bot, "append_blocks") == []  # nothing went to the inbox
     assert reply.text == texts.PLAN_DONE.format(summary="сделано всё", done=1, total=2)
 
@@ -1560,7 +1567,8 @@ async def test_a_null_ish_clarify_is_not_asked(bot):
 
 
 async def test_an_empty_search_inside_a_plan_is_a_failed_step(make):
-    planner = FakePlanner(["что у меня в покупках про слона", "добавь в покупки хлеб"])
+    planner = FakePlanner(["что у меня в покупках про слона", "добавь в покупки хлеб"],
+                          then=["добавь в покупки хлеб"])
     bot = make(planner=planner)
     bot.notion.data_sources["ds-buy"] = {"id": "ds-buy"}
     bot.llm.queue(plan_interp(bot))
@@ -1593,3 +1601,40 @@ async def test_answers_to_a_plan_question_reach_the_later_steps(make):
     await bot.orch.handle_text(CHAT, USER, "два батона", progress=collect([]))
     step2_context = bot.llm.seen[-1][1]
     assert step2_context["pending"]["plan"]["ответы_пользователя"] == ["два батона"]
+
+
+async def test_structured_steps_cost_no_llm_calls_and_no_checks_until_the_end(make):
+    books = [StepSpec(text=f"добавь в покупки {name}", action="create", target="Покупки",
+                      title=name, fields=[StepField(name="Магазин", value="Rimi")])
+             for name in ("Хлеб", "Молоко", "Яйца")]
+    planner = FakePlanner(books)
+    bot = make(planner=planner)
+    bot.llm.queue(plan_interp(bot))  # only the message itself is read by the model
+    sent: list = []
+    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб, молоко и яйца",
+                                       progress=collect(sent))
+
+    assert bot.llm.calls == 1  # no call per step
+    assert planner.checks == [["done", "done", "done"]]  # one check, at the end
+    created = notion_calls(bot, "create_page")
+    assert len(created) == 3
+    titles = [next(v["title"][0]["text"]["content"] for k, v in c[2].items() if k == "title")
+              for c in created]
+    assert titles == ["Хлеб", "Молоко", "Яйца"]
+    assert [b.label for row in reply.buttons for b in row] == [texts.BTN_UNDO_ALL]
+    assert sent[1].text.startswith("Шаг 1.")
+
+
+async def test_a_step_the_planner_could_not_express_still_uses_the_model(make):
+    steps = [StepSpec(text="добавь в покупки Хлеб", action="create", target="Покупки",
+                      title="Хлеб"),
+             free("отметь молоко купленным")]
+    bot = make(planner=FakePlanner(steps))
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("update", cand(bot.ctx, "t2", 0.95, item="t2.i2",
+                                             fields={"t2.f5": val(True, 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "хлеб и молоко", progress=collect([]))
+
+    assert bot.llm.calls == 2  # the message, and the one step the planner left as text
+    assert bot.llm.seen[-1][0] == "отметь молоко купленным"
+    assert notion_calls(bot, "update_page")

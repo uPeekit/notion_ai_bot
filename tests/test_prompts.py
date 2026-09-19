@@ -64,7 +64,9 @@ def test_plan_rule_only_when_planning_and_step_rule_only_inside_a_plan():
     off = ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW)
     on = ContextBuilder(planning=True).build(sample_snapshot(), now=SAMPLE_NOW)
     assert PLAN_RULE not in system_prompt(off) and PLAN_RULE in system_prompt(on)
-    state = PlanState(goal="g", planned=["a"], current="a")
+    from app.conversation.plan import StepSpec
+
+    state = PlanState(goal="g", steps=[StepSpec(text="a")])
     step = ContextBuilder(planning=True).build(sample_snapshot(), now=SAMPLE_NOW,
                                                pending=plan_context(state), allow_plan=False)
     assert STEP_RULE in system_prompt(step) and PLAN_RULE not in system_prompt(step)

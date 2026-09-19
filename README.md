@@ -164,16 +164,23 @@ With Claude configured, a message that needs several actions becomes a **plan**:
   фото, задачи купить билеты и оформить визу»
 - «добавь книги, которые хочу прочитать: Солярис, Дюна, Пикник на обочине» — one row per book
 
-The bot posts the plan (the goal and numbered steps) and starts at once. Every step is an
-ordinary one-action request run through the same pipeline as your own messages — so it gets the
-same checks, can search the web, and can ask you something; the plan waits for your answer and
-then carries on. After each step Claude is asked whether the goal is reached or what to do
-next, so a step that failed can be retried differently or skipped. Each finished step is
-reported with its own undo button; the closing message has **«Отменить всё»**, which reverts
-every write of the plan. At most 25 steps. `PLAN_MODEL` (default `claude-sonnet-5`) does the
-planning and the check after each step — it is what knows "all of Pelevin's novels", and Haiku
-knew far fewer. That is roughly 1 ¢ per step on top of the step itself (which costs the same
-as a single message).
+The bot posts the plan (the goal and numbered steps) and starts at once. The planner returns
+each step already decided — the action, the place, the field values — so the bot carries it out
+**without asking a model again**: 16 books cost one planning call, not 16 more. A step it could
+not express that way (or that names something the workspace does not have) falls back to being
+read like one of your own messages.
+
+Either way a step goes through the same validator and policy as anything else, so it can ask
+you something; the plan waits for your answer and then carries on, and what you answered is
+remembered for the rest of the plan. Claude is asked what to do next only when it can change
+something: after a step that failed, or once the planned steps are done — a plan that goes
+smoothly costs no check calls at all. Each finished step is reported with its own undo button;
+the closing message has **«Отменить всё»**, which reverts every write of the plan. At most 25
+steps.
+
+`PLAN_MODEL` (default `claude-sonnet-5`) does the planning: it is what knows "all of Pelevin's
+novels" (Haiku listed 8, one of them wrong). A plan costs about 2 ¢ of planning plus the writes
+themselves.
 
 ## Web search and images
 

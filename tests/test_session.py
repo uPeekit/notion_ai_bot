@@ -262,7 +262,9 @@ def test_a_plan_rides_along_in_the_session_json():
     from app.conversation.session import PendingSession
 
     s = _field_required_session()
-    plan = PlanState(goal="g", planned=["a", "b"], current="a").model_dump()
+    from app.conversation.plan import StepSpec
+
+    plan = PlanState(goal="g", steps=[StepSpec(text="a"), StepSpec(text="b")]).model_dump()
     back = PendingSession.model_validate_json(s.model_copy(update={"plan": plan})
                                               .model_dump_json())
-    assert PlanState.model_validate(back.plan).planned == ["a", "b"]
+    assert [s.text for s in PlanState.model_validate(back.plan).steps] == ["a", "b"]

@@ -10,22 +10,36 @@ import logging
 from dataclasses import dataclass
 
 import anthropic
+from pydantic import ValidationError
 
-from app.conversation.plan import MAX_STEPS, PlanState
+from app.conversation.plan import MAX_STEPS, PlanState, StepSpec
 from app.llm.prompts import PLAN_NEXT_PROMPT, PLAN_PROMPT, plan_message, progress_message
 
 log = logging.getLogger(__name__)
 
 _STRING = {"type": "string"}
-PLAN_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["goal", "steps"],
-    "properties": {"goal": _STRING, "steps": {"type": "array", "items": _STRING}},
-}
-NEXT_SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "required": ["done", "summary", "next_step"],
-    "properties": {"done": {"type": "boolean"}, "summary": _STRING, "next_step": _STRING},
-}
+
+
+def _obj(props: dict) -> dict:
+    return {"type": "object", "additionalProperties": False, "required": list(props),
+            "properties": props}
+
+
+# A step the bot can carry out without reading it back with a model: the action, the place by
+# name, and the field values by name. `text` is the human form — shown to the user, and read by
+# the model when action is "free" or a name does not resolve.
+STEP_SCHEMA = _obj({
+    "text": _STRING,
+    "action": {"enum": ["create", "append", "free"]},
+    "target": _STRING,
+    "title": _STRING,
+    "content": _STRING,
+    "fields": {"type": "array", "items": _obj({"name": _STRING, "value": _STRING})},
+    "web_query": _STRING,
+    "web_media": {"enum": ["text", "text_and_images", "images"]},
+})
+PLAN_SCHEMA = _obj({"goal": _STRING, "steps": {"type": "array", "items": STEP_SCHEMA}})
+NEXT_SCHEMA = _obj({"done": {"type": "boolean"}, "summary": _STRING, "next_step": _STRING})
 
 
 # Room for the model's own thinking plus a long plan: at 2048 a 20-book list was cut mid-JSON
@@ -56,11 +70,18 @@ class Planner:
     async def aclose(self) -> None:
         await self._client.close()
 
-    async def plan(self, request: str, workspace: str) -> tuple[str, list[str]]:
+    async def plan(self, request: str, workspace: str) -> tuple[str, list[StepSpec]]:
         """The goal and its steps. Raises PlanError when no usable plan came back."""
         data = await self._ask(PLAN_PROMPT, PLAN_SCHEMA, plan_message(request, workspace))
         goal = str(data.get("goal", "")).strip()
-        steps = [s.strip() for s in data.get("steps", []) if isinstance(s, str) and s.strip()]
+        steps = []
+        for raw in data.get("steps", []):
+            try:
+                step = StepSpec.model_validate(raw)
+            except ValidationError:
+                continue
+            if step.text.strip():
+                steps.append(step)
         if not goal or not steps:
             raise PlanError("empty plan")
         return goal, steps[:MAX_STEPS]

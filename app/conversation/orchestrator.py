@@ -52,7 +52,7 @@ from app.commands.executor import ExecutionResult, Executor, UndoRecord
 from app.commands.models import Search
 from app.config import Settings
 from app.conversation.inbox import inbox_command, inbox_target
-from app.conversation.plan import PlanState, PlanStep
+from app.conversation.plan import PlanState, PlanStep, StepSpec
 from app.conversation.reply import Button, Reply, format_execution, format_question, format_search
 from app.conversation.resolver import apply_answer, next_question, options_for, result_from_session
 from app.conversation.session import (
@@ -61,6 +61,7 @@ from app.conversation.session import (
     SessionStore,
     session_from_decision,
 )
+from app.conversation.steps import to_interpretation
 from app.interpretation.models import Interpretation
 from app.llm.base import (
     LLMClient,
@@ -71,7 +72,7 @@ from app.llm.base import (
 )
 from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
-from app.llm.planner import PlanError, Planner
+from app.llm.planner import PlanError, Planner, Verdict
 from app.llm.prompts import plan_context, workspace_summary
 from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
 from app.logging_setup import bind_event
@@ -101,6 +102,9 @@ MAX_PROMPT = 4000
 # /undo and /cancel arrive without the sender's id (see Orchestrator.undo/cancel), and so does
 # the expired-session sweeper; the events row still needs a non-null user column.
 NO_USER = 0
+# What the audit log records as the "model" of a step the planner had already decided: no model
+# read it, so naming one would be a lie.
+PLAN_STEP_MODEL = "plan-step"
 
 
 def now_utc() -> datetime:
@@ -514,15 +518,16 @@ class Orchestrator:
         except PlanError as e:
             log.warning("planning failed: %s", e)
             return await self._inbox_or_error(turn, text, "PLAN_FAILED")
-        turn.plan = PlanState(goal=goal, planned=steps, current=steps[0])
+        turn.plan = PlanState(goal=goal, steps=steps)
         lines = [texts.PLAN_HEADER.format(goal=goal)]
-        lines += [f"{i}. {step}" for i, step in enumerate(steps, start=1)]
+        lines += [f"{i}. {step.text}" for i, step in enumerate(steps, start=1)]
         await self._progress(turn, Reply("\n".join(lines)))
         return await self._after_step(turn, await self._step(turn, steps[0]))
 
-    async def _step(self, turn: _Turn, text: str) -> Reply:
-        """One step of the plan, as if the user had sent it: interpret, validate, then execute
-        or ask. turn.outcome says which way it went."""
+    async def _step(self, turn: _Turn, step: StepSpec) -> Reply:
+        """One step of the plan: execute it, or ask the user. A structured step needs no model
+        call at all — the planner already decided what it means, and `steps.to_interpretation`
+        resolves the names against this snapshot. turn.outcome says which way it went."""
         assert turn.plan is not None
         turn.outcome, turn.last_undo = "failed", None
         try:
@@ -531,48 +536,61 @@ class Orchestrator:
             log.warning("discovery failed: %s", e)
             return Reply(_error("DISCOVERY_FAILED"))
         ctx = self._builder.build(snapshot, turn.now, plan_context(turn.plan), allow_plan=False)
-        try:
-            interp, trace = await self._llm.interpret(text, ctx, build_schema(ctx))
-        except (LLMUnavailable, LLMInvalidOutput, LLMContextOverflow) as e:
-            log.warning("plan step: llm failed: %s", e)
-            return Reply(_error("LLM_UNAVAILABLE" if isinstance(e, LLMUnavailable)
-                                else "LLM_INVALID_OUTPUT"))
-        self._audit_llm(turn, interp, trace)
+        interp = to_interpretation(step, ctx)
+        if interp is not None:
+            turn.audit(llm_model=PLAN_STEP_MODEL, interpretation=interp.model_dump_json())
+        else:
+            try:
+                interp, trace = await self._llm.interpret(step.text, ctx, build_schema(ctx))
+            except (LLMUnavailable, LLMInvalidOutput, LLMContextOverflow) as e:
+                log.warning("plan step: llm failed: %s", e)
+                return Reply(_error("LLM_UNAVAILABLE" if isinstance(e, LLMUnavailable)
+                                    else "LLM_INVALID_OUTPUT"))
+            self._audit_llm(turn, interp, trace)
         result = self._validator.validate(interp, ctx, snapshot)
         decision = self._policy.evaluate(result)
         self._audit_result(turn, result, decision)
-        return await self._dispatch(turn, decision, result, ctx, text, [])
+        return await self._dispatch(turn, decision, result, ctx, step.text, [])
 
     async def _after_step(self, turn: _Turn, reply: Reply) -> Reply:
-        """Record the step that just ended and keep going: after every step the planner says
-        whether the goal is reached or what to do next. A step that asks the user something
-        stops here — its question is the reply, and its session carries the plan, so the answer
-        picks the loop up again."""
+        """Record the step that just ended and keep going. The planner is asked what to do next
+        only when it can change anything: after a step that failed, or once the planned steps
+        are done — a plan whose steps all work costs no check calls at all. A step that asks the
+        user something stops here: its question is the reply, and its session carries the plan,
+        so the answer picks the loop up again."""
         state = turn.plan
         assert state is not None
         while True:
             if turn.outcome == "asked":
                 return reply
+            failed = turn.outcome != "executed"
+            current = state.current
             state.history.append(PlanStep(
-                request=state.current, outcome=reply.text[:500],
-                status="done" if turn.outcome == "executed" else "failed"))
+                request=current.text if current is not None else state.goal,
+                outcome=reply.text[:500], status="failed" if failed else "done"))
             if turn.last_undo is not None:
                 state.undo.append(turn.last_undo)
             await self._progress(turn, replace(
                 reply, text=texts.PLAN_STEP.format(n=len(state.history), text=reply.text)))
             if state.exhausted:
                 return self._plan_done(turn, "", stopped=True)
-            try:
-                snapshot = await self._discovery.get()
-            except Exception as e:
-                log.warning("discovery failed: %s", e)
-                return self._plan_done(turn, "", stopped=True)
-            assert self._planner is not None
-            verdict = await self._planner.next(state, self._workspace(snapshot))
-            if verdict.done:
-                return self._plan_done(turn, verdict.summary)
-            state.current = verdict.next_step
+            state.index += 1
+            if failed or state.current is None:
+                verdict = await self._check(turn, state)
+                if verdict is None or verdict.done:
+                    return self._plan_done(turn, verdict.summary if verdict else "")
+                state.add(verdict.next_step)
             reply = await self._step(turn, state.current)
+
+    async def _check(self, turn: _Turn, state: PlanState) -> Verdict | None:
+        """Ask the planner what to do next; None when the plan should simply stop."""
+        assert self._planner is not None
+        try:
+            snapshot = await self._discovery.get()
+        except Exception as e:
+            log.warning("discovery failed: %s", e)
+            return None
+        return await self._planner.next(state, self._workspace(snapshot))
 
     def _plan_done(self, turn: _Turn, summary: str, *, stopped: bool = False) -> Reply:
         """The plan's closing message, with one button that undoes every write it made."""

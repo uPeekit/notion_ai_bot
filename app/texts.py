@@ -23,6 +23,9 @@ BTN_UNDO_ALL = "Отменить всё"
 
 BOOL_YES = "Да"
 BOOL_NO = "Нет"
+# How a plan step may spell a tick box (app.conversation.steps reads the planner's own words).
+BOOL_WORDS_TRUE = frozenset({"да", "true", "yes", "1", "+", "готово", "есть"})
+BOOL_WORDS_FALSE = frozenset({"нет", "false", "no", "0", "-"})
 FIELD_CLEARED = "очищено"  # a Written.value of None: the field was explicitly cleared (e.g.
                             # "убери магазин у молока"), not missing/undefined
 UNTITLED = "(без названия)"  # title fallback for a page with no title text; shared with
