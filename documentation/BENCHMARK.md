@@ -318,3 +318,21 @@ four per field (84 on the real workspace). The flat answer is converted back and
 On the real workspace, what Haiku still misses is tags it was not allowed to infer (4 cases) and
 «запиши пароль…» read as create rather than append. With a key set, Claude is the interpreter
 and the local model is the fallback.
+
+## Run 6 (2026-09-19) — option descriptions, hidden views, workspace note
+
+The real-workspace set again, with draft settings made from the owner's own page descriptions:
+the five TODO tags described (e.g. `home` = the `дом` page's description), the four pages that
+only show TODO filtered by a tag hidden, and a three-sentence workspace note.
+
+| model | setting | target | all | safe | wrong | p50 |
+|---|---|---|---|---|---|---|
+| claude-haiku-4-5 | Run 5 | 100% | 74% | 95% | 0 | 3.9 s |
+| claude-haiku-4-5 | described | 95% | 89% | 89% | 2 | 4.1 s |
+| mistral-nemo:12b | Run 4 | 74% | 37% | 47% | 7 | 24.0 s |
+| mistral-nemo:12b | described | 74% | 37% | 58% | 6 | 34.7 s |
+
+Haiku now sets the tag in every TODO case; its two misses are arguable expectations rather than
+clear errors («надо забрать посылки» tagged `home`, not `personal`; «для кнуба разослать
+приглашения…» filed in the club's own events database). The 12B model barely uses the
+descriptions — another reason Claude is the primary and the local model only the fallback.
