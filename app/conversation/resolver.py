@@ -121,7 +121,7 @@ def rebuild_candidate(
     return VCandidate(
         key=key, target=target, confidence=pc.confidence, item=item,
         item_candidates=item_candidates, item_text=pc.item_text, fields=fields,
-        content=pc.content, search_query=pc.search_query,
+        content=pc.content, search_query=pc.search_query, web_query=pc.web_query,
     )
 
 

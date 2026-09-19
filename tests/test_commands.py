@@ -77,3 +77,31 @@ def test_search_filters_from_validated_fields():
     assert cmd.filters[0].property_name == "Магазин"
     assert cmd.filters[0].value == {"id": "o-Rimi", "name": "Rimi"}
     assert cmd.query == ""
+
+
+def test_model_content_is_markdown_lines_kept_as_written():
+    ctx, _ = ctx_and_snapshot()
+    content = "## План\n\n- верстак\n```\n  отступ\n```"
+    c = best("create", cand(ctx, "t5", fields={"t5.f1": val("Мастерская")}, content=content))
+    cmd = build_command(c, "create", "")
+    assert cmd.markdown is True
+    assert cmd.body == ["## План", "", "- верстак", "```", "  отступ", "```"]
+    c = best("append", cand(ctx, "t5", content="- [ ] паспорт"))
+    cmd = build_command(c, "append", "")
+    assert cmd.markdown is True and cmd.paragraphs == ["- [ ] паспорт"]
+
+
+def test_database_row_gets_the_content_as_its_page_body():
+    ctx, _ = ctx_and_snapshot()
+    c = best("create", cand(ctx, "t2", fields={"t2.f1": val("Молоко")}, content="**3.2%**"))
+    cmd = build_command(c, "create", "")
+    assert isinstance(cmd, CreateItem) and cmd.body == ["**3.2%**"] and cmd.markdown is True
+    c = best("create", cand(ctx, "t2", fields={"t2.f1": val("Хлеб")}))
+    assert build_command(c, "create", "").body == []
+
+
+def test_old_audit_commands_still_validate_without_the_new_fields():
+    assert CreateItem.model_validate({"data_source_id": "d", "target_name": "t",
+                                      "properties": []}).markdown is False
+    assert AppendBlocks.model_validate({"page_id": "p", "target_name": "t", "page_title": "p",
+                                        "paragraphs": ["x"]}).markdown is False

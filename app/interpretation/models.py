@@ -57,6 +57,9 @@ class Candidate(Strict):
     fields: dict[str, FieldValue] = Field(default_factory=dict)
     content: str | None = None
     search_query: str | None = None
+    # What to look up on the web before writing (the answer becomes `content`). Only offered to
+    # the model when web research is available (Context.web_research).
+    web_query: str | None = None
 
 
 class Interpretation(Strict):

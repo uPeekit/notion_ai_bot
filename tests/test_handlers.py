@@ -45,6 +45,8 @@ class FakeOrchestrator:
         self.order = order
 
     async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None):
+        if self.order is not None:
+            self.order.append("handle_text")
         self.calls.append(("handle_text", chat_id, user_id, text, kind, transcript))
         return self.reply
 
@@ -149,6 +151,10 @@ class FakeBot:
 
     async def get_file(self, file_id):
         return self.file
+
+    async def send_chat_action(self, chat_id, action, **kwargs):
+        if self.order is not None:
+            self.order.append(f"action:{action}")
 
     edit_error: Exception | None = None
 
@@ -715,3 +721,10 @@ async def test_targets_command_marks_hidden_targets():
     assert await dispatch(hs.app, command_update(ALLOWED_USER, "targets", hs.bot), hs.context)
     buy = next(line for line in hs.bot.sent[0]["text"].splitlines() if "Покупки" in line)
     assert texts.TARGETS_HIDDEN_MARKER in buy
+
+
+async def test_typing_is_shown_while_a_message_is_handled():
+    order: list[str] = []
+    hs = build(order=order)
+    assert await dispatch(hs.app, text_update(ALLOWED_USER, "купи молоко", hs.bot), hs.context)
+    assert order.index("action:typing") < order.index("handle_text")

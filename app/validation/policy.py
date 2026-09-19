@@ -162,7 +162,8 @@ class Policy:
                 qs.append(Question(type="field_confirm", target_key=best.key, field_key=fk,
                                     field_name=f.field.name, proposed=_proposed_json(f.value)))
 
-        if r.intent == "append" and not best.content:
+        # A web query brings its own content: the research result is what gets appended.
+        if r.intent == "append" and not best.content and not best.web_query:
             qs.append(Question(type="content_required", target_key=best.key))
 
         if qs:

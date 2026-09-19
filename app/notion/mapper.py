@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.commands.models import CreateItem, CreatePage, PropertyWrite, Search
+from app.notion.markdown import markdown_blocks
+
+# CreatePage.parent_page_id of a page created at the top level of the workspace (the synthetic
+# root target discovery adds). Only a personal access token or a public integration may do this.
+WORKSPACE_ROOT_ID = "workspace"
 
 RICH_TEXT_LIMIT = 2000
 
@@ -55,15 +60,22 @@ def paragraph_blocks(paragraphs: list[str]) -> list[dict]:
             for p in paragraphs if p]
 
 
+def content_blocks(lines: list[str], markdown: bool) -> list[dict]:
+    """A command's text as blocks: Markdown when the model wrote it, else one paragraph a line."""
+    return markdown_blocks("\n".join(lines)) if markdown else paragraph_blocks(lines)
+
+
 def create_item_payload(cmd: CreateItem) -> tuple[dict, dict]:
     parent = {"type": "data_source_id", "data_source_id": cmd.data_source_id}
     return parent, properties_payload(cmd.properties)
 
 
 def create_page_payload(cmd: CreatePage) -> tuple[dict, dict, list[dict]]:
-    return ({"type": "page_id", "page_id": cmd.parent_page_id},
-            {"title": {"title": _rich(cmd.title)}},
-            paragraph_blocks(cmd.body))
+    parent = ({"type": "workspace", "workspace": True}
+              if cmd.parent_page_id == WORKSPACE_ROOT_ID
+              else {"type": "page_id", "page_id": cmd.parent_page_id})
+    return (parent, {"title": {"title": _rich(cmd.title)}},
+            content_blocks(cmd.body, cmd.markdown))
 
 
 def search_filter(cmd: Search) -> dict | None:

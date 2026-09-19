@@ -24,6 +24,14 @@ def paragraphs(text: str | None) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def markdown_lines(text: str | None) -> list[str]:
+    """Text the model wrote, kept line for line (indentation inside a code fence matters) for
+    the Markdown mapper; only surrounding blank lines go."""
+    if not text or not text.strip():
+        return []
+    return [line.rstrip() for line in text.strip("\n").splitlines()]
+
+
 def _writes(c: VCandidate) -> list[PropertyWrite]:
     out: list[PropertyWrite] = []
     for f in c.fields.values():
@@ -61,11 +69,12 @@ def _title_value(c: VCandidate) -> str | None:
 def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
     t = c.target
     if intent == "create" and t.kind == "database":
-        return CreateItem(data_source_id=t.id, target_name=t.name, properties=_writes(c))
+        return CreateItem(data_source_id=t.id, target_name=t.name, properties=_writes(c),
+                          body=markdown_lines(c.content), markdown=True)
     if intent == "create":
         return CreatePage(parent_page_id=t.id, target_name=t.name,
                           title=_title_value(c) or _one_line(raw_text),
-                          body=paragraphs(c.content))
+                          body=markdown_lines(c.content), markdown=True)
     if intent == "update":
         assert c.item is not None
         return UpdateItem(page_id=c.item.id, target_name=t.name, item_title=c.item.title,
@@ -74,7 +83,7 @@ def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
         page = c.item
         return AppendBlocks(page_id=page.id if page else t.id, target_name=t.name,
                             page_title=page.title if page else t.name,
-                            paragraphs=paragraphs(c.content))
+                            paragraphs=markdown_lines(c.content), markdown=True)
     if intent == "search":
         title = t.title_field()
         filters = _search_filters(c)

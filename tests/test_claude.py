@@ -211,3 +211,33 @@ async def test_claude_gets_the_cloud_view_of_the_context():
         await c.interpret("x", ctx, build_schema(ctx))
     assert ctx.json(cloud=True) in seen["body"]["messages"][0]["content"]
     assert ctx.json() not in seen["body"]["messages"][0]["content"]
+
+
+def test_web_query_survives_the_flat_round_trip():
+    ctx = ContextBuilder(web_research=True).build(sample_snapshot(), now=SAMPLE_NOW)
+    answer = to_interpretation(flat(ctx, web_query="рецепт борща"), ctx)
+    assert answer["candidates"][0]["web_query"] == "рецепт борща"
+    assert check(answer, build_schema(ctx)) == ""
+    assert to_interpretation(flat(ctx, web_query=""), ctx)["candidates"][0]["web_query"] is None
+
+
+def test_a_single_option_for_a_list_field_is_wrapped_in_a_list(ctx):
+    project = ctx.field_key("ds-todo", "project")  # relation
+    tk = ctx.target_key("ds-todo")
+    option = ctx.option_keys(project)[0]
+    answer = to_interpretation(flat(ctx, target=tk, fields=[
+        {"key": project, "status": "value", "value_json": json.dumps(option),
+         "confidence": 0.9, "source_text": "по дому"}]), ctx)
+    assert answer["candidates"][0]["fields"][project]["value"] == [option]
+    assert check(answer, build_schema(ctx)) == ""
+
+
+def test_schema_errors_name_the_field_not_just_the_candidate(ctx):
+    tk = ctx.target_key("ds-todo")
+    due = ctx.field_key("ds-todo", "due")
+    answer = to_interpretation(flat(ctx, target=tk, fields=[
+        {"key": due, "status": "value", "value_json": '"завтра"', "confidence": 0.9,
+         "source_text": ""}]), ctx)
+    error = check(answer, build_schema(ctx))
+    assert f"candidates/0/fields/{due}" in error
+    assert "not valid under any" not in error.split(":")[0]

@@ -209,3 +209,16 @@ def test_a_name_that_does_not_match_its_key_is_rejected(ctx):
     }
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(raw, build_schema(ctx))
+
+
+def test_web_query_is_offered_only_when_web_research_is_available():
+    from app.llm.claude import flat_schema
+    from app.llm.context import ContextBuilder
+    from tools.sample_workspace import SAMPLE_NOW, sample_snapshot
+
+    off = ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW)
+    on = ContextBuilder(web_research=True).build(sample_snapshot(), now=SAMPLE_NOW)
+    branch = lambda s: s["properties"]["candidates"]["items"]["anyOf"][0]["properties"]  # noqa: E731
+    assert "web_query" not in branch(build_schema(off)) and "web_query" in branch(build_schema(on))
+    flat = lambda s: s["properties"]["candidates"]["items"]["properties"]  # noqa: E731
+    assert "web_query" not in flat(flat_schema(off)) and "web_query" in flat(flat_schema(on))

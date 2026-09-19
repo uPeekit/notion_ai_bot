@@ -26,11 +26,9 @@ class DirectNotionProvider:
         self._max_retries = max_retries
         self._client = httpx.AsyncClient(
             base_url=BASE_URL,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Notion-Version": version,
-                "Content-Type": "application/json",
-            },
+            # No default Content-Type: httpx sets application/json for a `json=` body itself, and
+            # a client-wide one would override the multipart boundary of a file upload.
+            headers={"Authorization": f"Bearer {token}", "Notion-Version": version},
             timeout=timeout,
             transport=transport,
         )
@@ -172,3 +170,23 @@ class DirectNotionProvider:
 
     async def delete_block(self, block_id: str) -> dict:
         return await self._request("DELETE", f"/blocks/{block_id}")
+
+    async def upload_file(self, filename: str, content_type: str, data: bytes) -> str:
+        """Single-part file upload (≤ 20 MB): create the upload, send the bytes, and return its
+        id, which an image block then references. An upload nothing attaches expires in an
+        hour, so a failure between the two steps leaves nothing behind."""
+        created = await self._request(
+            "POST", "/file_uploads", {"filename": filename, "content_type": content_type}
+        )
+        upload_id = created["id"]
+        try:
+            resp = await self._client.post(
+                f"/file_uploads/{upload_id}/send",
+                files={"file": (filename, data, content_type)},
+            )
+        except httpx.HTTPError as e:
+            raise NotionUnavailable(f"network error: {type(e).__name__}") from None
+        if resp.status_code >= 400:
+            code, message = self._error_parts(resp)
+            raise NotionError(resp.status_code, code, message)
+        return upload_id

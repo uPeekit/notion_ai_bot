@@ -14,17 +14,22 @@ from pydantic import BaseModel
 from app.commands.models import AppendBlocks, Command, CreateItem, CreatePage, Search, UpdateItem
 from app.notion import props
 from app.notion.errors import NotionError
+from app.notion.images import ImageHost
 from app.notion.mapper import (
+    content_blocks,
     create_item_payload,
     create_page_payload,
-    paragraph_blocks,
     properties_payload,
     read_to_write,
     search_filter,
 )
+from app.notion.markdown import rich_text
 from app.notion.provider import NotionProvider
 
 SEARCH_LIMIT = 20
+# Notion takes at most 100 blocks per create-page or append request; longer bodies (a web
+# research result) go in batches.
+MAX_BLOCKS_PER_REQUEST = 100
 
 
 @dataclass(frozen=True)
@@ -60,13 +65,57 @@ class ExecutionResult:
 
 
 class Executor:
-    def __init__(self, provider: NotionProvider) -> None:
+    def __init__(self, provider: NotionProvider, images: ImageHost | None = None) -> None:
         self._p = provider
+        self._images = images
+
+    async def _prepare(self, blocks: list[dict]) -> list[dict]:
+        """Image blocks re-hosted in Notion (see app.notion.images). One that cannot be fetched
+        becomes a plain link rather than a broken image. Without an ImageHost they stay
+        external."""
+        if self._images is None:
+            return blocks
+        out = []
+        for b in blocks:
+            image = b.get("image") if b.get("type") == "image" else None
+            if image is None or image.get("type") != "external":
+                out.append(b)
+                continue
+            url = image["external"]["url"]
+            upload_id = await self._images.host(url)
+            if upload_id is None:
+                caption = "".join(r["text"]["content"] for r in image.get("caption", []))
+                line = f"[{caption or url}]({url})"
+                out.append({"object": "block", "type": "paragraph",
+                            "paragraph": {"rich_text": rich_text(line)}})
+                continue
+            hosted = {"type": "file_upload", "file_upload": {"id": upload_id}}
+            if image.get("caption"):
+                hosted["caption"] = image["caption"]
+            out.append({"object": "block", "type": "image", "image": hosted})
+        return out
+
+    async def _append(self, block_id: str, blocks: list[dict]) -> list[str]:
+        ids: list[str] = []
+        for i in range(0, len(blocks), MAX_BLOCKS_PER_REQUEST):
+            data = await self._p.append_blocks(block_id, blocks[i:i + MAX_BLOCKS_PER_REQUEST])
+            ids += [b["id"] for b in data.get("results", []) if "id" in b]
+        return ids
+
+    async def _create(self, parent: dict, properties: dict, blocks: list[dict]) -> dict:
+        """Create a page with its body: the first 100 blocks in the create request itself, the
+        rest appended to the new page."""
+        blocks = await self._prepare(blocks)
+        page = await self._p.create_page(parent, properties,
+                                         blocks[:MAX_BLOCKS_PER_REQUEST] or None)
+        if len(blocks) > MAX_BLOCKS_PER_REQUEST and page.get("id"):
+            await self._append(page["id"], blocks[MAX_BLOCKS_PER_REQUEST:])
+        return page
 
     async def run(self, cmd: Command) -> ExecutionResult:
         if isinstance(cmd, CreateItem):
             parent, properties = create_item_payload(cmd)
-            page = await self._p.create_page(parent, properties)
+            page = await self._create(parent, properties, content_blocks(cmd.body, cmd.markdown))
             page_id = page.get("id")
             return ExecutionResult(
                 cmd,
@@ -112,7 +161,7 @@ class Executor:
             )
         if isinstance(cmd, CreatePage):
             parent, properties, children = create_page_payload(cmd)
-            page = await self._p.create_page(parent, properties, children or None)
+            page = await self._create(parent, properties, children)
             page_id = page.get("id")
             return ExecutionResult(
                 cmd,
@@ -122,8 +171,8 @@ class Executor:
                 undo=UndoRecord(kind="archive", page_id=page_id) if page_id else None,
             )
         if isinstance(cmd, AppendBlocks):
-            data = await self._p.append_blocks(cmd.page_id, paragraph_blocks(cmd.paragraphs))
-            ids = [b["id"] for b in data.get("results", []) if "id" in b]
+            blocks = await self._prepare(content_blocks(cmd.paragraphs, cmd.markdown))
+            ids = await self._append(cmd.page_id, blocks)
             return ExecutionResult(
                 cmd,
                 cmd.page_id,

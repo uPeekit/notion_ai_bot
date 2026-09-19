@@ -21,6 +21,10 @@ class CreateItem(Strict):
     data_source_id: str
     target_name: str
     properties: list[PropertyWrite]
+    # The new row's page body (e.g. what a web search found). Lines of Markdown when `markdown`;
+    # both default so a command read back from an older audit row still validates.
+    body: list[str] = []
+    markdown: bool = False
 
 
 class UpdateItem(Strict):
@@ -37,6 +41,7 @@ class CreatePage(Strict):
     target_name: str
     title: str
     body: list[str] = []
+    markdown: bool = False  # body is Markdown lines (text the model wrote), not plain paragraphs
 
 
 class AppendBlocks(Strict):
@@ -45,6 +50,7 @@ class AppendBlocks(Strict):
     target_name: str
     page_title: str
     paragraphs: list[str]
+    markdown: bool = False  # paragraphs are Markdown lines; the inbox keeps plain text verbatim
 
 
 class Search(Strict):

@@ -259,3 +259,17 @@ async def test_option_descriptions_and_hidden_flag_reach_the_snapshot(fake, tmp_
     assert [(o.name, o.description) for o in shop.options] == [
         ("Rimi", "супермаркет у дома"), ("Prisma", "")]
     assert snap.target("ds-buy").hidden is True and snap.target("ds-shops").hidden is False
+
+
+async def test_workspace_root_is_offered_as_a_page_target_when_enabled(fake, tmp_path):
+    from app import texts
+    from app.notion.mapper import WORKSPACE_ROOT_ID
+
+    d = Descriptions(tmp_path / "t.yaml")
+    snap = await Discovery(fake, d, items_per_target=10, ttl_s=60, workspace_root=True).refresh()
+    root = snap.target(WORKSPACE_ROOT_ID)
+    assert root is not None and root.kind == "page" and root.name == texts.ROOT_TARGET_NAME
+    assert root.operations == frozenset({"create_page"})
+    assert d.load()[WORKSPACE_ROOT_ID].name == texts.ROOT_TARGET_NAME  # hideable like any other
+    plain = await Discovery(fake, d, items_per_target=10, ttl_s=60).refresh()
+    assert plain.target(WORKSPACE_ROOT_ID) is None

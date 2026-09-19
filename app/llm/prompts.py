@@ -86,16 +86,35 @@ TARGET_NAME_RULE = (
 )
 
 
+MARKDOWN_RULE = (
+    "- content можно оформлять Markdown: # и ## заголовки, - список, 1. нумерованный список, "
+    "- [ ] задача-чекбокс, > цитата, **жирный**, *курсив*, [текст](url), ``` блок кода ```, "
+    "--- разделитель, ![подпись](url картинки). Оформляй, когда пользователь просит или текст "
+    "по смыслу — список, план, структура; обычную фразу пиши как есть.\n"
+)
+# Part of every prompt (the baseline too): content is always written as Markdown now.
+SYSTEM_PROMPT = SYSTEM_PROMPT.replace(NOTES_LAST, MARKDOWN_RULE + NOTES_LAST)
+
+WEB_RULE = (
+    "- web_query — если пользователь просит найти что-то в интернете (информацию, рецепт, "
+    "обзор, ссылки, картинки, визуальные референсы) и записать: intent create (новая "
+    "подстраница или запись) или append (дописать на страницу), цель — куда записать, "
+    "web_query — что искать, коротко. Найденное бот запишет сам, content оставь пустым. "
+    "intent search — только поиск по записям в Notion, не в интернете. Если в сообщении нет "
+    "просьбы искать в интернете — web_query null.\n"
+)
+
 # Appended for Claude, which answers in the flat shape of app.llm.claude.flat_schema.
 FLAT_FORMAT_NOTE = """
 
 Формат ответа (упрощённый):
-- item, item_text, content, search_query: пустая строка "" вместо null.
+- item, item_text, content, search_query, web_query: пустая строка "" вместо null.
 - fields — список, а не объект: {"key": ключ поля, "status": ..., "value_json": ..., \
 "confidence": ..., "source_text": ...}. Поля со статусом not_mentioned можно не перечислять.
 - value_json — значение в виде JSON-строки: "\\"Купить хлеб\\"", "42", "true", \
 "[\\"t1.f2.o1\\"]", "{\\"start\\":\\"2026-09-12\\",\\"end\\":null}". Для ambiguous — JSON-массив \
-вариантов. Для explicit_null и not_mentioned — "null"; confidence тогда 0."""
+вариантов. Для explicit_null и not_mentioned — "null"; confidence тогда 0.
+- Для multi_select и relation value_json — всегда JSON-массив, даже из одного варианта."""
 
 
 def system_prompt(ctx: Context) -> str:
@@ -104,6 +123,8 @@ def system_prompt(ctx: Context) -> str:
     against."""
     assert NOTES_LAST in SYSTEM_PROMPT
     extra = TARGET_NAME_RULE if ctx.name_targets else ""
+    if ctx.web_research:
+        extra += WEB_RULE
     notes = NOTES_FIRST if ctx.reasoning_first else NOTES_LAST
     return SYSTEM_PROMPT.replace(NOTES_LAST, notes + extra)
 
@@ -112,6 +133,27 @@ def build_messages(text: str, ctx: Context, *, cloud: bool = False) -> list[dict
     """`cloud`: the context as a cloud model may see it (`Context.cloud_payload`)."""
     user = f"Контекст:\n{ctx.json(cloud=cloud)}\n\nСообщение пользователя:\n«{text.strip()}»"
     return [{"role": "system", "content": system_prompt(ctx)}, {"role": "user", "content": user}]
+
+
+RESEARCH_PROMPT = """Ты — исследовательский модуль личного ассистента. Пользователь попросил \
+найти что-то в интернете; твой ответ целиком запишется в его Notion.
+
+Найди информацию веб-поиском, при необходимости открой страницы (web_fetch), и верни только \
+результат в Markdown — без вступлений, вопросов и рассказа о том, как ты искал; первая строка \
+ответа — сразу заголовок ##:
+- по делу и компактно: заголовки ##, списки -, ссылки [текст](url);
+- в конце раздел «## Источники» со ссылками на страницы, которые ты использовал;
+- ничего не выдумывай: только то, что нашёл.
+
+Если пользователь просит картинки, фото, визуальные референсы, примеры того, как что-то \
+выглядит, — найди до 6 изображений и вставь каждое отдельной строкой: \
+![короткая подпись](прямой URL файла изображения). Нужен адрес самого файла (обычно .jpg, \
+.png, .webp), а не страницы, где картинка показана: возьми его из содержимого страницы через \
+web_fetch. Пиши на языке запроса."""
+
+
+def research_message(request: str, query: str) -> str:
+    return f"Сообщение пользователя: «{request.strip()}»\nЧто найти: {query.strip()}"
 
 
 def retry_message(error: str) -> str:

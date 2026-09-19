@@ -270,3 +270,78 @@ async def test_notion_errors_propagate(fake):
     fake.create_page = boom
     with pytest.raises(NotionError):
         await Executor(fake).run(CreateItem(data_source_id="ds", target_name="x", properties=[]))
+
+
+# ---- Markdown bodies, batching, images ----------------------------------------------------
+
+
+class FakeImages:
+    def __init__(self, hosted: dict[str, str | None]):
+        self.hosted = hosted
+        self.asked: list[str] = []
+
+    async def host(self, url):
+        self.asked.append(url)
+        return self.hosted.get(url)
+
+
+async def test_markdown_append_writes_formatted_blocks(fake):
+    r = await Executor(fake).run(AppendBlocks(
+        page_id="pg", target_name="Идеи", page_title="Идеи", markdown=True,
+        paragraphs=["## План", "- [ ] верстак", "- свет"]))
+    blocks = fake.calls[-1][2]
+    assert [b["type"] for b in blocks] == ["heading_2", "to_do", "bulleted_list_item"]
+    assert r.undo.block_ids == ["blk-0", "blk-1", "blk-2"]
+
+
+async def test_plain_append_stays_verbatim(fake):
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="Идеи", page_title="Идеи",
+                                          paragraphs=["- не список, а текст"]))
+    assert fake.calls[-1][2][0]["type"] == "paragraph"
+
+
+async def test_long_append_is_sent_in_batches_of_100(fake):
+    lines = [f"- пункт {i}" for i in range(230)]
+    r = await Executor(fake).run(AppendBlocks(page_id="pg", target_name="Идеи",
+                                              page_title="Идеи", paragraphs=lines,
+                                              markdown=True))
+    sizes = [len(c[2]) for c in fake.calls if c[0] == "append_blocks"]
+    assert sizes == [100, 100, 30]
+    assert len(r.undo.block_ids) == 230
+
+
+async def test_long_new_page_puts_the_rest_after_the_first_100(fake):
+    await Executor(fake).run(CreatePage(parent_page_id="pg", target_name="Идеи", title="Т",
+                                        body=[f"строка {i}" for i in range(150)], markdown=True))
+    create = next(c for c in fake.calls if c[0] == "create_page")
+    append = next(c for c in fake.calls if c[0] == "append_blocks")
+    assert len(create[3]) == 100 and append[1] == "new-page" and len(append[2]) == 50
+
+
+async def test_create_item_carries_a_markdown_body(fake):
+    await Executor(fake).run(CreateItem(
+        data_source_id="ds", target_name="TODO", markdown=True,
+        properties=[pw("title", "Task", "title", "Скамейка")],
+        body=["## Референсы", "![дуб](https://example.com/a.jpg)"]))
+    children = next(c for c in fake.calls if c[0] == "create_page")[3]
+    assert [b["type"] for b in children] == ["heading_2", "image"]
+
+
+async def test_images_are_rehosted_and_unfetchable_ones_become_links(fake):
+    images = FakeImages({"https://example.com/ok.jpg": "upload-1"})
+    await Executor(fake, images=images).run(AppendBlocks(
+        page_id="pg", target_name="Идеи", page_title="Идеи", markdown=True,
+        paragraphs=["![хорошая](https://example.com/ok.jpg)",
+                    "![битая](https://example.com/404.jpg)"]))
+    ok, broken = fake.calls[-1][2]
+    assert ok["image"] == {"type": "file_upload", "file_upload": {"id": "upload-1"},
+                           "caption": [{"type": "text", "text": {"content": "хорошая"}}]}
+    assert broken["type"] == "paragraph"
+    link = broken["paragraph"]["rich_text"][0]["text"]
+    assert link == {"content": "битая", "link": {"url": "https://example.com/404.jpg"}}
+
+
+async def test_workspace_root_page_has_a_workspace_parent(fake):
+    await Executor(fake).run(CreatePage(parent_page_id="workspace", target_name="Корень",
+                                        title="Отпуск 2027"))
+    assert fake.calls[-1][1] == {"type": "workspace", "workspace": True}

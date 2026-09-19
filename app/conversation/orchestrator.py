@@ -70,6 +70,7 @@ from app.llm.base import (
 )
 from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
+from app.llm.research import ResearchError, WebResearcher
 from app.logging_setup import bind_event
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
@@ -184,8 +185,10 @@ class Orchestrator:
         self, settings: Settings, discovery: Discovery, builder: ContextBuilder, llm: LLMClient,
         validator: SemanticValidator, policy: Policy, executor: Executor, store: AuditStore,
         sessions: SessionStore, clock: Callable[[], datetime] = now_utc,
+        researcher: WebResearcher | None = None,
     ) -> None:
         self._s = settings
+        self._researcher = researcher
         self._discovery = discovery
         self._builder = builder
         self._llm = llm
@@ -353,6 +356,17 @@ class Orchestrator:
     ) -> Reply:
         candidate = decision.candidate
         assert candidate is not None
+        if candidate.web_query and result.intent in ("create", "append"):
+            # Look it up first: what the web search finds is the content to write.
+            if self._researcher is None:
+                return await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
+            try:
+                found = await self._researcher.research(text, candidate.web_query)
+            except ResearchError as e:
+                log.warning("web research failed: %s", e)
+                return await self._inbox_or_error(turn, text, "WEB_FAILED")
+            candidate = replace(candidate, content="\n\n".join(
+                part for part in (candidate.content, found) if part))
         command = build_command(candidate, result.intent, text)
         turn.audit(command=command.model_dump_json())
         try:

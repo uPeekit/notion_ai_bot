@@ -83,6 +83,10 @@ class FakeNotionProvider:
         self.calls.append(("delete_block", block_id))
         return {"id": block_id, "archived": True}
 
+    async def upload_file(self, filename, content_type, data) -> str:
+        self.calls.append(("upload_file", filename, content_type, len(data)))
+        return f"upload-{len(self.calls)}"
+
 
 class FakeLLM:
     """Serves queued interpretations (or raises queued LLMErrors) instead of calling Ollama, and

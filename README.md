@@ -23,6 +23,14 @@ phrasing:
 - **"отметь молоко купленным"** → finds the matching row and updates it.
 - **"в идеи: попробовать сыр с плесенью"** → appends a paragraph to a page.
 - **"что у меня в покупках на Rimi?"** → searches and lists matches.
+- **"запиши в прост чекбоксами: паспорт, зарядка, наушники"** → formatted text: headings,
+  bulleted and numbered lists, checkboxes, quotes, code, **bold**/*italic*, links.
+- **"создай в пройекты страницу План мастерской: …"** → a new page inside another page, or
+  **"… в корне"** → a new top-level page (needs a personal access token, which is what
+  NOTION_SETUP.md sets up).
+- **"найди рецепт борща и запиши в медиа"**, **"найди визуальные референсы скамейки из дуба в
+  пройекты"** → searches the web, and writes a summary with its sources — and, when you ask for
+  pictures, the images themselves — where you said. Needs Claude (see "Using Claude").
 - Anything genuinely ambiguous ("добавь хлеб", when you have both a shopping list and a task
   list) gets a question back with buttons, never a guessed answer.
 - Anything it can't classify at all ("расскажи анекдот") is saved to whichever Notion
@@ -147,6 +155,24 @@ page of passwords, say). Claude then gets only its name and fields — no descri
 titles — and when Claude routes a message there, the local model reads that message again with
 the full details and decides instead. The text of the message itself has still been sent to
 Claude by then; to keep a message entirely local, set `LLM_CLOUD=false`.
+
+## Web search and images
+
+With an Anthropic key set, a message that asks to *find* something *and write it down* is
+looked up first: Claude runs up to `RESEARCH_MAX_SEARCHES` web searches (default 3), reads the
+pages it needs, and the bot writes the Markdown result — a short summary, then «Источники» —
+to the page or database you named. Say where it should go; without a destination the bot asks.
+«найди в Notion …» / «что у меня в …» stays a search of your own workspace.
+
+When you ask for pictures («визуальные референсы», «покажи, как выглядит»), up to six images
+are added. Each is downloaded once, checked to really be an image (≤ 5 MB), and uploaded into
+Notion, so it keeps showing after the original site deletes or hotlink-blocks it; one that
+cannot be fetched becomes a link instead. The download only ever goes to public internet
+addresses, never to your machine or local network.
+
+A search takes 20–40 s (the chat shows "typing…" meanwhile) and costs about 3–5 ¢ with Haiku
+(`RESEARCH_MODEL`); `claude-sonnet-5` digs deeper for roughly three times that. Undo removes
+the whole written result.
 
 ## Teaching the bot your workspace
 

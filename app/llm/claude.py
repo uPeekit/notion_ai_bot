@@ -27,6 +27,7 @@ from app.llm.prompts import FLAT_FORMAT_NOTE, build_messages, retry_message
 
 MAX_ATTEMPTS = 2
 STATUSES = ["value", "ambiguous", "explicit_null", "not_mentioned"]
+LIST_TYPES = frozenset({"multi_select", "relation"})
 
 
 def _obj(props: dict) -> dict:
@@ -55,6 +56,7 @@ def flat_schema(ctx: Context) -> dict:
         "fields": {"type": "array", "items": field},
         "content": string,
         "search_query": string,
+        **({"web_query": string} if ctx.web_research else {}),
     })
     return _obj({
         "notes": string,
@@ -80,6 +82,10 @@ def to_interpretation(flat: dict, ctx: Context) -> dict:
                 value = json.loads(f.get("value_json") or "null")
             except json.JSONDecodeError as e:
                 raise ValueError(f"field {key}: value_json is not JSON ({e})") from None
+            ref = ctx.ref(key) if isinstance(key, str) else None
+            if (ref is not None and ref.field_type in LIST_TYPES
+                    and status == "value" and not isinstance(value, list)):
+                value = [] if value is None else [value]  # one option named: still a list
             if status == "value":
                 fields[key] = {"status": "value", "value": value,
                                "confidence": f.get("confidence", 0),
@@ -99,6 +105,8 @@ def to_interpretation(flat: dict, ctx: Context) -> dict:
             "content": text_or_none(c.get("content")),
             "search_query": text_or_none(c.get("search_query")),
         }
+        if ctx.web_research:
+            candidate["web_query"] = text_or_none(c.get("web_query", ""))
         if ctx.name_targets and tk in ctx.target_labels:
             # A thinking aid only; the key is what counts, so the label follows it.
             candidate = {"target_name": ctx.target_labels[tk], **candidate}
@@ -108,13 +116,34 @@ def to_interpretation(flat: dict, ctx: Context) -> dict:
 
 
 def check(answer: dict, schema: dict) -> str:
-    """"" when the answer fits the full per-request schema, else what is wrong with it."""
-    errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(answer),
-                    key=lambda e: list(e.absolute_path))
-    return "; ".join(
-        f"{'/'.join(map(str, e.absolute_path)) or 'answer'}: {e.message[:200]}"
-        for e in errors[:5]
-    )
+    """"" when the answer fits the full per-request schema, else what is wrong with it.
+
+    A candidate is one branch of an anyOf, so a plain validation reports only "candidates/0 is
+    not valid under any of the given schemas" — useless to a retry. Each candidate is checked
+    against the branch its own target key selects instead, which names the actual field."""
+    validator = jsonschema.Draft202012Validator
+    candidates = answer.get("candidates")
+    items = schema["properties"]["candidates"].get("items", {})
+    branches = {b["properties"]["target"]["const"]: b for b in items.get("anyOf", [])}
+    if isinstance(candidates, list) and branches:
+        top = {**schema, "properties": {**schema["properties"],
+                                        "candidates": {"type": "array"}}}
+        errors = list(validator(top).iter_errors(answer))
+        for i, c in enumerate(candidates):
+            branch = branches.get(c.get("target")) if isinstance(c, dict) else None
+            if branch is None:
+                errors += validator(items).iter_errors(c)  # reports the unknown target
+                continue
+            errors += [(e, i) for e in validator(branch).iter_errors(c)]
+    else:
+        errors = list(validator(schema).iter_errors(answer))
+
+    def where(err) -> str:
+        e, i = err if isinstance(err, tuple) else (err, None)
+        path = [*(["candidates", i] if i is not None else []), *e.absolute_path]
+        return f"{'/'.join(map(str, path)) or 'answer'}: {e.message[:200]}"
+
+    return "; ".join(where(e) for e in errors[:5])
 
 
 class ClaudeClient:

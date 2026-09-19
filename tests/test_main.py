@@ -229,7 +229,8 @@ async def test_successful_run_logs_target_count_and_inbox_target(env, caplog):
     with caplog.at_level(logging.INFO, logger="app.main"):
         await main.post_init_checks(app, app.telegram_app)
     messages = _messages(caplog)
-    assert any("1" in m and "target" in m for m in messages)
+    # the page, plus the workspace root main() always offers for new top-level pages
+    assert any("discovery: 2 targets" in m for m in messages)
     assert any("Входящие" in m for m in messages)
 
 

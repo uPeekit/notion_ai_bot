@@ -271,7 +271,7 @@ async def main_async(a: argparse.Namespace) -> int:
     ctx = ContextBuilder(
         "Europe/Tallinn", items_per_target=a.items_per_target,
         reasoning_first=not a.no_reasoning_first, name_targets=not a.no_target_names,
-        note=lambda: note,
+        note=lambda: note, web_research=a.web_research,
     ).build(snapshot, now=SAMPLE_NOW)
     schema = build_schema(ctx)
     summaries: list[Summary] = []
@@ -316,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-target-names", action="store_true",
                     help="candidates without target_name (baseline)")
     ap.add_argument("--note", type=Path, help="workspace note file sent with every message")
+    ap.add_argument("--web-research", action="store_true",
+                    help="offer web_query, as production does when Claude is configured")
     ap.add_argument("--workspace", type=Path,
                     help="snapshot JSON from tools.capture_workspace (default: the sample one)")
     return asyncio.run(main_async(ap.parse_args(argv)))

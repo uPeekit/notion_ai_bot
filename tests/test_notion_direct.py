@@ -296,3 +296,44 @@ async def test_post_still_retried_on_429(monkeypatch):
         res = await p.create_page({"type": "data_source_id", "data_source_id": "ds"}, {"T": {}})
     assert res["id"] == "new-page"
     assert n["i"] == 2
+
+
+async def test_json_requests_still_say_json_after_the_default_header_went():
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen["ctype"] = req.headers.get("content-type")
+        return httpx.Response(200, json={"id": "p"})
+
+    async with make(handler) as p:
+        await p.create_page({"type": "page_id", "page_id": "x"}, {})
+    assert seen["ctype"] == "application/json"
+
+
+async def test_upload_file_creates_then_sends_multipart():
+    requests = []
+
+    def handler(req: httpx.Request):
+        requests.append(req)
+        if req.url.path.endswith("/file_uploads"):
+            return httpx.Response(200, json={"id": "fu-1", "status": "pending"})
+        return httpx.Response(200, json={"id": "fu-1", "status": "uploaded"})
+
+    async with make(handler) as p:
+        assert await p.upload_file("bench.jpg", "image/jpeg", b"JPEGDATA") == "fu-1"
+    create, send = requests
+    assert json.loads(create.content) == {"filename": "bench.jpg", "content_type": "image/jpeg"}
+    assert send.url.path == "/v1/file_uploads/fu-1/send"
+    assert send.headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert b'name="file"; filename="bench.jpg"' in send.content and b"JPEGDATA" in send.content
+
+
+async def test_upload_file_send_failure_is_a_notion_error():
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/file_uploads"):
+            return httpx.Response(200, json={"id": "fu-1"})
+        return httpx.Response(400, json={"code": "validation_error", "message": "bad file"})
+
+    async with make(handler) as p:
+        with pytest.raises(NotionError, match="bad file"):
+            await p.upload_file("a.png", "image/png", b"x")

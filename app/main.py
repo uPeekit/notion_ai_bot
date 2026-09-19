@@ -61,11 +61,13 @@ from app.llm.claude import ClaudeClient
 from app.llm.context import ContextBuilder
 from app.llm.fallback import FallbackLLM
 from app.llm.ollama import OllamaClient
+from app.llm.research import WebResearcher
 from app.logging_setup import configure
 from app.notion.descriptions import Descriptions, WorkspaceNote
 from app.notion.direct import DirectNotionProvider
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
+from app.notion.images import ImageHost
 from app.notion.provider import NotionProvider
 from app.speech.base import SpeechToText
 from app.speech.whisper_local import WhisperLocal
@@ -223,14 +225,23 @@ def build(
     discovery = Discovery(
         provider, descriptions, items_per_target=settings.items_per_target,
         ttl_s=settings.schema_cache_ttl_s, inbox_target_id=settings.inbox_target_id,
+        workspace_root=True,
     )
-    context_builder = ContextBuilder(settings.timezone, settings.items_per_target, note=note.load)
+    # Web research needs Claude; without it the model is never offered a web_query at all.
+    researcher = (
+        WebResearcher(settings.anthropic_api_key.get_secret_value(), settings.research_model,
+                      max_searches=settings.research_max_searches)
+        if uses_cloud(settings) else None
+    )
+    context_builder = ContextBuilder(settings.timezone, settings.items_per_target, note=note.load,
+                                     web_research=researcher is not None)
     llm = llm_factory(settings)
     validator = SemanticValidator()
     policy = Policy(Thresholds.from_settings(settings))
-    executor = Executor(provider)
+    executor = Executor(provider, images=ImageHost(provider))
     orchestrator = Orchestrator(
-        settings, discovery, context_builder, llm, validator, policy, executor, store, sessions
+        settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
+        researcher=researcher,
     )
     speech = speech_factory(settings)
     admin = AdminServer(settings, discovery, descriptions, note)

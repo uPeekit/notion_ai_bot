@@ -46,3 +46,12 @@ def test_retry_message_contains_error():
 def test_prompt_lets_described_options_be_chosen_by_meaning_and_follows_the_note():
     assert "option_descriptions" in SYSTEM_PROMPT and "workspace_note" in SYSTEM_PROMPT
     assert "Варианты без описания не угадывай" in SYSTEM_PROMPT
+
+
+def test_web_rule_only_with_web_research_and_markdown_always():
+    from app.llm.prompts import MARKDOWN_RULE, WEB_RULE
+
+    off = ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW)
+    on = ContextBuilder(web_research=True).build(sample_snapshot(), now=SAMPLE_NOW)
+    assert WEB_RULE not in system_prompt(off) and WEB_RULE in system_prompt(on)
+    assert MARKDOWN_RULE in SYSTEM_PROMPT and MARKDOWN_RULE in system_prompt(off)

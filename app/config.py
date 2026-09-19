@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     claude_model: str = "claude-haiku-4-5"
     claude_timeout_s: float = 30.0
     llm_cloud: bool = True
+    # "Find X on the web and write it to Y": Claude with web search. Haiku keeps it to a few
+    # cents a search; claude-sonnet-5 digs deeper for about three times that.
+    research_model: str = "claude-haiku-4-5"
+    research_max_searches: int = Field(3, ge=1, le=20)
 
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"

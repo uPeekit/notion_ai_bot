@@ -336,3 +336,20 @@ Haiku now sets the tag in every TODO case; its two misses are arguable expectati
 clear errors («надо забрать посылки» tagged `home`, not `personal`; «для кнуба разослать
 приглашения…» filed in the club's own events database). The 12B model barely uses the
 descriptions — another reason Claude is the primary and the local model only the fallback.
+
+## Run 7 (2026-09-19) — production prompt: Markdown content and web research
+
+The prompt now always explains Markdown `content`, and — with Claude configured — offers
+`web_query` for "find it on the web and write it down". Checked that neither pulls ordinary
+requests (or searches of the user's own Notion) off course:
+
+| cases | model | valid | target | all | safe | wrong | p50 |
+|---|---|---|---|---|---|---|---|
+| real workspace, described (19) | claude-haiku-4-5 | 100% | 100% | 100% | 100% | 0 | 3.6 s |
+| synthetic (44) | claude-haiku-4-5 | 100% | 100% | 95% | 98% | 0 | 3.7 s |
+
+The first synthetic run found one answer that failed validation twice: a single relation value
+written as a scalar, with a retry message ("candidates/0 is not valid under any of the given
+schemas") too vague to fix it. The flat-answer converter now wraps a lone value for
+multi_select/relation fields, and schema errors are reported against the candidate's own
+branch, naming the field.

@@ -98,6 +98,7 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
             "fields": _obj(fields),
             "content": _nullable(dict(STRING)),
             "search_query": _nullable(dict(STRING)),
+            **({"web_query": _nullable(dict(STRING))} if ctx.web_research else {}),
         }
     )
 

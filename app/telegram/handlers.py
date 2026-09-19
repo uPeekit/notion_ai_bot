@@ -25,6 +25,8 @@ that catches everything.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import tempfile
@@ -32,6 +34,7 @@ import time
 from pathlib import Path
 
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.error import NetworkError, TelegramError
 from telegram.ext import (
     Application,
@@ -119,12 +122,42 @@ async def _send(
 
 # ---- text / voice ----------------------------------------------------------------------------
 
+TYPING_EVERY_S = 4.0  # Telegram shows "typing…" for ~5 s per chat action
+
+
+@contextlib.asynccontextmanager
+async def _typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """"typing…" in the chat for as long as the block runs: a message usually takes a few
+    seconds, a web search up to a minute, and silence reads as a dead bot. Best effort — a
+    failed chat action never costs the reply."""
+
+    async def typing() -> None:
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:  # noqa: BLE001 -- cosmetic; the reply matters, not this
+            pass
+
+    async def keep_typing() -> None:
+        while True:
+            await asyncio.sleep(TYPING_EVERY_S)
+            await typing()
+
+    await typing()  # at once, not after the first sleep: most turns end within seconds
+    task = asyncio.create_task(keep_typing())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
 
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orch: Orchestrator = context.bot_data[_ORCH]
-    reply = await orch.handle_text(
-        update.effective_chat.id, update.effective_user.id, update.message.text
-    )
+    async with _typing(context, update.effective_chat.id):
+        reply = await orch.handle_text(
+            update.effective_chat.id, update.effective_user.id, update.message.text
+        )
     await _send(update, context, reply, context.bot_data[_STORE])
 
 
@@ -155,10 +188,11 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         tmp_path.unlink(missing_ok=True)
 
     orch: Orchestrator = context.bot_data[_ORCH]
-    reply = await orch.handle_text(
-        update.effective_chat.id, update.effective_user.id, transcript,
-        kind="voice", transcript=transcript,
-    )
+    async with _typing(context, update.effective_chat.id):
+        reply = await orch.handle_text(
+            update.effective_chat.id, update.effective_user.id, transcript,
+            kind="voice", transcript=transcript,
+        )
     await _send(update, context, reply, store)
 
 

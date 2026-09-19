@@ -69,6 +69,7 @@ class VCandidate:
     fields: dict[str, VField]
     content: str | None
     search_query: str | None
+    web_query: str | None = None
 
 
 @dataclass
@@ -248,9 +249,10 @@ class SemanticValidator:
         content = cand.content.strip()[:MAX_TEXT] if cand.content else None
         query = cand.search_query.strip()[:MAX_TEXT] if cand.search_query else None
         item_text = cand.item_text.strip()[:MAX_TEXT] if cand.item_text else None
+        web_query = cand.web_query.strip()[:MAX_TEXT] if cand.web_query else None
         return VCandidate(
             cand.target, target, cand.confidence, item, item_candidates, item_text or None,
-            fields, content or None, query or None,
+            fields, content or None, query or None, web_query or None,
         )
 
     @staticmethod

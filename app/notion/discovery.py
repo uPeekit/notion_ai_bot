@@ -6,9 +6,11 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+from app import texts
 from app.notion import props
 from app.notion.descriptions import Descriptions, TargetMeta
 from app.notion.errors import NotionError
+from app.notion.mapper import WORKSPACE_ROOT_ID
 from app.notion.provider import NotionProvider
 from app.notion.snapshot import (
     DB_OPERATIONS,
@@ -45,8 +47,13 @@ class Discovery:
         ttl_s: int = 60,
         clock: Callable[[], datetime] = now_utc,
         inbox_target_id: str = "",
+        workspace_root: bool = False,
     ) -> None:
         self._p = provider
+        # Offer "the top level of the workspace" as a place to create pages. Only a personal
+        # access token (or a public integration) may create pages there; an internal
+        # integration gets a 400, which the bot reports like any other rejected write.
+        self._workspace_root = workspace_root
         self._desc = descriptions
         self._items_per_target = items_per_target
         self._ttl = timedelta(seconds=ttl_s)
@@ -248,6 +255,15 @@ class Discovery:
                 id=pid, kind="page", name=name, path=path_of(name, parent_page), description="",
                 parent_page_id=parent_page, database_id=None, fields=[], items=items,
                 operations=PAGE_OPERATIONS, url=p.get("url", ""),
+            ))
+
+        if self._workspace_root:
+            discovered[WORKSPACE_ROOT_ID] = (texts.ROOT_TARGET_NAME, {})
+            targets.append(Target(
+                id=WORKSPACE_ROOT_ID, kind="page", name=texts.ROOT_TARGET_NAME,
+                path=texts.ROOT_TARGET_NAME, description=texts.ROOT_TARGET_DESCRIPTION,
+                parent_page_id=None, database_id=None, fields=[], items=[],
+                operations=frozenset({"create_page"}), url="https://www.notion.so",
             ))
 
         meta = self._desc.ensure(discovered)

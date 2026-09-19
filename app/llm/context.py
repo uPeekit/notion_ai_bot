@@ -74,6 +74,8 @@ class Context:
     # Target keys the user marked local-only: the cloud model gets their name, kind and fields
     # (enough to route a message there), never their description or items.
     local_only: frozenset[str] = frozenset()
+    # Web research is available (Claude configured): the answer may carry a web_query.
+    web_research: bool = False
 
     def json(self, *, cloud: bool = False) -> str:
         payload = self.cloud_payload() if cloud else self.payload
@@ -140,8 +142,9 @@ class ContextBuilder:
     def __init__(
         self, timezone: str = "Europe/Tallinn", items_per_target: int = 50, *,
         reasoning_first: bool = True, name_targets: bool = True,
-        note: Callable[[], str] | None = None,
+        note: Callable[[], str] | None = None, web_research: bool = False,
     ) -> None:
+        self._web_research = web_research
         self._tz = ZoneInfo(timezone)
         self._note = note  # the user's workspace note, read afresh for every message
         self._items_per_target = items_per_target
@@ -155,7 +158,8 @@ class ContextBuilder:
             raise ValueError("now must be timezone-aware")
         now = (now or datetime.now(self._tz)).astimezone(self._tz)
         ctx = Context(payload={}, keys={}, now=now, pending=pending,
-                      reasoning_first=self._reasoning_first, name_targets=self._name_targets)
+                      reasoning_first=self._reasoning_first, name_targets=self._name_targets,
+                      web_research=self._web_research)
         targets = []
         local_only: set[str] = set()
         # Hidden targets are not offered at all: a page that is only a filtered view of a database

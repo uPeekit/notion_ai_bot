@@ -82,7 +82,8 @@ class Bot:
     db: Path
 
 
-def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "auto") -> Bot:
+def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "auto",
+             researcher=None) -> Bot:
     snap = flagged(inbox)
     db = tmp_path / "bot.sqlite"
     store = AuditStore(db)
@@ -99,7 +100,7 @@ def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "au
     orch = Orchestrator(
         settings, discovery, builder, llm, SemanticValidator(),
         Policy(Thresholds.from_settings(settings)), Executor(notion), store,
-        SessionStore(store), clock=clock,
+        SessionStore(store), clock=clock, researcher=researcher,
     )
     return Bot(orch, llm, notion, discovery, store, SessionStore(store), clock,
                builder.build(snap, now=NOW), snap, db)
@@ -1264,3 +1265,80 @@ async def test_inbox_keeps_the_whole_message_not_what_the_model_extracted(make, 
 
     written = json.dumps(bot.notion.calls, ensure_ascii=False)
     assert "надо забрать посылки" in written
+
+
+# ---- web research -------------------------------------------------------------------------------
+
+
+class FakeResearcher:
+    def __init__(self, answer: str = "## Борщ\n- свёкла\n- капуста", fail: bool = False):
+        self.answer, self.fail = answer, fail
+        self.asked: list[tuple[str, str]] = []
+
+    async def research(self, request: str, query: str) -> str:
+        from app.llm.research import ResearchError
+
+        self.asked.append((request, query))
+        if self.fail:
+            raise ResearchError("no answer")
+        return self.answer
+
+
+async def test_web_query_appends_what_the_research_found(make):
+    researcher = FakeResearcher()
+    bot = make(researcher=researcher)
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+    reply = await bot.orch.handle_text(CHAT, USER, "найди рецепт борща и запиши в идеи")
+
+    assert researcher.asked == [("найди рецепт борща и запиши в идеи", "рецепт борща")]
+    blocks = notion_calls(bot, "append_blocks")[0][2]
+    assert [b["type"] for b in blocks] == ["heading_2", "bulleted_list_item",
+                                           "bulleted_list_item"]
+    assert reply.undo_id is not None  # the whole research result is one undoable append
+    closed_events(bot, ["text"])
+
+
+async def test_web_query_becomes_the_body_of_a_new_page(make):
+    bot = make(researcher=FakeResearcher("## Референсы\n![дуб](https://example.com/a.jpg)"))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t5", 0.95, web_query="скамейка из дуба",
+                                             fields={"t5.f1": val("Скамейка", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "найди референсы скамейки из дуба в идеи")
+
+    children = notion_calls(bot, "create_page")[0][3]
+    assert [b["type"] for b in children] == ["heading_2", "image"]
+
+
+async def test_web_query_without_a_researcher_goes_to_the_inbox(bot):
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+    reply = await bot.orch.handle_text(CHAT, USER, "найди рецепт борща и запиши в идеи")
+
+    assert texts.ERRORS["WEB_UNAVAILABLE"] in reply.text
+    [ev] = closed_events(bot, ["text"])
+    assert ev["error"] == "WEB_UNAVAILABLE"
+
+
+async def test_failed_research_replies_and_saves_the_message(make):
+    bot = make(researcher=FakeResearcher(fail=True))
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+    reply = await bot.orch.handle_text(CHAT, USER, "найди рецепт борща и запиши в идеи")
+
+    assert texts.ERRORS["WEB_FAILED"] in reply.text
+    # the inbox (Идеи) got the user's words, not a research result
+    [call] = notion_calls(bot, "append_blocks")
+    assert "найди рецепт борща" in call[2][0]["paragraph"]["rich_text"][0]["text"]["content"]
+
+
+async def test_web_query_survives_a_target_question(make):
+    researcher = FakeResearcher()
+    bot = make(researcher=researcher)
+    bot.llm.queue(make_interp(
+        "append",
+        cand(bot.ctx, "t5", 0.6, web_query="рецепт борща"),
+        cand(bot.ctx, "t1", 0.55, web_query="рецепт борща"),
+    ))
+    question = await bot.orch.handle_text(CHAT, USER, "найди рецепт борща")
+    assert researcher.asked == []  # nothing is looked up before the destination is settled
+
+    await bot.orch.handle_callback(CHAT, USER, press(question, "o0"))
+    assert researcher.asked == [("найди рецепт борща", "рецепт борща")]
+    assert notion_calls(bot, "append_blocks")[0][2][0]["type"] == "heading_2"

@@ -51,6 +51,7 @@ ERROR_PLACEHOLDERS: dict[str, set[str]] = {
     "NOTION_4XX": {"message"}, "NOTION_5XX": set(), "UNDO_EXPIRED": {"minutes"},
     "UNDO_FAILED": {"message"}, "SESSION_EXPIRED": set(), "nothing_to_write": set(),
     "item_not_found": {"item_text"}, "INTERNAL": set(),
+    "WEB_UNAVAILABLE": set(), "WEB_FAILED": set(),
 }
 
 
