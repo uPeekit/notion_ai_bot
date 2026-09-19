@@ -70,12 +70,12 @@ from app.llm.base import (
 )
 from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
-from app.llm.research import ResearchError, WebResearcher
+from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
 from app.logging_setup import bind_event
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
-from app.validation.policy import Decision, Policy
+from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
 
 log = logging.getLogger(__name__)
@@ -339,6 +339,10 @@ class Orchestrator:
     ) -> Reply:
         """Step 7 of the pipeline, shared by a fresh interpretation and a resumed session."""
         if decision.kind == "EXECUTE":
+            decision, failed = await self._research(turn, decision, result, text)
+            if failed is not None:
+                return failed
+        if decision.kind == "EXECUTE":
             self._sessions.drop(turn.chat_id)
             return await self._execute(turn, decision, result, text)
         # CLARIFY, plus the two REJECTs that carry a candidate and a question: item_not_found is
@@ -356,17 +360,6 @@ class Orchestrator:
     ) -> Reply:
         candidate = decision.candidate
         assert candidate is not None
-        if candidate.web_query and result.intent in ("create", "append"):
-            # Look it up first: what the web search finds is the content to write.
-            if self._researcher is None:
-                return await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
-            try:
-                found = await self._researcher.research(text, candidate.web_query)
-            except ResearchError as e:
-                log.warning("web research failed: %s", e)
-                return await self._inbox_or_error(turn, text, "WEB_FAILED")
-            candidate = replace(candidate, content="\n\n".join(
-                part for part in (candidate.content, found) if part))
         command = build_command(candidate, result.intent, text)
         turn.audit(command=command.model_dump_json())
         try:
@@ -382,6 +375,31 @@ class Orchestrator:
         execution_id = self._record_execution(turn, executed)
         return Reply(format_execution(executed, target_url=candidate.target.url),
                      _undo_buttons(execution_id), undo_id=execution_id)
+
+    async def _research(
+        self, turn: _Turn, decision: Decision, result: ValidationResult, text: str
+    ) -> tuple[Decision, Reply | None]:
+        """A web query is looked up before anything is written: what the search finds becomes
+        the candidate's content. Returns the decision to carry on with — unchanged, EXECUTE with
+        the content filled in, or CLARIFY when the research needs the user first — or a reply
+        that ends the turn (no researcher, or nothing found)."""
+        candidate = decision.candidate
+        if (candidate is None or not candidate.web_query
+                or result.intent not in ("create", "append")):
+            return decision, None
+        if self._researcher is None:
+            return decision, await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
+        try:
+            found = await self._researcher.research(text, candidate.web_query,
+                                                    candidate.web_media)
+        except ResearchQuestion as e:
+            q = Question(type="clarify", target_key=candidate.key, proposed=e.question)
+            return replace(decision, kind="CLARIFY", questions=[q], reasons=["clarify"]), None
+        except ResearchError as e:
+            log.warning("web research failed: %s", e)
+            return decision, await self._inbox_or_error(turn, text, "WEB_FAILED")
+        content = "\n\n".join(part for part in (candidate.content, found) if part)
+        return replace(decision, candidate=replace(candidate, content=content)), None
 
     async def _ask(
         self, turn: _Turn, decision: Decision, result: ValidationResult, ctx: Context, text: str,

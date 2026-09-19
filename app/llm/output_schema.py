@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.interpretation.models import WEB_MEDIA
 from app.llm.context import Context
 
 INTENTS = ["create", "update", "append", "search", "unknown"]
@@ -98,7 +99,8 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
             "fields": _obj(fields),
             "content": _nullable(dict(STRING)),
             "search_query": _nullable(dict(STRING)),
-            **({"web_query": _nullable(dict(STRING))} if ctx.web_research else {}),
+            **({"web_query": _nullable(dict(STRING)), "web_media": {"enum": list(WEB_MEDIA)}}
+               if ctx.web_research else {}),
         }
     )
 
@@ -119,6 +121,7 @@ def build_schema(ctx: Context) -> dict:
     # Output is generated in property order. Last, notes could only explain a choice already
     # made — the model once wrote "a shopping item or a task" there after having picked the
     # first two targets in the list. First, it is the reasoning the choice follows from.
+    clarify = {"clarify": _nullable(dict(STRING))}
     if ctx.reasoning_first:
-        return _obj({"notes": notes, **body})
-    return _obj({**body, "notes": notes})
+        return _obj({"notes": notes, **clarify, **body})
+    return _obj({**body, "notes": notes, **clarify})

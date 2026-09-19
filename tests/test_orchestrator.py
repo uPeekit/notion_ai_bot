@@ -1275,10 +1275,11 @@ class FakeResearcher:
         self.answer, self.fail = answer, fail
         self.asked: list[tuple[str, str]] = []
 
-    async def research(self, request: str, query: str) -> str:
+    async def research(self, request: str, query: str, media: str = "text") -> str:
         from app.llm.research import ResearchError
 
         self.asked.append((request, query))
+        self.media = media
         if self.fail:
             raise ResearchError("no answer")
         return self.answer
@@ -1342,3 +1343,43 @@ async def test_web_query_survives_a_target_question(make):
     await bot.orch.handle_callback(CHAT, USER, press(question, "o0"))
     assert researcher.asked == [("найди рецепт борща", "рецепт борща")]
     assert notion_calls(bot, "append_blocks")[0][2][0]["type"] == "heading_2"
+
+
+async def test_the_models_own_question_is_asked_and_the_answer_re_read(bot):
+    interp = make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="картинки к шагам"))
+    bot.llm.queue(interp.model_copy(update={"clarify": "Найти картинки или не искать?"}))
+    question = await bot.orch.handle_text(CHAT, USER, "не найди картинки к каждому шагу")
+
+    assert question.text == "Найти картинки или не искать?"
+    assert button_ids(question)[-2:] == [press(question, "cancel"), press(question, "inbox")]
+    assert notion_calls(bot, "append_blocks") == []  # nothing written on a guess
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, content="без картинок")))
+    await bot.orch.handle_text(CHAT, USER, "не надо картинок")
+    assert "не найди картинки" in bot.llm.seen[-1][0] and "не надо" in bot.llm.seen[-1][0]
+    assert notion_calls(bot, "append_blocks")
+
+
+async def test_a_question_from_the_research_is_asked_instead_of_written(make):
+    from app.llm.research import ResearchQuestion
+
+    class Asking(FakeResearcher):
+        async def research(self, request, query, media="text"):
+            raise ResearchQuestion("Искать картинки или нет?")
+
+    bot = make(researcher=Asking())
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="шаги борща")))
+    reply = await bot.orch.handle_text(CHAT, USER, "не найди картинки к шагам борща")
+
+    assert reply.text == "Искать картинки или нет?"
+    assert notion_calls(bot, "append_blocks") == []
+    assert bot.sessions.get(CHAT, NOW) is not None  # the answer continues this request
+
+
+async def test_the_requested_media_reaches_the_researcher(make):
+    researcher = FakeResearcher()
+    bot = make(researcher=researcher)
+    c = cand(bot.ctx, "t5", 0.95, web_query="тории")
+    c["web_media"] = "text_and_images"
+    bot.llm.queue(make_interp("append", c))
+    await bot.orch.handle_text(CHAT, USER, "найди про тории с картинками в идеи")
+    assert researcher.media == "text_and_images"

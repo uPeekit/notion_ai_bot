@@ -14,7 +14,7 @@ def public(monkeypatch):
     async def _public(url: str) -> bool:
         return httpx.URL(url).host != "internal.lan"
 
-    monkeypatch.setattr(images, "_public", _public)
+    monkeypatch.setattr(images, "is_public_url", _public)
 
 
 def host(handler) -> tuple[ImageHost, FakeNotionProvider]:
@@ -25,7 +25,7 @@ def host(handler) -> tuple[ImageHost, FakeNotionProvider]:
 async def test_private_and_non_http_addresses_are_not_public():
     for url in ("http://127.0.0.1:8787/", "http://10.0.0.1/x.png", "http://192.168.1.1/a.jpg",
                 "http://[::1]/a.png", "ftp://example.com/a.png", "file:///etc/passwd"):
-        assert await images._public(url) is False, url
+        assert await images.is_public_url(url) is False, url
 
 
 async def test_an_image_is_uploaded_under_a_safe_name(public):
@@ -78,3 +78,27 @@ async def test_a_redirect_to_a_public_image_is_followed(public):
 async def test_a_missing_file_is_skipped(public):
     h, _ = host(lambda req: httpx.Response(404))
     assert await h.host("https://example.com/gone.jpg") is None
+
+
+async def test_is_image_reads_headers_only(public):
+    read = []
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            read.append(True)
+            yield PNG
+
+    h, _ = host(lambda req: httpx.Response(200, stream=Body(),
+                                           headers={"content-type": "image/png"}))
+    assert await h.is_image("https://example.com/a.png") is True
+    assert read == []
+
+
+async def test_is_image_refuses_a_declared_oversize_and_a_page(public):
+    h, _ = host(lambda req: httpx.Response(
+        200, content=b"x", headers={"content-type": "image/jpeg",
+                                    "content-length": str(MAX_IMAGE_BYTES + 1)}))
+    assert await h.is_image("https://example.com/big.jpg") is False
+    h, _ = host(lambda req: httpx.Response(200, text="<html>",
+                                           headers={"content-type": "text/html"}))
+    assert await h.is_image("https://example.com/page") is False

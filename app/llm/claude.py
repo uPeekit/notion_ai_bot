@@ -19,7 +19,7 @@ import anthropic
 import jsonschema
 from pydantic import ValidationError
 
-from app.interpretation.models import Interpretation
+from app.interpretation.models import WEB_MEDIA, Interpretation
 from app.llm.base import LLMInvalidOutput, LLMTrace, LLMUnavailable
 from app.llm.context import Context
 from app.llm.output_schema import INTENTS
@@ -56,10 +56,12 @@ def flat_schema(ctx: Context) -> dict:
         "fields": {"type": "array", "items": field},
         "content": string,
         "search_query": string,
-        **({"web_query": string} if ctx.web_research else {}),
+        **({"web_query": string, "web_media": {"enum": list(WEB_MEDIA)}}
+           if ctx.web_research else {}),
     })
     return _obj({
         "notes": string,
+        "clarify": string,
         "intent": _obj({"value": {"enum": INTENTS}, "confidence": number}),
         "candidates": {"type": "array", "items": candidate},
     })
@@ -107,12 +109,13 @@ def to_interpretation(flat: dict, ctx: Context) -> dict:
         }
         if ctx.web_research:
             candidate["web_query"] = text_or_none(c.get("web_query", ""))
+            candidate["web_media"] = c.get("web_media", "text")
         if ctx.name_targets and tk in ctx.target_labels:
             # A thinking aid only; the key is what counts, so the label follows it.
             candidate = {"target_name": ctx.target_labels[tk], **candidate}
         candidates.append(candidate)
-    return {"notes": flat.get("notes", ""), "intent": flat.get("intent"),
-            "candidates": candidates}
+    return {"notes": flat.get("notes", ""), "clarify": text_or_none(flat.get("clarify", "")),
+            "intent": flat.get("intent"), "candidates": candidates}
 
 
 def check(answer: dict, schema: dict) -> str:

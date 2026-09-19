@@ -60,6 +60,7 @@ from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
 from app.llm.context import ContextBuilder
 from app.llm.fallback import FallbackLLM
+from app.llm.image_search import ImageSearch
 from app.llm.ollama import OllamaClient
 from app.llm.research import WebResearcher
 from app.logging_setup import configure
@@ -228,9 +229,11 @@ def build(
         workspace_root=True,
     )
     # Web research needs Claude; without it the model is never offered a web_query at all.
+    images = ImageHost(provider)
     researcher = (
         WebResearcher(settings.anthropic_api_key.get_secret_value(), settings.research_model,
-                      max_searches=settings.research_max_searches)
+                      max_searches=settings.research_max_searches, is_image=images.is_image,
+                      search=ImageSearch())
         if uses_cloud(settings) else None
     )
     context_builder = ContextBuilder(settings.timezone, settings.items_per_target, note=note.load,
@@ -238,7 +241,7 @@ def build(
     llm = llm_factory(settings)
     validator = SemanticValidator()
     policy = Policy(Thresholds.from_settings(settings))
-    executor = Executor(provider, images=ImageHost(provider))
+    executor = Executor(provider, images=images)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher,

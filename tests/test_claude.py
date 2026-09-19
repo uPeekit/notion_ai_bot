@@ -241,3 +241,15 @@ def test_schema_errors_name_the_field_not_just_the_candidate(ctx):
     error = check(answer, build_schema(ctx))
     assert f"candidates/0/fields/{due}" in error
     assert "not valid under any" not in error.split(":")[0]
+
+
+def test_clarify_and_web_media_survive_the_flat_round_trip():
+    ctx = ContextBuilder(web_research=True).build(sample_snapshot(), now=SAMPLE_NOW)
+    answer = flat(ctx, web_query="тории", web_media="text_and_images")
+    answer["clarify"] = "Искать картинки?"
+    converted = to_interpretation(answer, ctx)
+    assert converted["clarify"] == "Искать картинки?"
+    assert converted["candidates"][0]["web_media"] == "text_and_images"
+    assert check(converted, build_schema(ctx)) == ""
+    answer["clarify"] = ""
+    assert to_interpretation(answer, ctx)["clarify"] is None

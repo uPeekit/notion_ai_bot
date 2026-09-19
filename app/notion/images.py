@@ -32,13 +32,15 @@ IMAGE_TYPES = {
     "image/svg+xml": ".svg", "image/bmp": ".bmp", "image/tiff": ".tiff", "image/heic": ".heic",
 }
 _SAFE_NAME = re.compile(r"[^\w.-]+")
+# Wikimedia rate-limits (429) generic browser-like agents; it asks bots to say what they are.
+USER_AGENT = "notion-ai-bot/1.0 (personal Notion assistant; python-httpx)"
 
 
 class NotAnImage(Exception):
     pass
 
 
-async def _public(url: str) -> bool:
+async def is_public_url(url: str) -> bool:
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return False
@@ -70,7 +72,7 @@ class ImageHost:
         self._provider = provider
         self._http = httpx.AsyncClient(
             timeout=timeout_s, transport=transport, follow_redirects=False,
-            headers={"User-Agent": "Mozilla/5.0 (notion-ai-bot image fetch)"},
+            headers={"User-Agent": USER_AGENT},
         )
 
     async def aclose(self) -> None:
@@ -79,8 +81,22 @@ class ImageHost:
     async def download(self, url: str) -> tuple[bytes, str]:
         """The image's bytes and content type. Raises NotAnImage for anything else: a private
         or non-http address, an HTML page, a file over MAX_IMAGE_BYTES, a failed request."""
+        data, ctype = await self._get(url, read=True)
+        return data, ctype
+
+    async def is_image(self, url: str) -> bool:
+        """Whether `url` serves an image we could embed — status and headers only, the body is
+        never read. Lets web research drop dead or blocked links before anything is written."""
+        try:
+            await self._get(url, read=False)
+        except NotAnImage as e:
+            log.info("image link dropped (%s)", e)
+            return False
+        return True
+
+    async def _get(self, url: str, *, read: bool) -> tuple[bytes, str]:
         for _ in range(MAX_REDIRECTS + 1):
-            if not await _public(url):
+            if not await is_public_url(url):
                 raise NotAnImage(f"not a public http(s) address: {url}")
             try:
                 async with self._http.stream("GET", url) as resp:
@@ -92,6 +108,11 @@ class ImageHost:
                     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
                     if ctype not in IMAGE_TYPES:
                         raise NotAnImage(f"content type {ctype or '?'}")
+                    length = resp.headers.get("content-length", "")
+                    if length.isdigit() and int(length) > MAX_IMAGE_BYTES:
+                        raise NotAnImage("larger than 5 MB")
+                    if not read:
+                        return b"", ctype
                     data = bytearray()
                     async for chunk in resp.aiter_bytes():
                         data += chunk

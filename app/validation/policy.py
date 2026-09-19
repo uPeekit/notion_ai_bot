@@ -16,12 +16,12 @@ Kind = Literal["EXECUTE", "CLARIFY", "REJECT"]
 Risk = Literal["LOW", "MEDIUM"]
 QType = Literal["target", "intent_confirm", "item", "item_not_found", "field_required",
                 "field_ambiguous", "field_confirm", "date", "content_required",
-                "nothing_to_write"]
+                "nothing_to_write", "clarify"]
 RISK_BY_INTENT: dict[str, Risk] = {"create": "LOW", "append": "LOW", "search": "LOW",
                                    "update": "MEDIUM"}
 _ORDER: dict[str, int] = {t: i for i, t in enumerate(
-    ["target", "intent_confirm", "item", "item_not_found", "field_required", "field_ambiguous",
-     "date", "field_confirm", "content_required", "nothing_to_write"])}
+    ["clarify", "target", "intent_confirm", "item", "item_not_found", "field_required",
+     "field_ambiguous", "date", "field_confirm", "content_required", "nothing_to_write"])}
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,11 @@ class Policy:
         best = r.best
         assert best is not None
         risk = RISK_BY_INTENT[r.intent]
+        if r.clarify:
+            # The model itself says the message cannot be acted on as it stands: its question
+            # goes first and alone; the free-text answer is re-read together with the message.
+            q = Question(type="clarify", target_key=best.key, proposed=r.clarify)
+            return Decision("CLARIFY", best, [q], ["clarify"], risk)
         qs: list[Question] = []
 
         second = r.second

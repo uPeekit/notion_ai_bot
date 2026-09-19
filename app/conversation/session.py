@@ -71,6 +71,7 @@ class PendingCandidate(BaseModel):
     fields: list[PendingField]
     item_candidates: list[str] = Field(default_factory=list)
     web_query: str | None = None
+    web_media: str = "text"
 
 
 class AnswerOption(BaseModel):
@@ -136,6 +137,7 @@ def _pending_candidate(c: VCandidate) -> PendingCandidate:
         target_id=c.target.id, confidence=c.confidence,
         item_page_id=c.item.id if c.item is not None else None, item_text=c.item_text,
         content=c.content, search_query=c.search_query, web_query=c.web_query,
+        web_media=c.web_media,
         fields=[_pending_field(f) for f in c.fields.values()],
         item_candidates=[i.id for i in c.item_candidates],
     )

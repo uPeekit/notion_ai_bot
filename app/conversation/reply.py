@@ -35,6 +35,7 @@ _EXTRAS: dict[QType, list[tuple[str, str]]] = {
     "field_confirm": [("confirm", texts.BTN_CONFIRM), ("other", texts.BTN_OTHER)],
     "content_required": [],
     "nothing_to_write": [],
+    "clarify": [],  # answered in free text
 }
 
 
@@ -114,6 +115,8 @@ def _question_text(q: Question, target_name: str | None) -> str:
         kwargs["value"] = _proposed_label(q.proposed)
     elif q.type == "item_not_found":
         kwargs["item_text"] = q.proposed
+    elif q.type == "clarify":
+        kwargs["question"] = q.proposed
     return template.format(**kwargs)
 
 

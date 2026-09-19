@@ -164,11 +164,15 @@ pages it needs, and the bot writes the Markdown result — a short summary, then
 to the page or database you named. Say where it should go; without a destination the bot asks.
 «найди в Notion …» / «что у меня в …» stays a search of your own workspace.
 
-When you ask for pictures («визуальные референсы», «покажи, как выглядит»), up to six images
-are added. Each is downloaded once, checked to really be an image (≤ 5 MB), and uploaded into
-Notion, so it keeps showing after the original site deletes or hotlink-blocks it; one that
-cannot be fetched becomes a link instead. The download only ever goes to public internet
-addresses, never to your machine or local network.
+When you ask for pictures («с изображениями», «добавь картинок», «покажи, как выглядит»), up
+to six are added under «Изображения». They come from Wikimedia Commons and from the pages the
+text cites — never from links the model writes itself, which turned out to be mostly invented.
+Each is checked to really be an image (≤ 5 MB), downloaded and uploaded into Notion, so it keeps
+showing after the original site deletes or hotlink-blocks it. Downloads only ever go to public
+internet addresses, never to your machine or local network.
+
+If a message makes no sense as heard — a voice note that came out as «**не** найди картинки…»
+— the bot asks back instead of guessing; answer in your own words and it re-reads the request.
 
 A search takes 20–40 s (the chat shows "typing…" meanwhile) and costs about 3–5 ¢ with Haiku
 (`RESEARCH_MODEL`); `claude-sonnet-5` digs deeper for roughly three times that. Undo removes

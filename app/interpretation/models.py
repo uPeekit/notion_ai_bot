@@ -5,6 +5,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 IntentName = Literal["create", "update", "append", "search", "unknown"]
+WebMedia = Literal["text", "text_and_images", "images"]
+WEB_MEDIA: tuple[str, ...] = ("text", "text_and_images", "images")
 
 
 class Strict(BaseModel):
@@ -60,12 +62,17 @@ class Candidate(Strict):
     # What to look up on the web before writing (the answer becomes `content`). Only offered to
     # the model when web research is available (Context.web_research).
     web_query: str | None = None
+    # What the web research should bring back: text, pictures, or both (with web_query only).
+    web_media: WebMedia = "text"
 
 
 class Interpretation(Strict):
     intent: Intent
     candidates: list[Candidate] = Field(min_length=1, max_length=3)
     notes: str = ""
+    # A question for the user when the message is contradictory or garbled (a misheard voice
+    # note that says "do NOT find pictures"); the bot asks it instead of acting on a guess.
+    clarify: str | None = None
 
     @property
     def best(self) -> Candidate:

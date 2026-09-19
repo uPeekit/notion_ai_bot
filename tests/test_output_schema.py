@@ -89,6 +89,7 @@ def test_valid_response_passes_schema_and_pydantic(ctx):
             }
         ],
         "notes": "",
+        "clarify": None,
     }
     jsonschema.validate(raw, schema)
     Interpretation.model_validate(raw)
@@ -112,6 +113,7 @@ def test_item_text_accepted_and_required(ctx):
             }
         ],
         "notes": "",
+        "clarify": None,
     }
     jsonschema.validate(raw, schema)
     Interpretation.model_validate(raw)
@@ -156,6 +158,7 @@ def test_invalid_responses_fail_schema(ctx, mutate):
             }
         ],
         "notes": "",
+        "clarify": None,
     }
     jsonschema.validate(raw, schema)  # the unmutated answer is valid, so each mutation must bite
     mutate(raw)
@@ -181,7 +184,7 @@ def test_baseline_shape_keeps_notes_last():
     off = ContextBuilder(reasoning_first=False, name_targets=False).build(
         sample_snapshot(), now=SAMPLE_NOW)
     props = build_schema(off)["properties"]
-    assert list(props)[-1] == "notes"
+    assert list(props)[-2:] == ["notes", "clarify"]
     assert "target_name" not in props["candidates"]["items"]["anyOf"][0]["properties"]
 
 
@@ -199,6 +202,7 @@ def test_a_name_that_does_not_match_its_key_is_rejected(ctx):
     """The name selects the branch; a key from another branch cannot ride along with it."""
     raw = {
         "notes": "",
+        "clarify": None,
         "intent": {"value": "create", "confidence": 0.95},
         "candidates": [{
             "target_name": ctx.target_labels["t3"], "target": "t2", "confidence": 0.9,

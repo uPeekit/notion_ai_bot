@@ -85,3 +85,94 @@ async def test_an_empty_answer_or_an_api_error_is_a_research_error():
 def test_a_hash_inside_a_word_is_not_a_heading():
     assert final_text([block("text", "Язык C# 12 — ## не заголовок")]) == "## не заголовок"
     assert final_text([block("text", "Про C# и F#.")]) == "Про C# и F#."
+
+
+def test_merge_puts_images_before_the_sources():
+    from app.llm.research import merge
+
+    text = "## Тории\nтекст\n\n## Источники\n- [a](https://a)"
+    merged = merge(text, ["![x](https://i/x.jpg)"])
+    assert merged.index("## Изображения") < merged.index("## Источники")
+    assert merge("", ["![x](https://i/x.jpg)"]).startswith("## Изображения")
+    assert merge(text, []) == text
+
+
+class FakeSearch:
+    def __init__(self, commons=(), og=None):
+        self.phrases: list[str] = []
+        self._commons, self._og = list(commons), og or {}
+
+    async def commons(self, phrase, limit=6):
+        self.phrases.append(phrase)
+        return list(self._commons)
+
+    async def og_image(self, url):
+        return self._og.get(url)
+
+
+def by_system(text_answer: str, phrases: str = "torii gate\noak bench"):
+    def handler(req):
+        body = json.loads(req.content)
+        answer = phrases if "Wikimedia" in body["system"] else text_answer
+        return message([{"type": "text", "text": answer}])
+    return handler
+
+
+def sdk(handler):
+    return anthropic.AsyncAnthropic(api_key=KEY, max_retries=0, http_client=httpx2.AsyncClient(
+        transport=httpx2.MockTransport(handler)))
+
+
+TEXT = "## Тории\nтекст\n\n## Источники\n- [Вики](https://ru.wikipedia.org/wiki/Torii)"
+
+
+async def test_pictures_come_from_commons_and_the_cited_pages_and_are_checked():
+    search = FakeSearch(
+        commons=[("https://up.example/a.jpg", "Itsukushima Gate"),
+                 ("https://dead.example/b.jpg", "Dead")],
+        og={"https://ru.wikipedia.org/wiki/Torii": ("https://up.example/og.jpg", "Тории")})
+
+    async def is_image(url):
+        return "dead." not in url
+
+    r = WebResearcher(KEY, "claude-haiku-4-5", client=sdk(by_system(TEXT)),
+                      is_image=is_image, search=search)
+    out = await r.research("тории с картинками", "тории", "text_and_images")
+    assert search.phrases == ["torii gate", "oak bench"]
+    assert "![Itsukushima Gate](https://up.example/a.jpg)" in out
+    assert "![Тории](https://up.example/og.jpg)" in out
+    assert "dead.example" not in out
+    assert out.index("## Изображения") < out.index("## Источники")
+
+
+async def test_images_only_skips_the_text_search_and_text_only_skips_pictures():
+    calls = []
+
+    def handler(req):
+        calls.append(json.loads(req.content)["system"])
+        return by_system(TEXT)(req)
+
+    search = FakeSearch(commons=[("https://up.example/a.jpg", "A")])
+    r = WebResearcher(KEY, "claude-haiku-4-5", client=sdk(handler), search=search)
+    only = await r.research("картинки тории", "тории", "images")
+    assert only.startswith("## Изображения") and "## Тории" not in only
+    assert all("Wikimedia" in s for s in calls)  # no text research ran
+    calls.clear()
+    text = await r.research("про тории", "тории", "text")
+    assert "## Изображения" not in text and not any("Wikimedia" in s for s in calls)
+
+
+async def test_no_usable_images_for_an_images_only_request_is_an_error():
+    r = WebResearcher(KEY, "claude-haiku-4-5", client=sdk(by_system(TEXT)),
+                      search=FakeSearch())
+    with pytest.raises(ResearchError, match="no images"):
+        await r.research("картинки", "q", "images")
+
+
+async def test_a_question_line_becomes_a_research_question():
+    from app.llm.research import ResearchQuestion
+
+    r = researcher(lambda req: message([{"type": "text", "text": "ВОПРОС: Искать или нет?"}]))
+    with pytest.raises(ResearchQuestion) as e:
+        await r.research("не найди картинки", "картинки")
+    assert e.value.question == "Искать или нет?"

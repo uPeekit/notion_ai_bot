@@ -44,6 +44,7 @@ QUESTION: dict[QType, str] = {
     "field_confirm": "«{field_name}»: {value}. Верно?",
     "content_required": "Что написать?",
     "nothing_to_write": "Не понял, что именно изменить.",
+    "clarify": "{question}",  # the model's own question, as it wrote it
 }
 
 # Target-naming variants of four of the templates above, for when the caller knows the target's

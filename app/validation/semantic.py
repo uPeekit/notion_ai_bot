@@ -13,6 +13,7 @@ from app.notion.snapshot import Field, Item, Option, Target, WorkspaceSnapshot
 
 MAX_ITEM_CANDIDATES = 8
 MAX_TEXT = 4000
+MAX_CLARIFY = 300  # a question to the user, not an essay
 INTENT_OPS: dict[str, frozenset[str]] = {
     "create": frozenset({"create", "create_page"}),
     "update": frozenset({"update"}),
@@ -70,6 +71,7 @@ class VCandidate:
     content: str | None
     search_query: str | None
     web_query: str | None = None
+    web_media: str = "text"
 
 
 @dataclass
@@ -78,6 +80,7 @@ class ValidationResult:
     intent_confidence: float
     candidates: list[VCandidate]
     issues: list[Issue]
+    clarify: str | None = None  # the model's own question for the user (see Interpretation)
 
     @property
     def rejected(self) -> bool:
@@ -170,7 +173,8 @@ class SemanticValidator:
     ) -> ValidationResult:
         issues: list[Issue] = []
         intent = interp.intent.value
-        result = ValidationResult(intent, interp.intent.confidence, [], issues)
+        result = ValidationResult(intent, interp.intent.confidence, [], issues,
+                                  clarify=(interp.clarify or "").strip()[:MAX_CLARIFY] or None)
         if intent == "unknown":
             issues.append(Issue("INTENT_UNKNOWN", "message is not a Notion request"))
             return result
@@ -253,6 +257,7 @@ class SemanticValidator:
         return VCandidate(
             cand.target, target, cand.confidence, item, item_candidates, item_text or None,
             fields, content or None, query or None, web_query or None,
+            cand.web_media if web_query else "text",
         )
 
     @staticmethod
