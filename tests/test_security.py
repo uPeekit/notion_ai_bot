@@ -314,7 +314,8 @@ async def test_authorized_user_control_produces_a_row_and_a_provider_call(env):
     assert dispatched is True
     assert len(fbot.sent) == 1
     assert len(_events(app)) == 1
-    assert [c for c in provider.calls if c[0] == "create_page"] != []
+    # a line with no body of its own goes onto the page, not into a sub-page (see builder)
+    assert [c for c in provider.calls if c[0] == "append_blocks"] != []
 
 
 async def test_neither_token_leaks_into_reply_audit_row_or_provider_payload(env):

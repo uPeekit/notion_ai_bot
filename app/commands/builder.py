@@ -13,6 +13,7 @@ from app.commands.models import (
     UpdateItem,
 )
 from app.llm.context import PAGE_TITLE_FIELD_ID
+from app.llm.prompts import MAKE_WORDS, PAGE_WORDS
 from app.validation.semantic import MAX_TEXT, VCandidate, VField
 
 SEARCH_FILTER_TYPES = frozenset({"select", "status", "multi_select", "relation", "checkbox"})
@@ -66,15 +67,31 @@ def _title_value(c: VCandidate) -> str | None:
     return f.value if f and f.status == "value" else None
 
 
+def asks_for_page(raw_text: str) -> bool:
+    """Did the user ask for a page of its own? A make-word has to come before the page-word:
+    "make a page" asks for one, "add to the page" only says where the line goes."""
+    text = raw_text.lower()
+    make = min((text.find(w) for w in MAKE_WORDS if w in text), default=-1)
+    page = max((text.find(w) for w in PAGE_WORDS if w in text), default=-1)
+    return make >= 0 and page > make
+
+
 def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
     t = c.target
     if intent == "create" and t.kind == "database":
         return CreateItem(data_source_id=t.id, target_name=t.name, properties=_writes(c),
                           body=markdown_lines(c.content), markdown=True)
     if intent == "create":
-        return CreatePage(parent_page_id=t.id, target_name=t.name,
-                          title=_title_value(c) or _one_line(raw_text),
-                          body=markdown_lines(c.content), markdown=True)
+        title = _title_value(c) or _one_line(raw_text)
+        body = markdown_lines(c.content)
+        if not body and not asks_for_page(raw_text):
+            # A page target with a line and no body: the model answers "create" for "we should
+            # watch the film X", but a sub-page with nothing in it is never what that meant —
+            # the line belongs on the page, where the executor fits it to the list it lands in.
+            return AppendBlocks(page_id=t.id, target_name=t.name, page_title=t.name,
+                                paragraphs=[title], markdown=True)
+        return CreatePage(parent_page_id=t.id, target_name=t.name, title=title,
+                          body=body, markdown=True)
     if intent == "update":
         assert c.item is not None
         return UpdateItem(page_id=c.item.id, target_name=t.name, item_title=c.item.title,

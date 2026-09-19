@@ -21,15 +21,17 @@ phrasing:
 - **"купи молоко в Рими"** → a new row in your shopping-list database, with whatever properties
   (shop, category, …) it could confidently read off the sentence.
 - **"отметь молоко купленным"** → finds the matching row and updates it.
-- **"в идеи: попробовать сыр с плесенью"** → appends to a page. A short line joins the list
-  the page ends with (a tick box under «смотреть» becomes another tick box), so adding a film
-  to a list does not leave a stray paragraph under it.
+- **"в идеи: попробовать сыр с плесенью"**, **"надо посмотреть фильм Uncharted"** → appends to
+  a page. A line with nothing under it always goes *onto* the page, never into a sub-page of
+  its own, and it joins the list the page ends with (a tick box under «смотреть» becomes
+  another tick box), so adding a film to a list does not leave a stray paragraph under it.
 - **"что у меня в покупках на Rimi?"** → searches and lists matches.
 - **"запиши в прост чекбоксами: паспорт, зарядка, наушники"** → formatted text: headings,
   bulleted and numbered lists, checkboxes, quotes, code, **bold**/*italic*, links.
-- **"создай в пройекты страницу План мастерской: …"** → a new page inside another page, or
-  **"… в корне"** → a new top-level page (needs a personal access token, which is what
-  NOTION_SETUP.md sets up).
+- **"создай в пройекты страницу План мастерской: …"** → a new page inside another page (ask for
+  one in so many words — «создай страницу», «заведи раздел» — otherwise what you say is added
+  to the page itself), or **"… в корне"** → a new top-level page (needs a personal access
+  token, which is what NOTION_SETUP.md sets up).
 - **"найди рецепт борща и запиши в медиа"**, **"найди визуальные референсы скамейки из дуба в
   пройекты"** → searches the web, and writes a summary with its sources — and, when you ask for
   pictures, the images themselves — where you said. Needs Claude (see "Using Claude").

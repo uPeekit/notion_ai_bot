@@ -1,5 +1,6 @@
 import pytest
 
+from app.commands.builder import build_command
 from app.commands.executor import Executor, UndoRecord
 from app.commands.models import (
     AppendBlocks,
@@ -10,7 +11,9 @@ from app.commands.models import (
     UpdateItem,
 )
 from app.notion.errors import NotionError
+from app.validation.semantic import SemanticValidator
 from tests.fakes import FakeNotionProvider
+from tests.helpers import cand, ctx_and_snapshot, make_interp, val
 
 
 def pw(pid, name, type, value):
@@ -417,3 +420,26 @@ async def test_the_blank_line_notion_leaves_at_the_end_does_not_hide_the_list(fa
     await Executor(fake).run(AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
                                           paragraphs=["Uncharted"], markdown=True))
     assert fake.calls[-1][2][0]["type"] == "to_do"
+
+
+async def test_a_film_asked_for_in_the_users_own_words_ends_up_as_a_tick_box(fake):
+    """End to end from the answer production actually returned (intent "create", the page
+    target «медиа», the title field filled, no body) to the block Notion is sent."""
+    ctx, snap = ctx_and_snapshot()
+    interp = make_interp("create", cand(ctx, "t5", fields={"t5.f1": val("Uncharted")}))
+    best = SemanticValidator().validate(interp, ctx, snap).best
+    fake.page_blocks["pg-ideas"] = [
+        {"id": "h", "type": "heading_1",
+         "heading_1": {"rich_text": [{"type": "text", "text": {"content": "смотреть"}}]}},
+        {"id": "t", "type": "to_do", "to_do": {"rich_text": [], "checked": False}},
+        {"id": "p", "type": "paragraph", "paragraph": {"rich_text": []}},
+    ]
+
+    cmd = build_command(best, "create", "Надо посмотреть фильм Uncharted")
+    result = await Executor(fake).run(cmd)
+
+    assert not any(c[0] == "create_page" for c in fake.calls)
+    written = fake.calls[-1][2][0]
+    assert written["type"] == "to_do"
+    assert written["to_do"]["rich_text"][0]["text"]["content"] == "Uncharted"
+    assert result.undo is not None and result.undo.kind == "delete_blocks"

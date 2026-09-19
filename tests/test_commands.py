@@ -69,6 +69,30 @@ def test_create_page_and_append_and_search():
     assert build_command(c, "search", "что в покупках").query == "что в покупках"
 
 
+def test_create_on_a_page_without_a_body_appends_a_line():
+    """The model answers "create" for «надо посмотреть фильм Uncharted» even though the page
+    target holds a list; an empty sub-page is never what that meant."""
+    ctx, _ = ctx_and_snapshot()
+    c = best("create", cand(ctx, "t5", fields={"t5.f1": val("Uncharted")}))
+    cmd = build_command(c, "create", "надо посмотреть фильм Uncharted")
+    assert isinstance(cmd, AppendBlocks)
+    assert cmd.page_id == "pg-ideas" and cmd.page_title == "Идеи"
+    assert cmd.paragraphs == ["Uncharted"]
+
+
+def test_create_on_a_page_stays_a_page_when_one_is_asked_for():
+    ctx, _ = ctx_and_snapshot()
+    c = best("create", cand(ctx, "t5", fields={"t5.f1": val("Отпуск 2028")}))
+    for text in ("создай страницу «Отпуск 2028»", "заведи отдельную страницу под отпуск",
+                 "новая страница Отпуск 2028"):
+        cmd = build_command(c, "create", text)
+        assert isinstance(cmd, CreatePage), text
+        assert cmd.parent_page_id == "pg-ideas" and cmd.title == "Отпуск 2028"
+    # the page word without a create verb before it is where the line goes, not what to make
+    for text in ("добавь на страницу Отпуск 2028", "на странице идей заведи список"):
+        assert isinstance(build_command(c, "create", text), AppendBlocks), text
+
+
 def test_search_filters_from_validated_fields():
     ctx, _ = ctx_and_snapshot()
     c = best("search", cand(ctx, "t2", fields={"t2.f2": val("t2.f2.o1")}))

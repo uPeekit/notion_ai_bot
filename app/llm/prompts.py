@@ -12,6 +12,13 @@ from app.notion.snapshot import Target
 # The context's `pending` key under which a plan step carries its plan (goal, done steps).
 PLAN_KEY = "plan"
 
+# Asking for a page: a "make" verb followed by the word for a page. The rule below tells the
+# model the same thing, but it answers "create" for «надо посмотреть фильм X» all the same, so
+# app.commands.builder decides it again on the user's own words. The verb has to come first:
+# «добавь на страницу» names where the line goes, «создай страницу» names what to make.
+MAKE_WORDS = ("созда", "завед", "сдела", "нов", "отдельн")
+PAGE_WORDS = ("страниц", "страничк", "раздел")
+
 SYSTEM_PROMPT = """Ты — модуль интерпретации команд личного ассистента для Notion. Ты ничего не \
 выполняешь: \
 ты разбираешь сообщение пользователя и возвращаешь JSON строго по заданной схеме.
