@@ -1638,3 +1638,16 @@ async def test_a_step_the_planner_could_not_express_still_uses_the_model(make):
     assert bot.llm.calls == 2  # the message, and the one step the planner left as text
     assert bot.llm.seen[-1][0] == "отметь молоко купленным"
     assert notion_calls(bot, "update_page")
+
+
+async def test_more_junk_clarifies_are_not_asked(bot):
+    """Live, twice: the question came back as '{"result":null}' and as '-null'."""
+    for junk in ('{"result":null}', "-null", "  null  ", "N/A", "нет", "?", "—", "\n", "null."):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95, fields={
+            "t2.f1": val("Хлеб", 1.0)})).model_copy(update={"clarify": junk}))
+        reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб")
+        assert "Хлеб" in reply.text, junk
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95, fields={
+        "t2.f1": val("Хлеб", 1.0)})).model_copy(update={"clarify": "Сколько хлеба?"}))
+    asked = await bot.orch.handle_text(CHAT, USER, "купи хлеб")
+    assert asked.text == "Сколько хлеба?"  # a real question still gets through

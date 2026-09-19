@@ -14,19 +14,27 @@ from app.notion.snapshot import Field, Item, Option, Target, WorkspaceSnapshot
 MAX_ITEM_CANDIDATES = 8
 MAX_TEXT = 4000
 MAX_CLARIFY = 1000  # a question (possibly numbered sub-questions), not an essay
+MIN_CLARIFY = 8  # the shortest real question is longer than this; junk is shorter. Short
+# Short junk in any language is caught by that length alone, so this list stays ASCII —
+# importing app.texts here would close the cycle texts -> policy -> semantic.
+NOT_A_QUESTION = frozenset({"null", "none", "nil", "nan", "undefined", "n/a", "empty", "no",
+                            "true", "false"})
 
 
 def clean_clarify(text: str | None) -> str | None:
-    """The model's question, or None when it is not one. Live, it once "asked"
-    '{"result":null}' — shown to the user as the question. Empty, null-ish, JSON-looking or
-    letterless text is no question."""
+    """The model's question, or None when it is not one. Live, it has "asked" '{"result":null}'
+    and '-null', both shown to the user as the question. So: JSON, anything null-ish once
+    punctuation is stripped, and anything too short to be a question are all no question."""
     text = (text or "").strip()
-    if (not text or text.lower() in ("null", "none", "nil")
-            or text[0] in "{[" or not any(ch.isalpha() for ch in text)):
+    bare = text.strip("-–—_.,:;!?*`'\"()[]{} \n\t").casefold()
+    if (not text or text[0] in "{[" or bare in NOT_A_QUESTION
+            or len(bare) < MIN_CLARIFY or not any(ch.isalpha() for ch in bare)):
         return None
     if len(text) <= MAX_CLARIFY:
         return text
     return text[:MAX_CLARIFY].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"  # never mid-word
+
+
 INTENT_OPS: dict[str, frozenset[str]] = {
     "create": frozenset({"create", "create_page"}),
     "update": frozenset({"update"}),
