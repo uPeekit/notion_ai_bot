@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from app.interpretation.models import WEB_MEDIA, Interpretation
 from app.llm.base import LLMInvalidOutput, LLMTrace, LLMUnavailable
 from app.llm.context import Context
-from app.llm.output_schema import INTENTS
+from app.llm.output_schema import intents
 from app.llm.prompts import FLAT_FORMAT_NOTE, build_messages, retry_message
 
 MAX_ATTEMPTS = 2
@@ -62,7 +62,7 @@ def flat_schema(ctx: Context) -> dict:
     return _obj({
         "notes": string,
         "clarify": string,
-        "intent": _obj({"value": {"enum": INTENTS}, "confidence": number}),
+        "intent": _obj({"value": {"enum": intents(ctx)}, "confidence": number}),
         "candidates": {"type": "array", "items": candidate},
     })
 

@@ -76,6 +76,8 @@ class Context:
     local_only: frozenset[str] = frozenset()
     # Web research is available (Claude configured): the answer may carry a web_query.
     web_research: bool = False
+    # The "plan" intent is on offer: a planner exists and this is not already a plan's step.
+    planning: bool = False
 
     def json(self, *, cloud: bool = False) -> str:
         payload = self.cloud_payload() if cloud else self.payload
@@ -143,7 +145,9 @@ class ContextBuilder:
         self, timezone: str = "Europe/Tallinn", items_per_target: int = 50, *,
         reasoning_first: bool = True, name_targets: bool = True,
         note: Callable[[], str] | None = None, web_research: bool = False,
+        planning: bool = False,
     ) -> None:
+        self._planning = planning
         self._web_research = web_research
         self._tz = ZoneInfo(timezone)
         self._note = note  # the user's workspace note, read afresh for every message
@@ -152,14 +156,16 @@ class ContextBuilder:
         self._name_targets = name_targets
 
     def build(
-        self, snapshot: WorkspaceSnapshot, now: datetime | None = None, pending: dict | None = None
+        self, snapshot: WorkspaceSnapshot, now: datetime | None = None, pending: dict | None = None,
+        *, allow_plan: bool = True,
     ) -> Context:
         if now is not None and now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         now = (now or datetime.now(self._tz)).astimezone(self._tz)
         ctx = Context(payload={}, keys={}, now=now, pending=pending,
                       reasoning_first=self._reasoning_first, name_targets=self._name_targets,
-                      web_research=self._web_research)
+                      web_research=self._web_research,
+                      planning=self._planning and allow_plan)
         targets = []
         local_only: set[str] = set()
         # Hidden targets are not offered at all: a page that is only a filtered view of a database

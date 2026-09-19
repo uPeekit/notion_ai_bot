@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # cents a search; claude-sonnet-5 digs deeper for about three times that.
     research_model: str = "claude-haiku-4-5"
     research_max_searches: int = Field(3, ge=1, le=20)
+    # Multi-step goals: the model that splits a goal into steps and checks after each one.
+    plan_model: str = "claude-haiku-4-5"
 
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"

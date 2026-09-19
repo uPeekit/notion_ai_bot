@@ -83,7 +83,7 @@ class Bot:
 
 
 def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "auto",
-             researcher=None) -> Bot:
+             researcher=None, planner=None) -> Bot:
     snap = flagged(inbox)
     db = tmp_path / "bot.sqlite"
     store = AuditStore(db)
@@ -96,11 +96,12 @@ def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "au
     llm = FakeLLM()
     discovery = FakeDiscovery(snap)
     clock = Clock(NOW)
-    builder = ContextBuilder(settings.timezone, settings.items_per_target)
+    builder = ContextBuilder(settings.timezone, settings.items_per_target,
+                             planning=planner is not None)
     orch = Orchestrator(
         settings, discovery, builder, llm, SemanticValidator(),
         Policy(Thresholds.from_settings(settings)), Executor(notion), store,
-        SessionStore(store), clock=clock, researcher=researcher,
+        SessionStore(store), clock=clock, researcher=researcher, planner=planner,
     )
     return Bot(orch, llm, notion, discovery, store, SessionStore(store), clock,
                builder.build(snap, now=NOW), snap, db)
@@ -1383,3 +1384,148 @@ async def test_the_requested_media_reaches_the_researcher(make):
     bot.llm.queue(make_interp("append", c))
     await bot.orch.handle_text(CHAT, USER, "найди про тории с картинками в идеи")
     assert researcher.media == "text_and_images"
+
+
+# ---- multi-step plans ---------------------------------------------------------------------------
+
+
+class FakePlanner:
+    """plan() returns the given steps; next() walks them, then says done."""
+
+    def __init__(self, steps: list[str], *, fail: bool = False):
+        self.steps, self.fail = steps, fail
+        self.checks: list[list[str]] = []
+
+    async def plan(self, request, workspace):
+        from app.llm.planner import PlanError
+
+        if self.fail:
+            raise PlanError("empty plan")
+        assert "Места в Notion" in workspace
+        return "Всё разложено", list(self.steps)
+
+    async def next(self, state, workspace):
+        from app.llm.planner import Verdict
+
+        self.checks.append([s.status for s in state.history])
+        n = len(state.history)
+        if n < len(self.steps):
+            return Verdict(done=False, summary="", next_step=self.steps[n])
+        return Verdict(done=True, summary="сделано всё", next_step="")
+
+
+def plan_interp(bot):
+    return make_interp("plan", cand(bot.ctx, "t3", 0.9))
+
+
+def collect(sent: list):
+    async def progress(reply):
+        sent.append(reply)
+    return progress
+
+
+async def test_a_plan_runs_every_step_reports_each_and_offers_undo_all(make):
+    planner = FakePlanner(["добавь в покупки хлеб", "добавь в покупки молоко"])
+    bot = make(planner=planner)
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Хлеб", 1.0)})))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    sent: list = []
+    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect(sent))
+
+    assert sent[0].text.startswith(texts.PLAN_HEADER.format(goal="Всё разложено"))
+    assert "1. добавь в покупки хлеб" in sent[0].text
+    assert sent[1].text.startswith("Шаг 1.") and "Хлеб" in sent[1].text
+    assert sent[1].undo_id is not None  # each step keeps its own undo
+    assert sent[2].text.startswith("Шаг 2.") and "Молоко" in sent[2].text
+    assert reply.text == texts.PLAN_DONE.format(summary="сделано всё", done=2, total=2)
+    assert [b.label for row in reply.buttons for b in row] == [texts.BTN_UNDO_ALL]
+    assert planner.checks == [["done"], ["done", "done"]]  # asked after every step
+    assert len(notion_calls(bot, "create_page")) == 2
+
+    await bot.orch.handle_callback(CHAT, USER, reply.buttons[0][0].id)
+    archived = [c for c in notion_calls(bot, "update_page") if c[3]]
+    assert len(archived) == 2  # both rows undone by the one button
+    closed_events(bot, ["text", "callback"])
+
+
+async def test_a_step_that_asks_pauses_the_plan_and_the_answer_resumes_it(make):
+    planner = FakePlanner(["добавь хлеб", "добавь в покупки молоко"])
+    bot = make(planner=planner)
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp(  # step 1: shopping list or tasks?
+        "create",
+        cand(bot.ctx, "t2", 0.6, fields={"t2.f1": val("Хлеб", 1.0)}),
+        cand(bot.ctx, "t3", 0.55, fields={"t3.f1": val("Хлеб", 1.0),
+                                          "t3.f2": val("t3.f2.o1", 1.0)})))
+    sent: list = []
+    question = await bot.orch.handle_text(CHAT, USER, "хлеб и молоко", progress=collect(sent))
+    assert question.text == texts.QUESTION["target"].format(
+        intent=texts.INTENT_LABELS["create"])
+    assert notion_calls(bot, "create_page") == [] and len(sent) == 1  # only the plan so far
+
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    later: list = []
+    reply = await bot.orch.handle_callback(CHAT, USER, press(question, "o0"),
+                                           progress=collect(later))
+    assert [c[1]["data_source_id"] for c in notion_calls(bot, "create_page")] == ["ds-buy"] * 2
+    assert later[0].text.startswith("Шаг 1.") and later[1].text.startswith("Шаг 2.")
+    assert reply.text.startswith("🏁")
+    assert bot.sessions.get(CHAT, NOW) is None
+
+
+async def test_a_failed_step_is_reported_not_filed_and_the_plan_goes_on(make):
+    planner = FakePlanner(["расскажи анекдот", "добавь в покупки молоко"])
+    bot = make(planner=planner)
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.9)))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    reply = await bot.orch.handle_text(CHAT, USER, "план", progress=collect([]))
+
+    assert planner.checks == [["failed"], ["failed", "done"]]
+    assert notion_calls(bot, "append_blocks") == []  # nothing went to the inbox
+    assert reply.text == texts.PLAN_DONE.format(summary="сделано всё", done=1, total=2)
+
+
+async def test_no_planner_means_no_plan(bot):
+    bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
+    reply = await bot.orch.handle_text(CHAT, USER, "организуй переезд")
+    assert reply.text == texts.ERRORS["PLAN_UNAVAILABLE"]
+
+
+async def test_a_plan_that_cannot_be_made_goes_to_the_inbox(make):
+    bot = make(planner=FakePlanner([], fail=True))
+    bot.llm.queue(plan_interp(bot))
+    reply = await bot.orch.handle_text(CHAT, USER, "организуй переезд")
+    assert texts.ERRORS["PLAN_FAILED"] in reply.text
+    assert notion_calls(bot, "append_blocks")  # the message itself is kept
+
+
+async def test_a_plan_stops_after_max_steps(make):
+    from app.conversation.plan import MAX_STEPS
+
+    steps = [f"добавь в покупки товар {i}" for i in range(MAX_STEPS + 5)]
+    bot = make(planner=FakePlanner(steps))
+    bot.llm.queue(plan_interp(bot))
+    for i in range(MAX_STEPS):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                                 fields={"t2.f1": val(f"Товар {i}", 1.0)})))
+    reply = await bot.orch.handle_text(CHAT, USER, "длинный список", progress=collect([]))
+    assert len(notion_calls(bot, "create_page")) == MAX_STEPS
+    assert reply.text.startswith("⏹")
+
+
+async def test_steps_are_never_offered_the_plan_intent(make):
+    bot = make(planner=FakePlanner(["добавь в покупки хлеб"]))
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Хлеб", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "план", progress=collect([]))
+    first, step = bot.llm.seen[0], bot.llm.seen[1]
+    intent_enum = lambda schema: schema["properties"]["intent"]["properties"]["value"]["enum"]  # noqa: E731
+    assert "plan" in intent_enum(first[2]) and "plan" not in intent_enum(step[2])
+    assert step[1]["pending"]["plan"]["цель"] == "Всё разложено"

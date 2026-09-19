@@ -255,3 +255,14 @@ def test_ambiguous_field_persists_typed_candidates_not_keys():
     assert f2.candidates == [{"id": "o-Rimi", "name": "Rimi"}, {"id": "o-Prisma", "name": "Prisma"}]
     blob = json.dumps(s.model_dump(mode="json")["candidates"])
     assert CONTEXT_KEY.search(blob) is None
+
+
+def test_a_plan_rides_along_in_the_session_json():
+    from app.conversation.plan import PlanState
+    from app.conversation.session import PendingSession
+
+    s = _field_required_session()
+    plan = PlanState(goal="g", planned=["a", "b"], current="a").model_dump()
+    back = PendingSession.model_validate_json(s.model_copy(update={"plan": plan})
+                                              .model_dump_json())
+    assert PlanState.model_validate(back.plan).planned == ["a", "b"]

@@ -55,3 +55,17 @@ def test_web_rule_only_with_web_research_and_markdown_always():
     on = ContextBuilder(web_research=True).build(sample_snapshot(), now=SAMPLE_NOW)
     assert WEB_RULE not in system_prompt(off) and WEB_RULE in system_prompt(on)
     assert MARKDOWN_RULE in SYSTEM_PROMPT and MARKDOWN_RULE in system_prompt(off)
+
+
+def test_plan_rule_only_when_planning_and_step_rule_only_inside_a_plan():
+    from app.conversation.plan import PlanState
+    from app.llm.prompts import PLAN_RULE, STEP_RULE, plan_context
+
+    off = ContextBuilder().build(sample_snapshot(), now=SAMPLE_NOW)
+    on = ContextBuilder(planning=True).build(sample_snapshot(), now=SAMPLE_NOW)
+    assert PLAN_RULE not in system_prompt(off) and PLAN_RULE in system_prompt(on)
+    state = PlanState(goal="g", planned=["a"], current="a")
+    step = ContextBuilder(planning=True).build(sample_snapshot(), now=SAMPLE_NOW,
+                                               pending=plan_context(state), allow_plan=False)
+    assert STEP_RULE in system_prompt(step) and PLAN_RULE not in system_prompt(step)
+    assert step.planning is False

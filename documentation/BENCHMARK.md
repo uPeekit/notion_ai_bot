@@ -353,3 +353,18 @@ written as a scalar, with a retry message ("candidates/0 is not valid under any 
 schemas") too vague to fix it. The flat-answer converter now wraps a lone value for
 multi_select/relation fields, and schema errors are reported against the candidate's own
 branch, naming the field.
+
+## Run 8 (2026-09-19) — clarify, web media and the plan intent
+
+With the model's own clarifying question, `web_media`, and the `plan` intent (multi-step
+goals) all in the prompt:
+
+| cases | model | target | all | safe | wrong |
+|---|---|---|---|---|---|
+| real workspace, described (19) | claude-haiku-4-5 | 100% | 89% | 95% | 1 |
+| synthetic (44) | claude-haiku-4-5 | 100% | 91% | 93% | 1 |
+
+Within run-to-run noise of Run 7 except one case: «запиши в книги: Пелевин, iPhuck 10» (a page
+named «Книги» in the synthetic workspace) is now read as a plan. The rule was narrowed to
+"several items that are each a database row"; lists written onto a page stay a single append
+(checked live: «запиши в прост список: …» → append, «добавь книги: Солярис, Дюна, …» → plan).

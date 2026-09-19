@@ -156,6 +156,23 @@ titles — and when Claude routes a message there, the local model reads that me
 the full details and decides instead. The text of the message itself has still been sent to
 Claude by then; to keep a message entirely local, set `LLM_CLOUD=false`.
 
+## Goals that take several steps
+
+With Claude configured, a message that needs several actions becomes a **plan**:
+
+- «организуй поездку в Японию: страница в пройекты с планом, достопримечательности Киото с
+  фото, задачи купить билеты и оформить визу»
+- «добавь книги, которые хочу прочитать: Солярис, Дюна, Пикник на обочине» — one row per book
+
+The bot posts the plan (the goal and numbered steps) and starts at once. Every step is an
+ordinary one-action request run through the same pipeline as your own messages — so it gets the
+same checks, can search the web, and can ask you something; the plan waits for your answer and
+then carries on. After each step Claude is asked whether the goal is reached or what to do
+next, so a step that failed can be retried differently or skipped. Each finished step is
+reported with its own undo button; the closing message has **«Отменить всё»**, which reverts
+every write of the plan. At most 15 steps. `PLAN_MODEL` (default `claude-haiku-4-5`) does the
+planning; the step's own writes cost the same as single messages.
+
 ## Web search and images
 
 With an Anthropic key set, a message that asks to *find* something *and write it down* is

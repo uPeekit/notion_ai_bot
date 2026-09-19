@@ -345,3 +345,14 @@ async def test_workspace_root_page_has_a_workspace_parent(fake):
     await Executor(fake).run(CreatePage(parent_page_id="workspace", target_name="Корень",
                                         title="Отпуск 2027"))
     assert fake.calls[-1][1] == {"type": "workspace", "workspace": True}
+
+
+async def test_batch_undo_reverts_every_part_newest_first(fake):
+    batch = UndoRecord(kind="batch", batch=[
+        UndoRecord(kind="archive", page_id="p1"),
+        UndoRecord(kind="delete_blocks", block_ids=["b1"]),
+        UndoRecord(kind="archive", page_id="p2"),
+    ])
+    await Executor(fake).undo(UndoRecord.model_validate_json(batch.model_dump_json()))
+    assert [c[:2] for c in fake.calls] == [("update_page", "p2"), ("delete_block", "b1"),
+                                           ("update_page", "p1")]

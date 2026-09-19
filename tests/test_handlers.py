@@ -44,13 +44,16 @@ class FakeOrchestrator:
         self.reply = reply if reply is not None else Reply("ok")
         self.order = order
 
-    async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None):
+    async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None,
+                          progress=None):
+        self.progress = progress
         if self.order is not None:
             self.order.append("handle_text")
         self.calls.append(("handle_text", chat_id, user_id, text, kind, transcript))
         return self.reply
 
-    async def handle_callback(self, chat_id, user_id, data):
+    async def handle_callback(self, chat_id, user_id, data, *, progress=None):
+        self.progress = progress
         if self.order is not None:
             self.order.append("orchestrator")
         self.calls.append(("handle_callback", chat_id, user_id, data))
@@ -434,7 +437,7 @@ async def test_callback_answered_before_orchestrator_called_then_dispatched():
 
     assert await dispatch(hs.app, update, hs.context)
 
-    assert order == ["answered", "orchestrator", "keyboard_cleared"]
+    assert order == ["answered", "action:typing", "orchestrator", "keyboard_cleared"]
     assert hs.bot.answered == ["cbq-1"]
     assert hs.orch.calls == [("handle_callback", CHAT_ID, ALLOWED_USER, "a:tok:opt1")]
     assert len(hs.bot.sent) == 1
@@ -659,7 +662,7 @@ async def test_answered_question_loses_its_keyboard_before_the_reply():
     assert await dispatch(hs.app, update, hs.context)
 
     assert hs.bot.cleared == [(CHAT_ID, 77, None)]  # that message, keyboard removed
-    assert order == ["answered", "orchestrator", "keyboard_cleared"]
+    assert order == ["answered", "action:typing", "orchestrator", "keyboard_cleared"]
     assert [m["text"] for m in hs.bot.sent] == ["Отменено."]
 
 

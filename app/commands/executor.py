@@ -46,11 +46,13 @@ class SearchHit:
 
 
 class UndoRecord(BaseModel):
-    kind: Literal["archive", "restore", "delete_blocks"]
+    kind: Literal["archive", "restore", "delete_blocks", "batch"]
     page_id: str | None = None
     properties: dict | None = None
     block_ids: list[str] = []
     partial: bool = False
+    # kind "batch": every write of a multi-step plan, undone newest first ("undo all").
+    batch: list[UndoRecord] = []
 
 
 @dataclass
@@ -199,6 +201,10 @@ class Executor:
         ]
 
     async def undo(self, rec: UndoRecord) -> None:
+        if rec.kind == "batch":
+            for part in reversed(rec.batch):
+                await self.undo(part)
+            return
         if rec.kind == "archive" and rec.page_id:
             await self._p.update_page(rec.page_id, archived=True)
         elif rec.kind == "restore" and rec.page_id:

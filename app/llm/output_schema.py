@@ -105,12 +105,16 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
     )
 
 
+def intents(ctx: Context) -> list[str]:
+    return [*INTENTS, "plan"] if ctx.planning else list(INTENTS)
+
+
 def build_schema(ctx: Context) -> dict:
     if not ctx.target_keys():
         raise ValueError("no targets in context")
     notes = {**STRING, "maxLength": NOTES_MAX_CHARS} if ctx.reasoning_first else dict(STRING)
     body = {
-        "intent": _obj({"value": {"enum": INTENTS}, "confidence": dict(CONFIDENCE)}),
+        "intent": _obj({"value": {"enum": intents(ctx)}, "confidence": dict(CONFIDENCE)}),
         "candidates": {
             "type": "array",
             "minItems": 1,

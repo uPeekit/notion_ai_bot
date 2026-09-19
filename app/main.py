@@ -62,6 +62,7 @@ from app.llm.context import ContextBuilder
 from app.llm.fallback import FallbackLLM
 from app.llm.image_search import ImageSearch
 from app.llm.ollama import OllamaClient
+from app.llm.planner import Planner
 from app.llm.research import WebResearcher
 from app.logging_setup import configure
 from app.notion.descriptions import Descriptions, WorkspaceNote
@@ -236,15 +237,18 @@ def build(
                       search=ImageSearch())
         if uses_cloud(settings) else None
     )
+    planner = (Planner(settings.anthropic_api_key.get_secret_value(), settings.plan_model)
+               if uses_cloud(settings) else None)
     context_builder = ContextBuilder(settings.timezone, settings.items_per_target, note=note.load,
-                                     web_research=researcher is not None)
+                                     web_research=researcher is not None,
+                                     planning=planner is not None)
     llm = llm_factory(settings)
     validator = SemanticValidator()
     policy = Policy(Thresholds.from_settings(settings))
     executor = Executor(provider, images=images)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
-        researcher=researcher,
+        researcher=researcher, planner=planner, note=note.load,
     )
     speech = speech_factory(settings)
     admin = AdminServer(settings, discovery, descriptions, note)

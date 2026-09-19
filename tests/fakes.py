@@ -141,3 +141,6 @@ class FakeDiscovery:
             raise self.fail
         self.last = self.snapshot
         return self.snapshot
+
+    def invalidate(self) -> None:
+        self.invalidations = getattr(self, "invalidations", 0) + 1

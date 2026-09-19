@@ -17,6 +17,7 @@ BTN_UNDO = "Отменить"
 BTN_CONFIRM = "Да"
 BTN_OTHER = "Другое"
 BTN_ADD_NEW = "Добавить как новое"
+BTN_UNDO_ALL = "Отменить всё"
 
 # ---- values -------------------------------------------------------------------------------
 
@@ -65,6 +66,7 @@ INTENT_LABELS: dict[str, str] = {
     "update": "изменить запись",
     "append": "дописать текст",
     "search": "найти",
+    "plan": "выполнить несколько действий",
 }
 INTENT_UNKNOWN_LABEL = "запрос"
 
@@ -75,6 +77,13 @@ DONE_UPDATE = "✅ Обновлено: {target_name} — {item_title}"
 DONE_CREATE_PAGE = "✅ Создано: {target_name} — {item_title}"
 DONE_APPEND = "✅ Дописано: {target_name} — {item_title}"
 DONE_LINK = "Открыть: {url}"
+
+# ---- multi-step plans -------------------------------------------------------------------------
+
+PLAN_HEADER = "🗂 План: {goal}"
+PLAN_STEP = "Шаг {n}. {text}"
+PLAN_DONE = "🏁 Готово — {summary} (шагов выполнено: {done} из {total})"
+PLAN_STOPPED = "⏹ План остановлен: {summary} (шагов выполнено: {done} из {total})"
 
 SEARCH_HEADER = "Нашёл:"
 SEARCH_EMPTY = "Ничего не нашёл."
@@ -138,6 +147,8 @@ ERRORS: dict[str, str] = {
     "INTERNAL": "Не удалось обработать сообщение.",
     "WEB_UNAVAILABLE": "Поиск в интернете работает только с Claude (ANTHROPIC_API_KEY в .env).",
     "WEB_FAILED": "Не удалось ничего найти в интернете.",
+    "PLAN_UNAVAILABLE": "Планы из нескольких шагов работают только с Claude (ANTHROPIC_API_KEY).",
+    "PLAN_FAILED": "Не удалось составить план.",
 }
 
 # ---- /start, /help, /refresh, /targets (app.telegram.handlers) --------------------------------

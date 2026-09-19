@@ -109,6 +109,9 @@ class PendingSession(BaseModel):
     asked: list[str] = Field(default_factory=list)
     created_at: datetime
     expires_at: datetime
+    # Set when the question belongs to a step of a multi-step plan (PlanState JSON): answering
+    # it finishes that step and the plan carries on.
+    plan: dict | None = None
 
     @field_validator("created_at", "expires_at")
     @classmethod
@@ -146,6 +149,7 @@ def _pending_candidate(c: VCandidate) -> PendingCandidate:
 def session_from_decision(
     chat_id: int, event_id: int, text: str, result: ValidationResult, decision: Decision,
     options: list[AnswerOption], *, now: datetime, ttl_s: int, asked: list[str],
+    plan: dict | None = None,
 ) -> PendingSession:
     """Flatten a Decision that carries a candidate and at least one Question into a
     PendingSession — a CLARIFY, or the item_not_found/nothing_to_write REJECT cases (both carry
@@ -164,7 +168,7 @@ def session_from_decision(
         intent=result.intent, intent_confidence=result.intent_confidence,
         candidates=[_pending_candidate(c) for c in result.candidates],
         question=decision.questions[0], options=list(options), asked=list(asked),
-        created_at=now, expires_at=now + timedelta(seconds=ttl_s),
+        created_at=now, expires_at=now + timedelta(seconds=ttl_s), plan=plan,
     )
 
 

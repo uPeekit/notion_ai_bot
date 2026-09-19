@@ -3,7 +3,14 @@ explains the semantics."""
 
 from __future__ import annotations
 
+import json
+
+from app.conversation.plan import PlanState
 from app.llm.context import Context
+from app.notion.snapshot import Target
+
+# The context's `pending` key under which a plan step carries its plan (goal, done steps).
+PLAN_KEY = "plan"
 
 SYSTEM_PROMPT = """Ты — модуль интерпретации команд личного ассистента для Notion. Ты ничего не \
 выполняешь: \
@@ -115,6 +122,20 @@ WEB_RULE = (
     "(«добавь картинок», «найди референсы», «покажи, как выглядит»).\n"
 )
 
+PLAN_RULE = (
+    "- intent plan — сообщение требует нескольких действий в Notion: создать страницу и "
+    "наполнить её, завести несколько задач, или несколько предметов, каждый из которых — "
+    "отдельная запись в базе: «добавь книги: Солярис, Дюна, Пикник на обочине» при базе книг — "
+    "plan. Дописать текст (хоть списком) на страницу — одно действие append, не plan. Одно "
+    "действие — даже с поиском в интернете и картинками — не plan. Для plan кандидата укажи "
+    "как лучшую догадку, поля не заполняй.\n"
+)
+STEP_RULE = (
+    "- В контексте есть plan: это сообщение — один шаг большего плана. Выполни ровно этот шаг; "
+    "plan.цель и plan.сделано — чтобы понимать ссылки вроде «на эту страницу»: страница, "
+    "созданная предыдущим шагом, уже есть среди целей.\n"
+)
+
 # Appended for Claude, which answers in the flat shape of app.llm.claude.flat_schema.
 FLAT_FORMAT_NOTE = """
 
@@ -136,6 +157,10 @@ def system_prompt(ctx: Context) -> str:
     extra = TARGET_NAME_RULE if ctx.name_targets else ""
     if ctx.web_research:
         extra += WEB_RULE
+    if ctx.planning:
+        extra += PLAN_RULE
+    if ctx.pending and PLAN_KEY in ctx.pending:
+        extra += STEP_RULE
     notes = NOTES_FIRST if ctx.reasoning_first else NOTES_LAST
     return SYSTEM_PROMPT.replace(NOTES_LAST, notes + extra)
 
@@ -175,6 +200,64 @@ RESEARCH_QUESTION = "ВОПРОС:"
 # The heading research images are filed under, and the sources heading they go in front of.
 IMAGES_HEADING = "## Изображения"
 SOURCES_HEADING = "## Источники"
+
+
+PLAN_PROMPT = """Ты — планировщик личного ассистента для Notion. Пользователь поставил цель, для \
+которой нужно несколько действий. Разбей её на шаги.
+
+Каждый шаг — одна самостоятельная команда боту на русском, как если бы пользователь сказал её \
+сам. Бот умеет: создать запись в базе или страницу (внутри другой страницы или в корне), \
+дописать текст на страницу, изменить запись, найти в интернете и записать результат (текстом, \
+с картинками или только картинки), искать по Notion. В каждом шаге называй место явно: «в \
+пройекты», «на страницу Поездка в Японию» — страницу, созданную предыдущим шагом, называй её \
+заголовком. Список предметов — по шагу на каждый («добавь в Books книгу Солярис»). Не больше \
+15 шагов, без лишних; не проси подтверждений и ничего не спрашивай.
+
+goal — одна фраза: каким будет результат, когда цель достигнута. steps — команды по порядку."""
+
+PLAN_NEXT_PROMPT = """Ты следишь за выполнением плана личного ассистента для Notion. Даны цель, \
+исходный план и уже выполненные шаги с ответами бота (в том числе неудачи).
+
+Реши, что дальше. Цель достигнута — done=true и summary: одна-две фразы, что получилось. \
+Иначе — done=false и next_step: следующая команда боту, в том же виде, что шаги плана. Обычно \
+это следующий шаг плана; но учитывай результаты: не повторяй сделанное, неудавшийся шаг \
+попробуй по-другому один раз, а если и это не вышло — переходи дальше. Не придумывай работу \
+сверх цели."""
+
+
+def plan_message(request: str, workspace: str) -> str:
+    return f"{workspace}\n\nСообщение пользователя:\n«{request.strip()}»"
+
+
+def progress_message(state: PlanState, workspace: str) -> str:
+    progress = {
+        "цель": state.goal,
+        "план": state.planned,
+        "сделано": [{"шаг": s.request, "итог": s.status, "ответ_бота": s.outcome}
+                    for s in state.history],
+    }
+    return f"{workspace}\n\n" + json.dumps(progress, ensure_ascii=False, indent=1)
+
+
+def plan_context(state: PlanState) -> dict:
+    """What a plan step's interpretation is told about the plan (the context's `pending`)."""
+    return {PLAN_KEY: {"цель": state.goal, "сделано": [s.outcome for s in state.history]}}
+
+
+def workspace_summary(targets: list[Target], note: str) -> str:
+    """The workspace as the planner sees it: every place the bot can write, one line each."""
+    kinds = {"database": "база", "page": "страница"}
+    lines = ["Места в Notion:"]
+    for t in targets:
+        desc = f" — {t.description[:150]}" if t.description else ""
+        lines.append(f"- {t.path} [{kinds.get(t.kind, t.kind)}]{desc}")
+        for f in t.fields:  # the tags a step may use: one it invents would just be dropped
+            if f.type in ("select", "multi_select", "status") and f.options:
+                names = ", ".join(o.name for o in f.options[:20])
+                lines.append(f"    поле «{f.name}»: {names}")
+    if note:
+        lines.append(f"\nЗаметка пользователя о воркспейсе: {note}")
+    return "\n".join(lines)
 
 
 def research_message(request: str, query: str) -> str:

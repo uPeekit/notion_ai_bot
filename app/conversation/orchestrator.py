@@ -52,6 +52,7 @@ from app.commands.executor import ExecutionResult, Executor, UndoRecord
 from app.commands.models import Search
 from app.config import Settings
 from app.conversation.inbox import inbox_command, inbox_target
+from app.conversation.plan import PlanState, PlanStep
 from app.conversation.reply import Button, Reply, format_execution, format_question, format_search
 from app.conversation.resolver import apply_answer, next_question, options_for, result_from_session
 from app.conversation.session import (
@@ -70,6 +71,8 @@ from app.llm.base import (
 )
 from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
+from app.llm.planner import PlanError, Planner
+from app.llm.prompts import plan_context, workspace_summary
 from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
 from app.logging_setup import bind_event
 from app.notion.discovery import Discovery
@@ -172,6 +175,13 @@ class _Turn:
     # an *expired* session runs before the new message has even been interpreted, so it cannot
     # know yet whether this row will end up carrying a more informative code than INBOX_FAILED.
     fallback_error: str | None = None
+    # A multi-step plan this turn is working through (or resumed), and how its current step
+    # ended: "executed", "asked" (a question is on screen, the plan waits) or "failed".
+    plan: PlanState | None = None
+    outcome: str = "failed"
+    last_undo: str | None = None
+    # Sends an intermediate message (a finished plan step) before the turn's own reply.
+    progress: Callable[[Reply], Awaitable[None]] | None = None
 
     def audit(self, **cols: Any) -> None:
         self.cols.update(cols)
@@ -185,10 +195,13 @@ class Orchestrator:
         self, settings: Settings, discovery: Discovery, builder: ContextBuilder, llm: LLMClient,
         validator: SemanticValidator, policy: Policy, executor: Executor, store: AuditStore,
         sessions: SessionStore, clock: Callable[[], datetime] = now_utc,
-        researcher: WebResearcher | None = None,
+        researcher: WebResearcher | None = None, planner: Planner | None = None,
+        note: Callable[[], str] | None = None,
     ) -> None:
         self._s = settings
         self._researcher = researcher
+        self._planner = planner
+        self._note = note or (lambda: "")
         self._discovery = discovery
         self._builder = builder
         self._llm = llm
@@ -229,16 +242,20 @@ class Orchestrator:
 
     async def handle_text(
         self, chat_id: int, user_id: int, text: str, *, kind: str = "text",
-        transcript: str | None = None,
+        transcript: str | None = None, progress: Callable[[Reply], Awaitable[None]] | None = None,
     ) -> Reply:
         async with self._chat_lock(chat_id):
             return await self._turn(chat_id, user_id, kind, lambda t: self._text(t, text),
-                                    raw_input=text, transcription=transcript)
+                                    progress=progress, raw_input=text, transcription=transcript)
 
-    async def handle_callback(self, chat_id: int, user_id: int, data: str) -> Reply:
+    async def handle_callback(
+        self, chat_id: int, user_id: int, data: str, *,
+        progress: Callable[[Reply], Awaitable[None]] | None = None,
+    ) -> Reply:
         async with self._chat_lock(chat_id):
             return await self._turn(chat_id, user_id, "callback",
-                                    lambda t: self._callback(t, data), raw_input=data)
+                                    lambda t: self._callback(t, data), progress=progress,
+                                    raw_input=data)
 
     async def undo(self, chat_id: int, execution_id: int | None = None) -> Reply:
         async with self._chat_lock(chat_id):
@@ -308,6 +325,10 @@ class Orchestrator:
         # answering and both halves of the request, and its fresh interpretation replaces the
         # session outright (an unrelated message is simply a new request, F5).
         pending = self._pending_block(session, snapshot) if session is not None else None
+        # A question from a plan's step: this answer finishes the step, then the plan goes on.
+        if session is not None and session.plan is not None:
+            turn.plan = PlanState.model_validate(session.plan)
+            pending = {**(pending or {}), **plan_context(turn.plan)}
         # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
         # the tail instead freezes the conversation once the concatenation reaches the cap —
         # every further answer chopped off, the same bytes sent again, the same question asked
@@ -316,7 +337,7 @@ class Orchestrator:
                   else text)
         asked = list(session.asked) if session is not None else []
 
-        ctx = self._builder.build(snapshot, turn.now, pending)
+        ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None)
         if not ctx.target_keys():
             return _prefixed(self._plain(turn, "DISCOVERY_FAILED"), prefix)
         turn.audit(llm_context=ctx.json())
@@ -328,10 +349,15 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
+        if interp.intent.value == "plan" and not interp.clarify and turn.plan is None:
+            return _prefixed(await self._start_plan(turn, prompt, snapshot), prefix)
         result = self._validator.validate(interp, ctx, snapshot)
         decision = self._policy.evaluate(result)
         self._audit_result(turn, result, decision)
-        return _prefixed(await self._dispatch(turn, decision, result, ctx, prompt, asked), prefix)
+        reply = await self._dispatch(turn, decision, result, ctx, prompt, asked)
+        if turn.plan is not None:
+            reply = await self._after_step(turn, reply)
+        return _prefixed(reply, prefix)
 
     async def _dispatch(
         self, turn: _Turn, decision: Decision, result: ValidationResult, ctx: Context, text: str,
@@ -370,6 +396,11 @@ class Orchestrator:
             # The write did not happen, so the text would be lost otherwise.
             return await self._inbox_or_error(turn, text, code, message=e.message)
         turn.audit(executed=1, notion_page_id=executed.page_id)
+        turn.outcome = "executed"
+        if executed.undo is not None:
+            turn.last_undo = executed.undo.model_dump_json()
+        if turn.plan is not None:
+            self._discovery.invalidate()  # the next step may refer to what this one created
         if isinstance(command, Search):
             return Reply(format_search(executed))
         execution_id = self._record_execution(turn, executed)
@@ -417,7 +448,9 @@ class Orchestrator:
         session = session_from_decision(
             turn.chat_id, turn.event_id, text, result, replace(decision, questions=[question]),
             options, now=turn.now, ttl_s=self._s.session_ttl_s, asked=asked,
+            plan=turn.plan.model_dump() if turn.plan is not None else None,
         )
+        turn.outcome = "asked"
         self._sessions.save(session)
         turn.audit(clarification_state=session.model_dump_json())
         return format_question(
@@ -461,6 +494,110 @@ class Orchestrator:
             texts.PENDING_TARGET: name or "",
             texts.PENDING_TEXT: session.original_text,
         }
+
+    # ---- multi-step plans ----------------------------------------------------------------------
+
+    async def _start_plan(self, turn: _Turn, text: str, snapshot: WorkspaceSnapshot) -> Reply:
+        """A goal that takes several actions: the planner splits it into one-action steps, which
+        then run one by one (see _after_step)."""
+        turn.audit(decision=_kind("PLAN"))
+        if self._planner is None:
+            return self._plain(turn, "PLAN_UNAVAILABLE")
+        try:
+            goal, steps = await self._planner.plan(text, self._workspace(snapshot))
+        except PlanError as e:
+            log.warning("planning failed: %s", e)
+            return await self._inbox_or_error(turn, text, "PLAN_FAILED")
+        turn.plan = PlanState(goal=goal, planned=steps, current=steps[0])
+        lines = [texts.PLAN_HEADER.format(goal=goal)]
+        lines += [f"{i}. {step}" for i, step in enumerate(steps, start=1)]
+        await self._progress(turn, Reply("\n".join(lines)))
+        return await self._after_step(turn, await self._step(turn, steps[0]))
+
+    async def _step(self, turn: _Turn, text: str) -> Reply:
+        """One step of the plan, as if the user had sent it: interpret, validate, then execute
+        or ask. turn.outcome says which way it went."""
+        assert turn.plan is not None
+        turn.outcome, turn.last_undo = "failed", None
+        try:
+            snapshot = await self._discovery.get()
+        except Exception as e:
+            log.warning("discovery failed: %s", e)
+            return Reply(_error("DISCOVERY_FAILED"))
+        ctx = self._builder.build(snapshot, turn.now, plan_context(turn.plan), allow_plan=False)
+        try:
+            interp, trace = await self._llm.interpret(text, ctx, build_schema(ctx))
+        except (LLMUnavailable, LLMInvalidOutput, LLMContextOverflow) as e:
+            log.warning("plan step: llm failed: %s", e)
+            return Reply(_error("LLM_UNAVAILABLE" if isinstance(e, LLMUnavailable)
+                                else "LLM_INVALID_OUTPUT"))
+        self._audit_llm(turn, interp, trace)
+        result = self._validator.validate(interp, ctx, snapshot)
+        decision = self._policy.evaluate(result)
+        self._audit_result(turn, result, decision)
+        return await self._dispatch(turn, decision, result, ctx, text, [])
+
+    async def _after_step(self, turn: _Turn, reply: Reply) -> Reply:
+        """Record the step that just ended and keep going: after every step the planner says
+        whether the goal is reached or what to do next. A step that asks the user something
+        stops here — its question is the reply, and its session carries the plan, so the answer
+        picks the loop up again."""
+        state = turn.plan
+        assert state is not None
+        while True:
+            if turn.outcome == "asked":
+                return reply
+            state.history.append(PlanStep(
+                request=state.current, outcome=reply.text[:500],
+                status="done" if turn.outcome == "executed" else "failed"))
+            if turn.last_undo is not None:
+                state.undo.append(turn.last_undo)
+            await self._progress(turn, replace(
+                reply, text=texts.PLAN_STEP.format(n=len(state.history), text=reply.text)))
+            if state.exhausted:
+                return self._plan_done(turn, "", stopped=True)
+            try:
+                snapshot = await self._discovery.get()
+            except Exception as e:
+                log.warning("discovery failed: %s", e)
+                return self._plan_done(turn, "", stopped=True)
+            assert self._planner is not None
+            verdict = await self._planner.next(state, self._workspace(snapshot))
+            if verdict.done:
+                return self._plan_done(turn, verdict.summary)
+            state.current = verdict.next_step
+            reply = await self._step(turn, state.current)
+
+    def _plan_done(self, turn: _Turn, summary: str, *, stopped: bool = False) -> Reply:
+        """The plan's closing message, with one button that undoes every write it made."""
+        state = turn.plan
+        assert state is not None
+        turn.plan = None
+        done = sum(1 for s in state.history if s.status == "done")
+        template = texts.PLAN_STOPPED if stopped else texts.PLAN_DONE
+        text = template.format(done=done, total=len(state.history), summary=summary or state.goal)
+        if not state.undo:
+            return Reply(text)
+        batch = UndoRecord(kind="batch",
+                           batch=[UndoRecord.model_validate_json(u) for u in state.undo])
+        execution_id = self._store.add_execution(
+            turn.event_id, turn.chat_id, None, batch.model_dump_json(),
+            turn.now + timedelta(seconds=self._s.undo_window_s),
+        )
+        return Reply(text, [[Button(f"u:{execution_id}", texts.BTN_UNDO_ALL)]],
+                     undo_id=execution_id)
+
+    def _workspace(self, snapshot: WorkspaceSnapshot) -> str:
+        return workspace_summary([t for t in snapshot.targets if not t.hidden], self._note())
+
+    @staticmethod
+    async def _progress(turn: _Turn, reply: Reply) -> None:
+        if turn.progress is None:
+            return
+        try:
+            await turn.progress(reply)
+        except Exception:  # a lost progress line must not stop the plan
+            log.exception("could not send a plan progress message")
 
     # ---- callbacks ---------------------------------------------------------------------------
 
@@ -535,8 +672,13 @@ class Orchestrator:
         result = result_from_session(session, snapshot, ctx)
         decision = self._policy.evaluate(result)
         self._audit_result(turn, result, decision)
-        return await self._dispatch(turn, decision, result, ctx, session.original_text,
-                                    list(session.asked))
+        if session.plan is not None:
+            turn.plan = PlanState.model_validate(session.plan)
+        reply = await self._dispatch(turn, decision, result, ctx, session.original_text,
+                                     list(session.asked))
+        if turn.plan is not None:
+            reply = await self._after_step(turn, reply)
+        return reply
 
     async def _undo(self, turn: _Turn, execution_id: int | None) -> Reply:
         minutes = max(1, self._s.undo_window_s // 60)
@@ -621,6 +763,11 @@ class Orchestrator:
         """The error exits all end here: save what the user said if the inbox is on, and offer
         to save it otherwise (or when the save failed) rather than dropping the message."""
         turn.audit(error=code, decision=json.dumps({"kind": "ERROR", "code": code}))
+        if turn.plan is not None:
+            # A failed step is the planner's to handle (retry differently, skip); filing each
+            # step's command in the inbox would only litter it.
+            turn.outcome = "failed"
+            return Reply(_error(code, **fmt))
         reply, saved = await self._to_inbox(turn, text, code, **fmt)
         if saved:
             return reply if reply is not None else Reply(_error(code, **fmt))
@@ -705,7 +852,8 @@ class Orchestrator:
 
     async def _turn(
         self, chat_id: int, user_id: int, kind: str,
-        work: Callable[[_Turn], Awaitable[Reply]], **cols: Any,
+        work: Callable[[_Turn], Awaitable[Reply]], *,
+        progress: Callable[[Reply], Awaitable[None]] | None = None, **cols: Any,
     ) -> Reply:
         """Open the events row, run `work`, close the row — with all three inside the guard. The
         audit store is the one dependency that cannot report its own failure through the audit
@@ -716,6 +864,7 @@ class Orchestrator:
         except Exception:
             log.exception("could not open an audit event for chat %s", chat_id)
             return Reply(_error("INTERNAL"))
+        turn.progress = progress
         # Every log record produced while this turn is in flight — here, and in every module the
         # turn calls into (discovery, the LLM client, the executor) — carries this event's id, so
         # a log line can be traced back to its `events` row. The id cannot be bound any earlier:

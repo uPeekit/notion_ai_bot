@@ -152,11 +152,21 @@ async def _typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
             await task
 
 
+def _progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """How the orchestrator sends a message before its final reply (a finished plan step)."""
+
+    async def send(reply: Reply) -> None:
+        await _send(update, context, reply, context.bot_data[_STORE])
+
+    return send
+
+
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orch: Orchestrator = context.bot_data[_ORCH]
     async with _typing(context, update.effective_chat.id):
         reply = await orch.handle_text(
-            update.effective_chat.id, update.effective_user.id, update.message.text
+            update.effective_chat.id, update.effective_user.id, update.message.text,
+            progress=_progress(update, context),
         )
     await _send(update, context, reply, context.bot_data[_STORE])
 
@@ -191,7 +201,7 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with _typing(context, update.effective_chat.id):
         reply = await orch.handle_text(
             update.effective_chat.id, update.effective_user.id, transcript,
-            kind="voice", transcript=transcript,
+            kind="voice", transcript=transcript, progress=_progress(update, context),
         )
     await _send(update, context, reply, store)
 
@@ -219,7 +229,9 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     await query.answer()  # Telegram's 10-second budget; never carries text
     orch: Orchestrator = context.bot_data[_ORCH]
-    reply = await orch.handle_callback(update.effective_chat.id, user_id, query.data)
+    async with _typing(context, update.effective_chat.id):
+        reply = await orch.handle_callback(update.effective_chat.id, user_id, query.data,
+                                           progress=_progress(update, context))
     await _clear_keyboard(query)
     await _send(update, context, reply, context.bot_data[_STORE])
 
