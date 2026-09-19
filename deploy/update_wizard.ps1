@@ -36,7 +36,10 @@ $version = if (Test-Path "VERSION") { (Get-Content "VERSION" -Raw).Trim() } else
 Write-Host "installed version : $version"
 Write-Host "install dir       : $root"
 Write-Host "schema            : " -NoNewline
-& $py -m tools.migrate --status --db "data\bot.sqlite" 2>&1 | Select-Object -First 1 | ForEach-Object { Write-Host $_ }
+# 2>$null: native stderr (uv rebuilding the venv) would abort the wizard under ErrorAction Stop.
+$status = & $py -m tools.migrate --status --db "data\bot.sqlite" 2>$null |
+  Where-Object { $_ -match "\S" } | Select-Object -First 1
+Write-Host $status
 Write-Host ""
 Write-Host "  1) Update this install"
 Write-Host "  2) Dry run (show what an update would do)"

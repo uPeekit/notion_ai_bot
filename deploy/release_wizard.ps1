@@ -56,7 +56,12 @@ if (-not $lastTag) { $lastTag = "(none)" }
 Write-Host "current version : $current"
 Write-Host "last tag        : $lastTag"
 Write-Host "auto would do   : " -NoNewline
-& $uv run python release.py --auto --dry-run 2>&1 | Select-Object -First 1 | ForEach-Object { Write-Host $_ }
+# --quiet and 2>$null: uv prints "Building notion-ai-bot ..." on stderr whenever the venv is
+# out of date, and with ErrorActionPreference=Stop that native stderr aborted the whole wizard.
+$auto = & $uv run --quiet python release.py --auto --dry-run 2>$null |
+  Where-Object { $_ -match "\S" } | Select-Object -First 1
+if (-not $auto) { $auto = "(could not work it out; release.py will decide)" }
+Write-Host $auto
 $dirty = git status --porcelain
 if ($dirty) {
   Write-Host ""
