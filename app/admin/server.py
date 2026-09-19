@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextlib import suppress
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +23,8 @@ DESCRIBED_OPTION_TYPES = frozenset({"select", "multi_select", "status"})
 # Generous cap for a hand-edited descriptions document; also bounds the blocking rfile.read()
 # below so a hostile/huge Content-Length can't force an unbounded read.
 MAX_BODY_BYTES = 512 * 1024
+# How long a rejected request's unread body is waited for before the connection is closed.
+DRAIN_WAIT_S = 0.2
 
 
 def _parse_content_length(raw: str | None) -> int | None:
@@ -241,6 +244,25 @@ class _Handler(BaseHTTPRequestHandler):
     def _rejects_host(self) -> bool:
         return not _loopback_host(self.headers.get("Host"))
 
+    def _drop_body(self) -> None:
+        """Throw away a body we are not going to read, before answering. Closing a socket that
+        still holds unread data makes Windows reset the connection, and the client then sees a
+        dropped connection instead of the 400 — the header said "abc" or half a megabyte, so
+        there is no length to trust here; take what has arrived and stop."""
+        sock = self.connection
+        timeout = sock.gettimeout()
+        left = MAX_BODY_BYTES
+        try:
+            sock.settimeout(DRAIN_WAIT_S)
+            while left > 0 and sock.recv(min(left, 8192)):
+                left -= 8192
+        except OSError:
+            pass  # nothing waiting, or the client has gone: either way there is nothing to read
+        finally:
+            with suppress(OSError):
+                sock.settimeout(timeout)
+        self.close_connection = True
+
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -275,19 +297,23 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
         if self._rejects_host():
+            self._drop_body()
             self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden_host"})
             return
         if self.path != "/api/descriptions":
-            # Read (and drop) a bounded body first: closing a socket with unread data makes
-            # Windows reset the connection, and the client never sees the 404.
+            # Read (and drop) the body first: closing a socket with unread data makes Windows
+            # reset the connection, and the client never sees the 404.
             length = _parse_content_length(self.headers.get("Content-Length"))
             if length:
                 self.rfile.read(length)
+            else:
+                self._drop_body()  # a header we would not read from is dropped the other way
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         length = _parse_content_length(self.headers.get("Content-Length"))
         if length is None:
             log.warning("rejected POST /api/descriptions: bad Content-Length header")
+            self._drop_body()
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_request"})
             return
         raw = self.rfile.read(length) if length else b""
