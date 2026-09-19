@@ -1569,3 +1569,27 @@ async def test_an_empty_search_inside_a_plan_is_a_failed_step(make):
                                              fields={"t2.f1": val("Хлеб", 1.0)})))
     await bot.orch.handle_text(CHAT, USER, "план", progress=collect([]))
     assert planner.checks[0] == ["failed"]
+
+
+async def test_a_long_question_is_cut_at_a_word_not_mid_word():
+    from app.validation.semantic import MAX_CLARIFY, clean_clarify
+
+    question = "Уточни: " + "достопримечательности " * 100
+    cut = clean_clarify(question)
+    assert len(cut) <= MAX_CLARIFY + 1 and cut.endswith("достопримечательности…")
+
+
+async def test_answers_to_a_plan_question_reach_the_later_steps(make):
+    planner = FakePlanner(["добавь хлеб", "добавь в покупки молоко"])
+    bot = make(planner=planner)
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95, fields={
+        "t2.f1": val("Хлеб", 1.0)})).model_copy(update={"clarify": "Сколько хлеба?"}))
+    await bot.orch.handle_text(CHAT, USER, "хлеб и молоко", progress=collect([]))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Хлеб", 1.0)})))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "два батона", progress=collect([]))
+    step2_context = bot.llm.seen[-1][1]
+    assert step2_context["pending"]["plan"]["ответы_пользователя"] == ["два батона"]

@@ -190,10 +190,19 @@ RESEARCH_PROMPT = """Ты — исследовательский модуль л
 остальных случаях ищи и пиши результат; в самом результате вопросов не задавай никогда."""
 
 IMAGE_QUERIES_PROMPT = """Пользователь просит картинки — визуальные референсы. Их будут искать \
-на Wikimedia Commons, где файлы подписаны в основном по-английски. Придумай от 1 до 3 коротких \
-поисковых запросов на английском (2–4 слова), которые найдут разные подходящие фотографии по \
-теме. Слова о том, куда записать, пропускай. Ответ — только запросы, по одному на строку, без \
-нумерации и пояснений."""
+на Wikimedia Commons, где фото подписаны в основном по-английски тем, что на них видно. \
+Придумай от 1 до 3 коротких поисковых запросов на английском, 1–3 слова: конкретные предметы и \
+места, которые можно сфотографировать, — «Suomenlinna», «Gamla stan», «Viking Line ferry», \
+«torii gate», «oak bench». Без слов о цели и публике — family, children, trip, weekend, plan, \
+ideas, October: с ними ничего не находится. Слова о том, куда записать, пропускай. Ответ — \
+только запросы, по одному на строку, без нумерации и пояснений."""
+
+IMAGE_FILTER_PROMPT = """Ты отбираешь картинки для страницы Notion пользователя. Дан его запрос и \
+пронумерованный список найденных картинок (подписи с Wikimedia Commons и со страниц-источников). \
+Верни в keep номера тех, что действительно подходят к теме как визуальные референсы: фото мест, \
+предметов, людей, о которых запрос. Отбрось сканы писем и документов, карты, схемы, гербы, \
+логотипы и всё не по теме — если их не просили. Лучше меньше, но по делу; если не подходит \
+ничего — пустой список."""
 
 # The line a research call answers with instead of a result when it needs the user first.
 RESEARCH_QUESTION = "ВОПРОС:"
@@ -241,13 +250,17 @@ def progress_message(state: PlanState, workspace: str) -> str:
         "план": state.planned,
         "сделано": [{"шаг": s.request, "итог": s.status, "ответ_бота": s.outcome}
                     for s in state.history],
+        "ответы_пользователя": state.answers,
     }
     return f"{workspace}\n\n" + json.dumps(progress, ensure_ascii=False, indent=1)
 
 
 def plan_context(state: PlanState) -> dict:
     """What a plan step's interpretation is told about the plan (the context's `pending`)."""
-    return {PLAN_KEY: {"цель": state.goal, "сделано": [s.outcome for s in state.history]}}
+    block = {"цель": state.goal, "сделано": [s.outcome for s in state.history]}
+    if state.answers:  # what the user told the plan's earlier questions: dates, ages, choices
+        block["ответы_пользователя"] = state.answers
+    return {PLAN_KEY: block}
 
 
 def workspace_summary(targets: list[Target], note: str) -> str:
@@ -264,6 +277,10 @@ def workspace_summary(targets: list[Target], note: str) -> str:
     if note:
         lines.append(f"\nЗаметка пользователя о воркспейсе: {note}")
     return "\n".join(lines)
+
+
+def image_filter_message(request: str, query: str, listing: str) -> str:
+    return f"{research_message(request, query)}\n\nНайденные картинки:\n{listing}"
 
 
 def research_message(request: str, query: str) -> str:

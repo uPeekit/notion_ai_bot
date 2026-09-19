@@ -30,6 +30,9 @@ class PlanState(BaseModel):
     history: list[PlanStep] = Field(default_factory=list)
     # UndoRecord JSON of every write the plan made, oldest first: "undo all" replays them.
     undo: list[str] = Field(default_factory=list)
+    # What the user answered to the plan's questions in their own words: later steps and the
+    # progress check see it too, not only the step that asked.
+    answers: list[str] = Field(default_factory=list)
 
     @property
     def exhausted(self) -> bool:

@@ -13,7 +13,7 @@ from app.notion.snapshot import Field, Item, Option, Target, WorkspaceSnapshot
 
 MAX_ITEM_CANDIDATES = 8
 MAX_TEXT = 4000
-MAX_CLARIFY = 300  # a question to the user, not an essay
+MAX_CLARIFY = 1000  # a question (possibly numbered sub-questions), not an essay
 
 
 def clean_clarify(text: str | None) -> str | None:
@@ -24,7 +24,9 @@ def clean_clarify(text: str | None) -> str | None:
     if (not text or text.lower() in ("null", "none", "nil")
             or text[0] in "{[" or not any(ch.isalpha() for ch in text)):
         return None
-    return text[:MAX_CLARIFY]
+    if len(text) <= MAX_CLARIFY:
+        return text
+    return text[:MAX_CLARIFY].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"  # never mid-word
 INTENT_OPS: dict[str, frozenset[str]] = {
     "create": frozenset({"create", "create_page"}),
     "update": frozenset({"update"}),

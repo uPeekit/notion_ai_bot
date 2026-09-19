@@ -6,6 +6,7 @@ goes through the normal write path as the candidate's content."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -16,11 +17,13 @@ import anthropic
 
 from app.llm.image_search import ImageSearch
 from app.llm.prompts import (
+    IMAGE_FILTER_PROMPT,
     IMAGE_QUERIES_PROMPT,
     IMAGES_HEADING,
     RESEARCH_PROMPT,
     RESEARCH_QUESTION,
     SOURCES_HEADING,
+    image_filter_message,
     research_message,
 )
 
@@ -39,6 +42,12 @@ _DYNAMIC_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "clau
 MAX_IMAGES = 6
 MAX_PHRASES = 3
 MAX_SOURCE_PAGES = 4
+MAX_CANDIDATES = 16  # pictures shown to the relevance check
+KEEP_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["keep"],
+               "properties": {"keep": {"type": "array", "items": {"type": "integer"}}}}
+# "Letter signed Sara ... (page 5).jpg" and "(page 2)" are one document: compared without the
+# page numbers and other digits, its pages collapse into one picture.
+_PAGE_MARK = re.compile(r"\(?page\s*\d+\)?|\d+", re.I)
 _LINK = re.compile(r"\((https?://[^\s)]+)\)")
 
 
@@ -89,6 +98,10 @@ def _question(text: str) -> str | None:
     if not text.startswith(RESEARCH_QUESTION):
         return None
     return text[len(RESEARCH_QUESTION):].strip() or None
+
+
+def _document_key(caption: str) -> str:
+    return " ".join(_PAGE_MARK.sub(" ", caption.lower()).split())
 
 
 def _md_caption(caption: str) -> str:
@@ -150,7 +163,7 @@ class WebResearcher:
         images: list[str] = []
         if want_images:
             sources = [] if text_failed else await self._source_images(text)
-            images = await self._keep([*commons, *sources])
+            images = await self._keep([*commons, *sources], request, query)
         if text_failed:
             if not images:
                 raise text
@@ -177,9 +190,21 @@ class WebResearcher:
         if self._search is None:
             return []
         phrases = await self._phrases(request, query)
-        found = await asyncio.gather(*(self._search.commons(p) for p in phrases))
+        found = await asyncio.gather(*(self._commons_one(p) for p in phrases))
         # Interleaved, so each phrase contributes its best picture before any gives a second.
         return [hit for row in zip_longest(*found) for hit in row if hit is not None]
+
+    async def _commons_one(self, phrase: str) -> list[tuple[str, str]]:
+        """Commons hits for `phrase`, dropping its last word until something matches: every
+        word must match, and one abstract word ("family") empties the whole search."""
+        assert self._search is not None
+        words = phrase.split()
+        while words:
+            hits = await self._search.commons(" ".join(words))
+            if hits:
+                return hits
+            words = words[:-1]
+        return []
 
     async def _source_images(self, text: str) -> list[tuple[str, str]]:
         """og:image of the pages the text cites (its sources section)."""
@@ -189,9 +214,39 @@ class WebResearcher:
         found = await asyncio.gather(*(self._search.og_image(u) for u in links))
         return [hit for hit in found if hit is not None]
 
-    async def _keep(self, hits: list[tuple[str, str]]) -> list[str]:
-        """Image lines for the hits that really are images, first MAX_IMAGES of them."""
+    async def _relevant(
+        self, request: str, query: str, hits: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        """The hits whose captions fit the request, by one cheap call. Commons search also
+        matches file descriptions, so "Helsinki Stockholm" once returned six pages of a scanned
+        1923 letter. On any failure the hits are kept as they are."""
+        if not hits:
+            return hits
+        listing = "\n".join(f"{i}. {cap or url.rsplit('/', 1)[-1]}"
+                            for i, (url, cap) in enumerate(hits, start=1))
+        try:
+            resp = await self._client.messages.create(
+                model=self.model, max_tokens=300, system=IMAGE_FILTER_PROMPT,
+                messages=[{"role": "user", "content": image_filter_message(
+                    request, query, listing)}],
+                output_config={"format": {"type": "json_schema", "schema": KEEP_SCHEMA}},
+            )
+            text = next((b.text for b in resp.content if b.type == "text"), "")
+            keep = json.loads(text).get("keep", [])
+        except (anthropic.APIError, ValueError, AttributeError) as e:
+            log.info("image relevance check skipped (%s)", type(e).__name__)
+            return hits
+        chosen = {n for n in keep if isinstance(n, int)}
+        return [hit for i, hit in enumerate(hits, start=1) if i in chosen]
+
+    async def _keep(
+        self, hits: list[tuple[str, str]], request: str = "", query: str = ""
+    ) -> list[str]:
+        """Image lines for the hits that fit the request and really are images."""
         hits = list({url: (url, cap) for url, cap in hits}.values())  # one line per picture
+        hits = list({_document_key(cap) or url: (url, cap)
+                     for url, cap in reversed(hits)}.values())[::-1]  # one page per document
+        hits = await self._relevant(request, query, hits[:MAX_CANDIDATES])
         if self._is_image is not None:
             ok = await asyncio.gather(*(self._is_image(url) for url, _ in hits))
             hits = [hit for hit, good in zip(hits, ok, strict=True) if good]

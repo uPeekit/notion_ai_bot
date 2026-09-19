@@ -176,3 +176,70 @@ async def test_a_question_line_becomes_a_research_question():
     with pytest.raises(ResearchQuestion) as e:
         await r.research("не найди картинки", "картинки")
     assert e.value.question == "Искать или нет?"
+
+
+def by_role(text_answer: str, keep: list[int], phrases: str = "helsinki"):
+    """Text research, Commons phrases and the relevance check, told apart by their prompts."""
+    def handler(req):
+        system = json.loads(req.content)["system"]
+        if "отбираешь картинки" in system:
+            answer = json.dumps({"keep": keep})
+        elif "Придумай" in system:
+            answer = phrases
+        else:
+            answer = text_answer
+        return message([{"type": "text", "text": answer}])
+    return handler
+
+
+async def test_off_topic_pictures_are_dropped_by_the_relevance_check():
+    hits = [("https://up.example/letter.jpg", "Letter signed Sara, London (page 1)"),
+            ("https://up.example/harbour.jpg", "Helsinki harbour at dusk")]
+    r = WebResearcher(KEY, "claude-haiku-4-5", client=sdk(by_role(TEXT, keep=[2])),
+                      search=FakeSearch(commons=hits))
+    out = await r.research("Хельсинки с ребёнком", "хельсинки", "images")
+    assert "harbour.jpg" in out and "letter.jpg" not in out
+
+
+async def test_pages_of_one_scanned_document_collapse_into_one():
+    pages = [(f"https://up.example/p{n}.jpg", f"Letter signed Sara, London, 1923 (page {n})")
+             for n in range(1, 7)]
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        if "отбираешь картинки" in body["system"]:
+            seen.append(body["messages"][0]["content"])
+        return by_role(TEXT, keep=[1])(req)
+
+    r = WebResearcher(KEY, "claude-haiku-4-5", client=sdk(handler),
+                      search=FakeSearch(commons=pages))
+    out = await r.research("письма", "letters", "images")
+    assert out.count("![") == 1
+    assert seen[0].count("Letter signed Sara") == 1  # the check saw the document once
+
+
+async def test_a_failed_relevance_check_keeps_the_pictures():
+    def handler(req):
+        if "отбираешь картинки" in json.loads(req.content)["system"]:
+            return httpx2.Response(529, json={
+                "type": "error", "error": {"type": "overloaded_error", "message": "busy"}})
+        return by_role(TEXT, keep=[])(req)
+
+    r = WebResearcher(KEY, "claude-haiku-4-5", client=sdk(handler),
+                      search=FakeSearch(commons=[("https://up.example/a.jpg", "A")]))
+    assert "a.jpg" in await r.research("x", "y", "images")
+
+
+async def test_a_phrase_that_finds_nothing_is_retried_shorter():
+    class Picky(FakeSearch):
+        async def commons(self, phrase, limit=6):
+            self.phrases.append(phrase)
+            return [("https://up.example/f.jpg", "Ferry")] if phrase == "Viking Line" else []
+
+    search = Picky()
+    r = WebResearcher(KEY, "claude-haiku-4-5", search=search,
+                      client=sdk(by_role(TEXT, keep=[1], phrases="Viking Line family trip")))
+    out = await r.research("паром", "паром", "images")
+    assert search.phrases == ["Viking Line family trip", "Viking Line family", "Viking Line"]
+    assert "f.jpg" in out

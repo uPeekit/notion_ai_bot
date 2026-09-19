@@ -28,6 +28,11 @@ NEXT_SCHEMA = {
 }
 
 
+# Room for the model's own thinking plus a long plan: at 2048 a 20-book list was cut mid-JSON
+# about half the time (Sonnet 5 thinks before it answers).
+MAX_TOKENS = 16_000
+
+
 class PlanError(Exception):
     pass
 
@@ -41,7 +46,7 @@ class Verdict:
 
 class Planner:
     def __init__(
-        self, api_key: str, model: str, *, timeout_s: float = 60.0,
+        self, api_key: str, model: str, *, timeout_s: float = 180.0,
         client: anthropic.AsyncAnthropic | None = None,
     ) -> None:
         self.model = model
@@ -76,13 +81,15 @@ class Planner:
     async def _ask(self, system: str, schema: dict, content: str) -> dict:
         try:
             resp = await self._client.messages.create(
-                model=self.model, max_tokens=2048, system=system,
+                model=self.model, max_tokens=MAX_TOKENS, system=system,
                 messages=[{"role": "user", "content": content}],
                 output_config={"format": {"type": "json_schema", "schema": schema}},
             )
         except anthropic.APIError as e:
             raise PlanError(f"claude {getattr(e, 'status_code', None) or type(e).__name__}") \
                 from None
+        if resp.stop_reason == "max_tokens":
+            raise PlanError("answer cut off (max_tokens)")
         text = next((b.text for b in resp.content if b.type == "text"), "")
         try:
             data = json.loads(text)

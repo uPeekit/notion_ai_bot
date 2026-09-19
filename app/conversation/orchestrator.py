@@ -328,6 +328,7 @@ class Orchestrator:
         # A question from a plan's step: this answer finishes the step, then the plan goes on.
         if session is not None and session.plan is not None:
             turn.plan = PlanState.model_validate(session.plan)
+            turn.plan.answers.append(text[:MAX_PROMPT])
             pending = {**(pending or {}), **plan_context(turn.plan)}
         # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
         # the tail instead freezes the conversation once the concatenation reaches the cap —

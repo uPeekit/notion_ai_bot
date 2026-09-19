@@ -75,3 +75,16 @@ async def test_next_without_a_next_step_or_on_an_error_is_done():
         "type": "error", "error": {"type": "overloaded_error", "message": "busy"}})).next(
         PlanState(goal="g", planned=["a"], current="a"), "w")
     assert failed.done  # stop rather than guess on
+
+
+async def test_a_cut_off_plan_is_reported_as_such():
+    def handler(req):
+        assert json.loads(req.content)["max_tokens"] >= 8000  # room to think and to answer
+        return httpx2.Response(200, json={
+            "id": "m", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": '{"goal":"g","steps":["a",'}],
+            "stop_reason": "max_tokens", "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+    with pytest.raises(PlanError, match="cut off"):
+        await planner(handler).plan("x", "w")
