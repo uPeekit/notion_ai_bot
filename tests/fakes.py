@@ -18,6 +18,7 @@ class FakeNotionProvider:
         self.databases: dict[str, dict] = {}
         self.items: dict[str, list[dict]] = {}
         self.pages: dict[str, dict] = {}
+        self.page_blocks: dict[str, list[dict]] = {}  # a page's own contents, for _match_list
         self.calls: list[tuple] = []
         self.fail_search: Exception | None = None
         self.fail_create_page: Exception | None = None
@@ -72,6 +73,10 @@ class FakeNotionProvider:
     async def update_page(self, page_id, *, properties=None, archived=None) -> dict:
         self.calls.append(("update_page", page_id, properties, archived))
         return {"id": page_id, "properties": properties or {}, "archived": bool(archived)}
+
+    async def block_children(self, block_id, limit: int = 100) -> list[dict]:
+        self.calls.append(("block_children", block_id))
+        return list(self.page_blocks.get(block_id, []))
 
     async def append_blocks(self, block_id, children) -> dict:
         self.calls.append(("append_blocks", block_id, children))

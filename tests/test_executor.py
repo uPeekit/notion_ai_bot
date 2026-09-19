@@ -356,3 +356,64 @@ async def test_batch_undo_reverts_every_part_newest_first(fake):
     await Executor(fake).undo(UndoRecord.model_validate_json(batch.model_dump_json()))
     assert [c[:2] for c in fake.calls] == [("update_page", "p2"), ("delete_block", "b1"),
                                            ("update_page", "p1")]
+
+
+def list_block(kind: str, text: str) -> dict:
+    return {"id": f"b-{text}", "type": kind,
+            kind: {"rich_text": [{"type": "text", "text": {"content": text}}]}}
+
+
+async def test_a_short_line_joins_the_to_do_list_a_page_ends_with(fake):
+    fake.page_blocks["pg"] = [{"id": "b0", "type": "heading_2", "heading_2": {}},
+                              list_block("to_do", "Дюна"), list_block("to_do", "Оппенгеймер")]
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                                          paragraphs=["Uncharted"], markdown=True))
+    [added] = fake.calls[-1][2]
+    assert added["type"] == "to_do" and added["to_do"]["checked"] is False
+    assert added["to_do"]["rich_text"][0]["text"]["content"] == "Uncharted"
+
+
+async def test_a_bulleted_list_is_matched_too_and_a_page_without_one_is_left_alone(fake):
+    fake.page_blocks["pg"] = [list_block("bulleted_list_item", "Дюна")]
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                                          paragraphs=["Uncharted"], markdown=True))
+    assert fake.calls[-1][2][0]["type"] == "bulleted_list_item"
+
+    fake.page_blocks["plain"] = [list_block("paragraph", "просто абзац")]
+    await Executor(fake).run(AppendBlocks(page_id="plain", target_name="п", page_title="п",
+                                          paragraphs=["Просто строка"], markdown=True))
+    assert fake.calls[-1][2][0]["type"] == "paragraph"
+
+
+async def test_a_list_that_is_not_at_the_end_or_a_long_note_is_not_matched(fake):
+    fake.page_blocks["pg"] = [list_block("to_do", "Дюна"),
+                              list_block("paragraph", "а это уже не список")]
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="p", page_title="p",
+                                          paragraphs=["Uncharted"], markdown=True))
+    assert fake.calls[-1][2][0]["type"] == "paragraph"
+
+    fake.page_blocks["pg2"] = [list_block("to_do", "Дюна")]
+    await Executor(fake).run(AppendBlocks(page_id="pg2", target_name="p", page_title="p",
+                                          paragraphs=["## Заметка", "- раз", "- два", "- три"],
+                                          markdown=True))
+    assert [b["type"] for b in fake.calls[-1][2]][0] == "heading_2"
+
+
+async def test_the_page_is_not_read_when_the_model_formatted_the_note_itself(fake):
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="p", page_title="p",
+                                          paragraphs=["- [ ] Uncharted"], markdown=True))
+    assert not any(c[0] == "block_children" for c in fake.calls)
+    assert fake.calls[-1][2][0]["type"] == "to_do"
+
+
+async def test_the_blank_line_notion_leaves_at_the_end_does_not_hide_the_list(fake):
+    """The real медиа page: heading, an empty tick box, and Notion's trailing empty paragraph."""
+    fake.page_blocks["pg"] = [
+        {"id": "h", "type": "heading_1",
+         "heading_1": {"rich_text": [{"type": "text", "text": {"content": "смотреть"}}]}},
+        {"id": "t", "type": "to_do", "to_do": {"rich_text": [], "checked": False}},
+        {"id": "p", "type": "paragraph", "paragraph": {"rich_text": []}},
+    ]
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                                          paragraphs=["Uncharted"], markdown=True))
+    assert fake.calls[-1][2][0]["type"] == "to_do"

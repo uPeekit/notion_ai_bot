@@ -6,6 +6,7 @@ otherwise undo is None and the caller must not offer it.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -26,10 +27,21 @@ from app.notion.mapper import (
 from app.notion.markdown import rich_text
 from app.notion.provider import NotionProvider
 
+log = logging.getLogger(__name__)
+
 SEARCH_LIMIT = 20
 # Notion takes at most 100 blocks per create-page or append request; longer bodies (a web
 # research result) go in batches.
 MAX_BLOCKS_PER_REQUEST = 100
+# A short plain append joins the list a page ends with; anything longer is a note of its own.
+MAX_MATCHED_LINES = 3
+LIST_BLOCKS = ("to_do", "bulleted_list_item", "numbered_list_item")
+
+
+def _block_text(block: dict) -> str:
+    kind = block.get("type", "")
+    return "".join(r.get("plain_text", "") or r.get("text", {}).get("content", "")
+                   for r in block.get(kind, {}).get("rich_text", []))
 
 
 @dataclass(frozen=True)
@@ -96,6 +108,31 @@ class Executor:
                 hosted["caption"] = image["caption"]
             out.append({"object": "block", "type": "image", "image": hosted})
         return out
+
+    async def _match_list(self, page_id: str, blocks: list[dict]) -> list[dict]:
+        """A line added to a page that ends in a list joins that list. The bot cannot see a
+        page's contents when it reads the message — only its sub-pages — so "add Uncharted to
+        the films" would otherwise land as a stray paragraph under a list of tick boxes."""
+        if not blocks or len(blocks) > MAX_MATCHED_LINES:
+            return blocks
+        if any(b.get("type") != "paragraph" for b in blocks):
+            return blocks  # the model formatted it itself: leave it alone
+        try:
+            children = await self._p.block_children(page_id)
+        except NotionError as e:
+            log.info("could not read %s to match its list (%s)", page_id, e)
+            return blocks
+        # A Notion page almost always ends with an empty paragraph, and often with an empty
+        # tick box someone left behind; neither says the list is over.
+        meaningful = [b for b in children if b.get("type") != "paragraph" or _block_text(b)]
+        last = meaningful[-1] if meaningful else None
+        if last is None or last.get("type") not in LIST_BLOCKS:
+            return blocks  # the page does not end in a list
+        kind = last["type"]
+        extra = {"checked": False} if kind == "to_do" else {}
+        return [{"object": "block", "type": kind,
+                 kind: {"rich_text": b["paragraph"]["rich_text"], **extra}}
+                for b in blocks]
 
     async def _append(self, block_id: str, blocks: list[dict]) -> list[str]:
         ids: list[str] = []
@@ -174,6 +211,7 @@ class Executor:
             )
         if isinstance(cmd, AppendBlocks):
             blocks = await self._prepare(content_blocks(cmd.paragraphs, cmd.markdown))
+            blocks = await self._match_list(cmd.page_id, blocks)
             ids = await self._append(cmd.page_id, blocks)
             return ExecutionResult(
                 cmd,

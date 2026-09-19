@@ -163,6 +163,21 @@ class DirectNotionProvider:
             body["archived"] = archived
         return await self._request("PATCH", f"/pages/{page_id}", body)
 
+    async def block_children(self, block_id: str, limit: int = 100) -> list[dict]:
+        """The block's own children (a page's contents), newest page of results last."""
+        out: list[dict] = []
+        cursor: str | None = None
+        while len(out) < limit:
+            path = f"/blocks/{block_id}/children?page_size=100"
+            if cursor:
+                path += f"&start_cursor={cursor}"
+            data = await self._request("GET", path)
+            out += data.get("results", [])
+            cursor = data.get("next_cursor") if data.get("has_more") else None
+            if not cursor:
+                break
+        return out
+
     async def append_blocks(self, block_id: str, children: list[dict]) -> dict:
         return await self._request(
             "PATCH", f"/blocks/{block_id}/children", {"children": children}

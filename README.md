@@ -21,7 +21,9 @@ phrasing:
 - **"купи молоко в Рими"** → a new row in your shopping-list database, with whatever properties
   (shop, category, …) it could confidently read off the sentence.
 - **"отметь молоко купленным"** → finds the matching row and updates it.
-- **"в идеи: попробовать сыр с плесенью"** → appends a paragraph to a page.
+- **"в идеи: попробовать сыр с плесенью"** → appends to a page. A short line joins the list
+  the page ends with (a tick box under «смотреть» becomes another tick box), so adding a film
+  to a list does not leave a stray paragraph under it.
 - **"что у меня в покупках на Rimi?"** → searches and lists matches.
 - **"запиши в прост чекбоксами: паспорт, зарядка, наушники"** → formatted text: headings,
   bulleted and numbered lists, checkboxes, quotes, code, **bold**/*italic*, links.
