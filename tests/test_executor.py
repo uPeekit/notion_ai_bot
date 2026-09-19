@@ -192,7 +192,7 @@ async def test_no_undo_when_created_page_has_no_id(fake):
 
 
 async def test_no_undo_when_append_returns_no_block_ids(fake):
-    async def no_ids(block_id, children):
+    async def no_ids(block_id, children, after=None):
         return {"results": [{}]}
 
     fake.append_blocks = no_ids
@@ -443,3 +443,81 @@ async def test_a_film_asked_for_in_the_users_own_words_ends_up_as_a_tick_box(fak
     assert written["type"] == "to_do"
     assert written["to_do"]["rich_text"][0]["text"]["content"] == "Uncharted"
     assert result.undo is not None and result.undo.kind == "delete_blocks"
+
+
+def heading(text: str) -> dict:
+    return {"id": f"h-{text}", "type": "heading_1",
+            "heading_1": {"rich_text": [{"type": "text", "text": {"content": text}}]}}
+
+
+class FakePicker:
+    """Stands in for the model that says which section a line belongs in."""
+
+    def __init__(self, answer=None):
+        self.answer, self.asked = answer, []
+
+    async def pick(self, request, line, headings):
+        self.asked.append((request, line, headings))
+        return self.answer
+
+
+def two_section_page():
+    return [heading("смотреть"), list_block("to_do", "Дюна"),
+            heading("подкасты"), list_block("to_do", "Радио-Т"),
+            {"id": "tail", "type": "paragraph", "paragraph": {"rich_text": []}}]
+
+
+async def test_a_film_goes_under_the_section_the_model_picks_not_the_last_list(fake):
+    fake.page_blocks["pg"] = two_section_page()
+    picker = FakePicker(answer=0)
+
+    await Executor(fake, sections=picker).run(
+        AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                     paragraphs=["Uncharted"], markdown=True,
+                     request="надо посмотреть фильм Uncharted"))
+
+    request, line, headings = picker.asked[0]
+    assert headings == ["смотреть", "подкасты"] and line == "Uncharted"
+    assert request == "надо посмотреть фильм Uncharted"
+    block_id, children, after = fake.calls[-1][1:]
+    assert children[0]["type"] == "to_do"
+    assert after == "b-Дюна"  # right under the films, not at the end of the page
+
+
+async def test_without_an_answer_the_line_goes_to_the_last_list_as_before(fake):
+    fake.page_blocks["pg"] = two_section_page()
+    picker = FakePicker(answer=None)  # the call failed, or nothing fit
+
+    await Executor(fake, sections=picker).run(
+        AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                     paragraphs=["Радио-В"], markdown=True, request="добавь подкаст Радио-В"))
+
+    assert fake.calls[-1][3] == "b-Радио-Т"
+
+
+async def test_a_local_only_page_is_never_described_to_the_model(fake):
+    """The builder sends no request text for a local-only target, and without it the page's
+    headings stay on this machine — the line goes to the last list."""
+    fake.page_blocks["pg"] = two_section_page()
+    picker = FakePicker(answer=0)
+
+    await Executor(fake, sections=picker).run(
+        AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                     paragraphs=["Uncharted"], markdown=True, request=""))
+
+    assert picker.asked == []
+    assert fake.calls[-1][3] == "b-Радио-Т"
+
+
+async def test_one_list_on_the_page_needs_no_model_call_even_with_sections(fake):
+    fake.page_blocks["pg"] = [heading("читать"),
+                              {"id": "db", "type": "child_database", "child_database": {}},
+                              heading("смотреть"), list_block("to_do", "Дюна")]
+    picker = FakePicker(answer=0)
+
+    await Executor(fake, sections=picker).run(
+        AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                     paragraphs=["Uncharted"], markdown=True, request="фильм Uncharted"))
+
+    assert picker.asked == []
+    assert fake.calls[-1][2][0]["type"] == "to_do" and fake.calls[-1][3] == "b-Дюна"

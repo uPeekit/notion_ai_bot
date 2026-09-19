@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.commands.models import AppendBlocks, Command, CreateItem, CreatePage, Search, UpdateItem
+from app.llm.sections import SectionPicker
 from app.notion import props
 from app.notion.errors import NotionError
 from app.notion.images import ImageHost
@@ -33,15 +34,43 @@ SEARCH_LIMIT = 20
 # Notion takes at most 100 blocks per create-page or append request; longer bodies (a web
 # research result) go in batches.
 MAX_BLOCKS_PER_REQUEST = 100
-# A short plain append joins the list a page ends with; anything longer is a note of its own.
+# A short plain append joins a list on the page; anything longer is a note of its own.
 MAX_MATCHED_LINES = 3
 LIST_BLOCKS = ("to_do", "bulleted_list_item", "numbered_list_item")
+HEADINGS = ("heading_1", "heading_2", "heading_3")
 
 
 def _block_text(block: dict) -> str:
     kind = block.get("type", "")
     return "".join(r.get("plain_text", "") or r.get("text", {}).get("content", "")
                    for r in block.get(kind, {}).get("rich_text", []))
+
+
+@dataclass(frozen=True)
+class Section:
+    """A heading and the blocks under it, down to the next heading. `tail` is the last block
+    that says anything — Notion leaves an empty paragraph at the end of a page, and an empty
+    tick box often sits where someone stopped typing; neither ends the list."""
+
+    title: str
+    tail: dict | None
+
+    @property
+    def list_kind(self) -> str | None:
+        kind = (self.tail or {}).get("type")
+        return kind if kind in LIST_BLOCKS else None
+
+
+def _sections(blocks: list[dict]) -> list[Section]:
+    """The page split at its headings. Blocks before the first heading are a section too (a
+    page that is nothing but a list has exactly one)."""
+    out: list[Section] = [Section("", None)]
+    for b in blocks:
+        if b.get("type") in HEADINGS:
+            out.append(Section(_block_text(b), None))
+        elif b.get("type") != "paragraph" or _block_text(b):
+            out[-1] = Section(out[-1].title, b)
+    return [s for s in out if s.tail is not None]
 
 
 @dataclass(frozen=True)
@@ -79,9 +108,11 @@ class ExecutionResult:
 
 
 class Executor:
-    def __init__(self, provider: NotionProvider, images: ImageHost | None = None) -> None:
+    def __init__(self, provider: NotionProvider, images: ImageHost | None = None,
+                 sections: SectionPicker | None = None) -> None:
         self._p = provider
         self._images = images
+        self._sections = sections
 
     async def _prepare(self, blocks: list[dict]) -> list[dict]:
         """Image blocks re-hosted in Notion (see app.notion.images). One that cannot be fetched
@@ -109,36 +140,58 @@ class Executor:
             out.append({"object": "block", "type": "image", "image": hosted})
         return out
 
-    async def _match_list(self, page_id: str, blocks: list[dict]) -> list[dict]:
-        """A line added to a page that ends in a list joins that list. The bot cannot see a
-        page's contents when it reads the message — only its sub-pages — so "add Uncharted to
-        the films" would otherwise land as a stray paragraph under a list of tick boxes."""
+    async def _match_list(
+        self, page_id: str, blocks: list[dict], request: str = ""
+    ) -> tuple[list[dict], str | None]:
+        """A line added to a page joins the list it belongs in, and says which block to put it
+        after. The bot cannot see a page's contents when it reads the message — only its
+        sub-pages — so "add Uncharted to the films" would otherwise land as a stray paragraph
+        at the very end, under whatever section happens to be last."""
         if not blocks or len(blocks) > MAX_MATCHED_LINES:
-            return blocks
+            return blocks, None
         if any(b.get("type") != "paragraph" for b in blocks):
-            return blocks  # the model formatted it itself: leave it alone
+            return blocks, None  # the model formatted it itself: leave it alone
         try:
             children = await self._p.block_children(page_id)
         except NotionError as e:
             log.info("could not read %s to match its list (%s)", page_id, e)
-            return blocks
-        # A Notion page almost always ends with an empty paragraph, and often with an empty
-        # tick box someone left behind; neither says the list is over.
-        meaningful = [b for b in children if b.get("type") != "paragraph" or _block_text(b)]
-        last = meaningful[-1] if meaningful else None
-        if last is None or last.get("type") not in LIST_BLOCKS:
-            return blocks  # the page does not end in a list
-        kind = last["type"]
+            return blocks, None
+        lists = [s for s in _sections(children) if s.list_kind]
+        if not lists:
+            return blocks, None  # nothing on the page to join
+        chosen = lists[-1]
+        if len(lists) > 1:
+            # Several lists, each under its own heading: only the model can say that a film
+            # goes under "to watch" and not under "podcasts". Its answer is a choice between
+            # headings the executor has already read — a short call, and only on this shape of
+            # page. Without it (no request text, no picker, a failed call) the line goes to the
+            # last list, which is what it did before.
+            picked = await self._pick(request, blocks, [s.title for s in lists])
+            chosen = lists[picked] if picked is not None else chosen
+        kind = chosen.list_kind
+        assert kind is not None
         extra = {"checked": False} if kind == "to_do" else {}
-        return [{"object": "block", "type": kind,
-                 kind: {"rich_text": b["paragraph"]["rich_text"], **extra}}
-                for b in blocks]
+        joined = [{"object": "block", "type": kind,
+                   kind: {"rich_text": b["paragraph"]["rich_text"], **extra}}
+                  for b in blocks]
+        return joined, (chosen.tail or {}).get("id")
 
-    async def _append(self, block_id: str, blocks: list[dict]) -> list[str]:
+    async def _pick(self, request: str, blocks: list[dict], titles: list[str]) -> int | None:
+        if self._sections is None or not request.strip():
+            return None
+        line = " ".join(_block_text(b) for b in blocks).strip()
+        return await self._sections.pick(request, line, titles)
+
+    async def _append(
+        self, block_id: str, blocks: list[dict], after: str | None = None
+    ) -> list[str]:
         ids: list[str] = []
         for i in range(0, len(blocks), MAX_BLOCKS_PER_REQUEST):
-            data = await self._p.append_blocks(block_id, blocks[i:i + MAX_BLOCKS_PER_REQUEST])
+            data = await self._p.append_blocks(
+                block_id, blocks[i:i + MAX_BLOCKS_PER_REQUEST], after)
             ids += [b["id"] for b in data.get("results", []) if "id" in b]
+            if after and ids:
+                after = ids[-1]  # the next batch follows the one just written, not the list
         return ids
 
     async def _create(self, parent: dict, properties: dict, blocks: list[dict]) -> dict:
@@ -211,8 +264,8 @@ class Executor:
             )
         if isinstance(cmd, AppendBlocks):
             blocks = await self._prepare(content_blocks(cmd.paragraphs, cmd.markdown))
-            blocks = await self._match_list(cmd.page_id, blocks)
-            ids = await self._append(cmd.page_id, blocks)
+            blocks, after = await self._match_list(cmd.page_id, blocks, cmd.request)
+            ids = await self._append(cmd.page_id, blocks, after)
             return ExecutionResult(
                 cmd,
                 cmd.page_id,

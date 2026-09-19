@@ -76,6 +76,12 @@ def asks_for_page(raw_text: str) -> bool:
     return make >= 0 and page > make
 
 
+def _request(target: object, raw_text: str) -> str:
+    """The words that may be shown to the cloud model when it picks which list on the page the
+    line joins — nothing at all for a target the user marked local-only."""
+    return "" if getattr(target, "local_only", False) else _one_line(raw_text)
+
+
 def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
     t = c.target
     if intent == "create" and t.kind == "database":
@@ -89,7 +95,8 @@ def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
             # watch the film X", but a sub-page with nothing in it is never what that meant —
             # the line belongs on the page, where the executor fits it to the list it lands in.
             return AppendBlocks(page_id=t.id, target_name=t.name, page_title=t.name,
-                                paragraphs=[title], markdown=True)
+                                paragraphs=[title], markdown=True,
+                                request=_request(t, raw_text))
         return CreatePage(parent_page_id=t.id, target_name=t.name, title=title,
                           body=body, markdown=True)
     if intent == "update":
@@ -100,7 +107,8 @@ def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
         page = c.item
         return AppendBlocks(page_id=page.id if page else t.id, target_name=t.name,
                             page_title=page.title if page else t.name,
-                            paragraphs=markdown_lines(c.content), markdown=True)
+                            paragraphs=markdown_lines(c.content), markdown=True,
+                            request=_request(t, raw_text))
     if intent == "search":
         title = t.title_field()
         filters = _search_filters(c)

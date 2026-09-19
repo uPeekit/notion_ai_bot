@@ -64,6 +64,7 @@ from app.llm.image_search import ImageSearch
 from app.llm.ollama import OllamaClient
 from app.llm.planner import Planner
 from app.llm.research import WebResearcher
+from app.llm.sections import SectionPicker
 from app.logging_setup import configure
 from app.notion.descriptions import Descriptions, WorkspaceNote
 from app.notion.direct import DirectNotionProvider
@@ -245,7 +246,12 @@ def build(
     llm = llm_factory(settings)
     validator = SemanticValidator()
     policy = Policy(Thresholds.from_settings(settings))
-    executor = Executor(provider, images=images)
+    # Which list on a page a line joins: a page with two lists under two headings needs the
+    # model to choose. Cheap and rare enough that it shares the interpreter's model.
+    sections = (SectionPicker(settings.anthropic_api_key.get_secret_value(),
+                              settings.claude_model)
+                if uses_cloud(settings) else None)
+    executor = Executor(provider, images=images, sections=sections)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load,

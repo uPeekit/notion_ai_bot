@@ -215,6 +215,11 @@ IMAGE_FILTER_PROMPT = """Ты отбираешь картинки для стр�
 логотипы и всё не по теме — если их не просили. Лучше меньше, но по делу; если не подходит \
 ничего — пустой список."""
 
+SECTION_PROMPT = """На странице Notion несколько разделов со списками, и надо решить, в какой из \
+них дописать строку. Дан запрос пользователя, сама строка и пронумерованные заголовки разделов. \
+Верни в section номер подходящего раздела: смотри по смыслу (фильм — в раздел про просмотр, \
+книга — в раздел про чтение). Если ни один явно не подходит — 0."""
+
 # The line a research call answers with instead of a result when it needs the user first.
 RESEARCH_QUESTION = "ВОПРОС:"
 # The heading research images are filed under, and the sources heading they go in front of.
@@ -307,6 +312,12 @@ def workspace_summary(targets: list[Target], note: str) -> str:
 
 def image_filter_message(request: str, query: str, listing: str) -> str:
     return f"{research_message(request, query)}\n\nНайденные картинки:\n{listing}"
+
+
+def section_message(request: str, line: str, headings: list[str]) -> str:
+    listing = "\n".join(f"{i}. {h}" for i, h in enumerate(headings, start=1))
+    return (f"Сообщение пользователя: «{request.strip()}»\nСтрока: «{line.strip()}»\n\n"
+            f"Разделы страницы:\n{listing}")
 
 
 def research_message(request: str, query: str) -> str:

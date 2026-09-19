@@ -780,9 +780,9 @@ def slow_append(bot: Bot):
     a concurrency test proves nothing."""
     real = bot.notion.append_blocks
 
-    async def append(block_id, children):
+    async def append(block_id, children, after=None):
         await asyncio.sleep(0)
-        return await real(block_id, children)
+        return await real(block_id, children, after)
 
     bot.notion.append_blocks = append
 

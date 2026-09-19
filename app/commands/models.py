@@ -51,6 +51,10 @@ class AppendBlocks(Strict):
     page_title: str
     paragraphs: list[str]
     markdown: bool = False  # paragraphs are Markdown lines; the inbox keeps plain text verbatim
+    # The user's own words, used only to choose which list on the page a short line joins. Empty
+    # means the page must not be described to the cloud model (a local-only target) or there is
+    # nothing to choose from, and the line goes to the end of the page.
+    request: str = ""
 
 
 class Search(Strict):

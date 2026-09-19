@@ -78,8 +78,8 @@ class FakeNotionProvider:
         self.calls.append(("block_children", block_id))
         return list(self.page_blocks.get(block_id, []))
 
-    async def append_blocks(self, block_id, children) -> dict:
-        self.calls.append(("append_blocks", block_id, children))
+    async def append_blocks(self, block_id, children, after=None) -> dict:
+        self.calls.append(("append_blocks", block_id, children, after))
         if self.fail_append_blocks:
             raise self.fail_append_blocks
         return {"results": [{"id": f"blk-{i}"} for i, _ in enumerate(children)]}

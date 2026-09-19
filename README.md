@@ -23,8 +23,11 @@ phrasing:
 - **"отметь молоко купленным"** → finds the matching row and updates it.
 - **"в идеи: попробовать сыр с плесенью"**, **"надо посмотреть фильм Uncharted"** → appends to
   a page. A line with nothing under it always goes *onto* the page, never into a sub-page of
-  its own, and it joins the list the page ends with (a tick box under «смотреть» becomes
-  another tick box), so adding a film to a list does not leave a stray paragraph under it.
+  its own, and it joins a list that is already there — a tick box under «смотреть» becomes
+  another tick box, right under that list rather than at the bottom of the page. When the page
+  has several lists under several headings («смотреть», «подкасты»), the bot asks the model
+  which section the line belongs in; with one list, or a page marked local-only, it does not
+  ask anyone and uses the last list.
 - **"что у меня в покупках на Rimi?"** → searches and lists matches.
 - **"запиши в прост чекбоксами: паспорт, зарядка, наушники"** → formatted text: headings,
   bulleted and numbered lists, checkboxes, quotes, code, **bold**/*italic*, links.
@@ -204,9 +207,10 @@ internet addresses, never to your machine or local network.
 If a message makes no sense as heard — a voice note that came out as «**не** найди картинки…»
 — the bot asks back instead of guessing; answer in your own words and it re-reads the request.
 
-A search takes 20–40 s (the chat shows "typing…" meanwhile) and costs about 3–5 ¢ with Haiku
-(`RESEARCH_MODEL`); `claude-sonnet-5` digs deeper for roughly three times that. Undo removes
-the whole written result.
+A search takes 20–40 s (the chat shows "typing…" meanwhile) and costs roughly 10–15 ¢ with
+`claude-sonnet-5`, which is what `RESEARCH_MODEL` ships as: this is the call whose writing you
+actually read. `claude-haiku-4-5` does it for about a third of that. Undo removes the whole
+written result.
 
 ## Teaching the bot your workspace
 

@@ -178,10 +178,15 @@ class DirectNotionProvider:
                 break
         return out
 
-    async def append_blocks(self, block_id: str, children: list[dict]) -> dict:
-        return await self._request(
-            "PATCH", f"/blocks/{block_id}/children", {"children": children}
-        )
+    async def append_blocks(
+        self, block_id: str, children: list[dict], after: str | None = None
+    ) -> dict:
+        """`after` puts the blocks right below that child instead of at the end of the page —
+        how a line joins a list that has more sections under it."""
+        body: dict = {"children": children}
+        if after:
+            body["after"] = after
+        return await self._request("PATCH", f"/blocks/{block_id}/children", body)
 
     async def delete_block(self, block_id: str) -> dict:
         return await self._request("DELETE", f"/blocks/{block_id}")

@@ -34,9 +34,10 @@ class Settings(BaseSettings):
     claude_model: str = "claude-haiku-4-5"
     claude_timeout_s: float = 30.0
     llm_cloud: bool = True
-    # "Find X on the web and write it to Y": Claude with web search. Haiku keeps it to a few
-    # cents a search; claude-sonnet-5 digs deeper for about three times that.
-    research_model: str = "claude-haiku-4-5"
+    # "Find X on the web and write it to Y": Claude with web search. Sonnet digs deeper and
+    # writes the better note, for about three times what Haiku costs — a search already costs
+    # far more than an ordinary message, and this is the call whose quality you read.
+    research_model: str = "claude-sonnet-5"
     research_max_searches: int = Field(3, ge=1, le=20)
     # Multi-step goals: the model that splits a goal into steps and checks after each one. Its
     # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
