@@ -6,10 +6,9 @@ import httpx2
 import pytest
 
 from app.llm.base import LLMInvalidOutput, LLMUnavailable
-from app.llm.claude import UNSUPPORTED_KEYWORDS, ClaudeClient, api_schema
+from app.llm.claude import ClaudeClient, check, flat_schema, to_interpretation
 from app.llm.context import ContextBuilder
 from app.llm.output_schema import build_schema
-from tests.test_ollama import good_answer
 from tools.sample_workspace import SAMPLE_NOW, sample_snapshot
 
 KEY = "sk-ant-test-key"
@@ -41,6 +40,20 @@ def make(handler) -> ClaudeClient:
     return ClaudeClient(KEY, "claude-haiku-4-5", client=sdk)
 
 
+def flat(ctx, **over):
+    """good_answer(ctx) in the flat shape Claude answers in."""
+    answer = {
+        "notes": "", "intent": {"value": "create", "confidence": 0.95},
+        "candidates": [{
+            "target_name": "x", "target": "t2", "confidence": 0.9, "item": "",
+            "item_candidates": [], "item_text": "", "fields": [], "content": "",
+            "search_query": "",
+        }],
+    }
+    answer["candidates"][0].update(over)
+    return answer
+
+
 def _walk(node):
     if isinstance(node, dict):
         yield node
@@ -51,24 +64,39 @@ def _walk(node):
             yield from _walk(v)
 
 
-def test_api_schema_drops_unsupported_keywords_and_keeps_the_rest(ctx):
-    schema = build_schema(ctx)
-    cleaned = api_schema(schema)
-    nodes = list(_walk(cleaned))
-    assert not any(UNSUPPORTED_KEYWORDS & n.keys() for n in nodes)
-    for n in nodes:
-        if n.get("type") == "object":
-            assert n["additionalProperties"] is False
-        if n.get("type") == "array":
-            assert "items" in n
-    # the original is untouched: Ollama still gets the bounds
-    assert schema["properties"]["candidates"]["maxItems"] == 3
-    assert cleaned["properties"]["candidates"].keys() == {"type", "items"}
+def test_flat_schema_has_no_unions_and_closes_every_object(ctx):
+    nodes = list(_walk(flat_schema(ctx)))
+    assert not any("anyOf" in n or isinstance(n.get("type"), list) for n in nodes)
+    assert all(n["additionalProperties"] is False for n in nodes if n.get("type") == "object")
 
 
-def test_api_schema_gives_an_itemless_array_an_items_schema():
-    assert api_schema({"type": "array", "maxItems": 0}) == {
-        "type": "array", "items": {"type": "string"}}
+def test_flat_answer_converts_to_one_that_fits_the_full_schema(ctx):
+    tk = "t2"
+    fks = ctx.field_keys(tk)
+    title = next(fk for fk in fks if ctx.ref(fk).field_type == "title")
+    answer = to_interpretation(flat(ctx, fields=[
+        {"key": title, "status": "value", "value_json": '"Молоко"', "confidence": 0.9,
+         "source_text": "молоко"},
+    ]), ctx)
+    assert check(answer, build_schema(ctx)) == ""
+    c = answer["candidates"][0]
+    assert c["item"] is None and c["content"] is None  # "" came back as null
+    assert c["fields"][title]["value"] == "Молоко"
+    assert all(c["fields"][fk] == {"status": "not_mentioned"} for fk in fks if fk != title)
+    assert c["target_name"] == ctx.target_labels[tk]
+
+
+def test_a_converted_answer_breaking_the_full_schema_is_reported(ctx):
+    answer = to_interpretation(flat(ctx, item="t2.i999"), ctx)
+    assert "item" in check(answer, build_schema(ctx))
+
+
+def test_value_json_that_is_not_json_is_a_value_error(ctx):
+    fk = ctx.field_keys("t2")[0]
+    with pytest.raises(ValueError, match="not JSON"):
+        to_interpretation(flat(ctx, fields=[
+            {"key": fk, "status": "value", "value_json": "Молоко", "confidence": 1,
+             "source_text": ""}]), ctx)
 
 
 async def test_interpret_sends_system_schema_and_returns_the_answer(ctx):
@@ -78,7 +106,7 @@ async def test_interpret_sends_system_schema_and_returns_the_answer(ctx):
         seen["path"] = req.url.path
         seen["key"] = req.headers.get("x-api-key")
         seen["body"] = json.loads(req.content)
-        return reply(json.dumps(good_answer(ctx)))
+        return reply(json.dumps(flat(ctx)))
 
     async with make(handler) as c:
         interp, trace = await c.interpret("купи молоко", ctx, build_schema(ctx))
@@ -88,28 +116,27 @@ async def test_interpret_sends_system_schema_and_returns_the_answer(ctx):
     assert b["system"].startswith("Ты — модуль интерпретации")
     assert [m["role"] for m in b["messages"]] == ["user"]
     assert "купи молоко" in b["messages"][0]["content"]
-    assert b["output_config"]["format"]["type"] == "json_schema"
-    assert "maxItems" not in b["output_config"]["format"]["schema"]["properties"]["candidates"]
+    assert b["output_config"]["format"] == {"type": "json_schema", "schema": flat_schema(ctx)}
     assert interp.best.target == "t2"
     assert trace.model == "claude-haiku-4-5" and trace.attempts == 1
     assert (trace.prompt_tokens, trace.output_tokens) == (3800, 300)
 
 
 async def test_an_answer_that_fails_validation_is_retried_once_with_the_error(ctx):
-    bad = good_answer(ctx)
+    bad = flat(ctx)
     bad["intent"]["confidence"] = 1.7  # the bound structured outputs could not enforce
     bodies = []
 
     def handler(req):
         bodies.append(json.loads(req.content))
-        return reply(json.dumps(bad if len(bodies) == 1 else good_answer(ctx)))
+        return reply(json.dumps(bad if len(bodies) == 1 else flat(ctx)))
 
     async with make(handler) as c:
         interp, trace = await c.interpret("x", ctx, build_schema(ctx))
     assert trace.attempts == 2 and interp.intent.confidence == 0.95
     retry = bodies[1]["messages"]
     assert [m["role"] for m in retry] == ["user", "assistant", "user"]
-    assert "less than or equal to 1" in retry[2]["content"]
+    assert "intent/confidence" in retry[2]["content"]
 
 
 async def test_two_invalid_answers_raise_invalid_output(ctx):
@@ -178,7 +205,7 @@ async def test_claude_gets_the_cloud_view_of_the_context():
 
     def handler(req):
         seen["body"] = json.loads(req.content)
-        return reply(json.dumps(good_answer(ctx)))
+        return reply(json.dumps(flat(ctx)))
 
     async with make(handler) as c:
         await c.interpret("x", ctx, build_schema(ctx))

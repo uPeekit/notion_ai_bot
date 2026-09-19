@@ -81,6 +81,18 @@ TARGET_NAME_RULE = (
 )
 
 
+# Appended for Claude, which answers in the flat shape of app.llm.claude.flat_schema.
+FLAT_FORMAT_NOTE = """
+
+Формат ответа (упрощённый):
+- item, item_text, content, search_query: пустая строка "" вместо null.
+- fields — список, а не объект: {"key": ключ поля, "status": ..., "value_json": ..., \
+"confidence": ..., "source_text": ...}. Поля со статусом not_mentioned можно не перечислять.
+- value_json — значение в виде JSON-строки: "\\"Купить хлеб\\"", "42", "true", \
+"[\\"t1.f2.o1\\"]", "{\\"start\\":\\"2026-09-12\\",\\"end\\":null}". Для ambiguous — JSON-массив \
+вариантов. Для explicit_null и not_mentioned — "null"; confidence тогда 0."""
+
+
 def system_prompt(ctx: Context) -> str:
     """SYSTEM_PROMPT adjusted to the answer shape ctx asks for (output_schema reads the same two
     switches). With both off it is SYSTEM_PROMPT exactly — the baseline the benchmark compares

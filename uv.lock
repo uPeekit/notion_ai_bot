@@ -458,6 +458,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "faster-whisper" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-telegram-bot" },
@@ -467,7 +468,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -478,6 +478,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=1.7" },
     { name = "faster-whisper", specifier = ">=1.2" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "python-telegram-bot", specifier = "~=22.8" },
@@ -487,7 +488,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "jsonschema", specifier = ">=4.23" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "ruff", specifier = ">=0.6" },

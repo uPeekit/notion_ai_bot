@@ -1,47 +1,120 @@
 """Claude (Anthropic API) as the interpreter. Same contract as `OllamaClient`: one structured
-answer per message, validated by `Interpretation`, one corrective retry. Every API failure —
-network, rate limit, auth, credit, overload — surfaces as `LLMUnavailable`, which is what the
-fallback wrapper switches to the local model on."""
+answer per message, validated against the request's own schema, one corrective retry. Every API
+failure — network, rate limit, auth, credit, overload — surfaces as `LLMUnavailable`, which is
+what the fallback wrapper switches to the local model on.
+
+Claude's structured outputs compile a schema with at most 16 union-typed parameters; ours has
+one branch per target and four per field (84 on a real workspace). So Claude answers in a flat
+shape without unions — fields as a list of {key, status, value_json}, "" for null — which
+`to_interpretation` turns back into the usual answer, and `jsonschema` then checks that against
+the full per-request schema: the same guarantees the local model's grammar gives."""
 
 from __future__ import annotations
 
-import copy
+import json
 import time
 from typing import Any
 
 import anthropic
+import jsonschema
 from pydantic import ValidationError
 
 from app.interpretation.models import Interpretation
 from app.llm.base import LLMInvalidOutput, LLMTrace, LLMUnavailable
 from app.llm.context import Context
-from app.llm.prompts import build_messages, retry_message
+from app.llm.output_schema import INTENTS
+from app.llm.prompts import FLAT_FORMAT_NOTE, build_messages, retry_message
 
 MAX_ATTEMPTS = 2
-# Structured outputs reject these keywords; `Interpretation` (and the resolver after it) check
-# what they expressed — confidence bounds, candidate counts — on the answer instead.
-UNSUPPORTED_KEYWORDS = frozenset(
-    {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-     "minLength", "maxLength", "minItems", "maxItems", "uniqueItems"}
-)
+STATUSES = ["value", "ambiguous", "explicit_null", "not_mentioned"]
 
 
-def api_schema(schema: dict) -> dict:
-    """The output schema as the structured-outputs API accepts it: unsupported constraints
-    removed, and every array given an `items` (the "no items at all" array we build as
-    `maxItems: 0` would otherwise lose its only constraint)."""
+def _obj(props: dict) -> dict:
+    return {"type": "object", "properties": props, "required": list(props),
+            "additionalProperties": False}
 
-    def clean(node: Any) -> Any:
-        if isinstance(node, list):
-            return [clean(n) for n in node]
-        if not isinstance(node, dict):
-            return node
-        out = {k: clean(v) for k, v in node.items() if k not in UNSUPPORTED_KEYWORDS}
-        if out.get("type") == "array" and "items" not in out:
-            out["items"] = {"type": "string"}
-        return out
 
-    return clean(copy.deepcopy(schema))
+def flat_schema(ctx: Context) -> dict:
+    """The answer shape Claude is constrained to: no unions at all."""
+    string, number = {"type": "string"}, {"type": "number"}
+    field_keys = [fk for tk in ctx.target_keys() for fk in ctx.field_keys(tk)]
+    field = _obj({
+        "key": {"enum": field_keys} if field_keys else string,
+        "status": {"enum": STATUSES},
+        "value_json": string,
+        "confidence": number,
+        "source_text": string,
+    })
+    candidate = _obj({
+        "target_name": string,
+        "target": {"enum": ctx.target_keys()},
+        "confidence": number,
+        "item": string,
+        "item_candidates": {"type": "array", "items": string},
+        "item_text": string,
+        "fields": {"type": "array", "items": field},
+        "content": string,
+        "search_query": string,
+    })
+    return _obj({
+        "notes": string,
+        "intent": _obj({"value": {"enum": INTENTS}, "confidence": number}),
+        "candidates": {"type": "array", "items": candidate},
+    })
+
+
+def to_interpretation(flat: dict, ctx: Context) -> dict:
+    """The flat answer in the shape `build_schema` describes. Raises ValueError on a value_json
+    that is not JSON; everything else is left for the schema check to judge."""
+
+    def text_or_none(v: Any) -> Any:
+        return None if v == "" else v
+
+    candidates = []
+    for c in flat.get("candidates", []):
+        tk = c.get("target")
+        fields: dict[str, dict] = {fk: {"status": "not_mentioned"} for fk in ctx.field_keys(tk)}
+        for f in c.get("fields", []):
+            status, key = f.get("status"), f.get("key")
+            try:
+                value = json.loads(f.get("value_json") or "null")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"field {key}: value_json is not JSON ({e})") from None
+            if status == "value":
+                fields[key] = {"status": "value", "value": value,
+                               "confidence": f.get("confidence", 0),
+                               "source_text": f.get("source_text", "")}
+            elif status == "ambiguous":
+                fields[key] = {"status": "ambiguous", "candidates": value,
+                               "source_text": f.get("source_text", "")}
+            else:
+                fields[key] = {"status": status}
+        candidate = {
+            "target": tk,
+            "confidence": c.get("confidence"),
+            "item": text_or_none(c.get("item")),
+            "item_candidates": c.get("item_candidates", []),
+            "item_text": text_or_none(c.get("item_text")),
+            "fields": fields,
+            "content": text_or_none(c.get("content")),
+            "search_query": text_or_none(c.get("search_query")),
+        }
+        if ctx.name_targets and tk in ctx.target_labels:
+            # A thinking aid only; the key is what counts, so the label follows it.
+            candidate = {"target_name": ctx.target_labels[tk], **candidate}
+        candidates.append(candidate)
+    return {"notes": flat.get("notes", ""), "intent": flat.get("intent"),
+            "candidates": candidates}
+
+
+def check(answer: dict, schema: dict) -> str:
+    """"" when the answer fits the full per-request schema, else what is wrong with it."""
+    errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(answer),
+                    key=lambda e: list(e.absolute_path))
+    return "; ".join(
+        f"{'/'.join(map(str, e.absolute_path)) or 'answer'}: {e.message[:200]}"
+        for e in errors[:5]
+    )
 
 
 class ClaudeClient:
@@ -83,9 +156,9 @@ class ClaudeClient:
         self, text: str, context: Context, schema: dict
     ) -> tuple[Interpretation, LLMTrace]:
         base = build_messages(text, context, cloud=True)
-        system = base[0]["content"]
+        system = base[0]["content"] + FLAT_FORMAT_NOTE
         messages: list[dict] = base[1:]
-        output_config = {"format": {"type": "json_schema", "schema": api_schema(schema)}}
+        output_config = {"format": {"type": "json_schema", "schema": flat_schema(context)}}
         start = time.monotonic()
         raw = ""
         error = ""
@@ -107,14 +180,17 @@ class ClaudeClient:
                 error = "output truncated (max_tokens)"
             else:
                 try:
-                    interp = Interpretation.model_validate_json(raw)
-                except ValidationError as e:
+                    answer = to_interpretation(json.loads(raw), context)
+                    error = check(answer, schema)
+                    if not error:
+                        interp = Interpretation.model_validate(answer)
+                except (ValueError, ValidationError) as e:  # JSONDecodeError is a ValueError
                     error = str(e)[:800]
-                else:
+                if not error:
                     return interp, LLMTrace(
                         model=self.model,
-                        messages=[base[0], *messages],
-                        raw_response=raw,
+                        messages=[{"role": "system", "content": system}, *messages],
+                        raw_response=json.dumps(answer, ensure_ascii=False),
                         duration_ms=int((time.monotonic() - start) * 1000),
                         attempts=attempt,
                         prompt_tokens=resp.usage.input_tokens,
@@ -138,4 +214,6 @@ def _describe(e: anthropic.APIError) -> str:
     if isinstance(e, anthropic.APIConnectionError):
         return "claude unreachable"
     status = getattr(e, "status_code", None)
-    return f"claude {status}: {getattr(e, 'message', type(e).__name__)[:200]}"
+    body = getattr(e, "body", None)
+    detail = body.get("error", {}).get("message") if isinstance(body, dict) else None
+    return f"claude {status}: {(detail or getattr(e, 'message', type(e).__name__))[:300]}"

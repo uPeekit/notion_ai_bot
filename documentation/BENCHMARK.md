@@ -300,3 +300,21 @@ On the synthetic set the change is within run-to-run noise (1–2 cases): no reg
 \*Latency is not comparable: the test suite ran on the same machine during this run. Writing the
 reasoning first adds up to ~100 generated tokens, so some slowdown is expected and is still
 to be measured on an idle machine.
+
+## Run 5 (2026-09-19) — Claude Haiku 4.5
+
+Claude answers in a flat shape (`app/llm/claude.py`): its structured outputs refuse schemas with
+more than 16 union-typed parameters, and the per-request schema has one branch per target and
+four per field (84 on the real workspace). The flat answer is converted back and checked with
+`jsonschema` against the full per-request schema, so the guarantees match the local grammar.
+
+| cases | model | target | all | safe | wrong | p50 |
+|---|---|---|---|---|---|---|
+| synthetic (44) | mistral-nemo:12b (Run 4) | 98% | 84% | 89% | 1 | — |
+| synthetic (44) | claude-haiku-4-5 | 100% | 93% | 98% | 0 | 3.6 s |
+| real workspace (19) | mistral-nemo:12b (Run 4) | 74% | 37% | 47% | 7 | 24.0 s |
+| real workspace (19) | claude-haiku-4-5 | 100% | 74% | 95% | 0 | 3.9 s |
+
+On the real workspace, what Haiku still misses is tags it was not allowed to infer (4 cases) and
+«запиши пароль…» read as create rather than append. With a key set, Claude is the interpreter
+and the local model is the fallback.
