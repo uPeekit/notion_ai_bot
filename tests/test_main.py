@@ -336,7 +336,13 @@ async def test_sweeper_ticks_repeatedly_and_survives_a_failed_run(caplog):
     sweeper = main.Sweeper(flusher.flush, interval_s=0.01)
     with caplog.at_level(logging.ERROR, logger="app.main"):
         sweeper.start()
-        await asyncio.sleep(0.05)
+        # Wait for the tick after the failed one rather than a fixed 50 ms: Windows timers tick
+        # every ~15 ms and the first run also formats a traceback, so a fixed sleep sometimes
+        # fitted only one run. Five seconds is a hang, not a slow machine.
+        for _ in range(500):
+            if flusher.calls >= 2:
+                break
+            await asyncio.sleep(0.01)
         await sweeper.stop()
     assert flusher.calls >= 2
     assert any("sweep" in r.getMessage().lower() for r in caplog.records if r.name == "app.main")
