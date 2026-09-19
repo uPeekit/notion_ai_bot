@@ -1548,3 +1548,24 @@ async def test_a_plan_intent_that_reaches_the_validator_is_rejected_not_raised(b
     result = SemanticValidator().validate(
         make_interp("plan", cand(bot.ctx, "t3", 0.9)), bot.ctx, bot.snapshot)
     assert result.rejected and result.issues[0].code == "INTENT_UNKNOWN"
+
+
+async def test_a_null_ish_clarify_is_not_asked(bot):
+    """Live: the model's clarify came back as '{"result":null}' and was shown as the question."""
+    for junk in ('{"result":null}', "null", "  ", "???"):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95, fields={
+            "t2.f1": val("Хлеб", 1.0)})).model_copy(update={"clarify": junk}))
+        reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб")
+        assert "Хлеб" in reply.text, junk
+
+
+async def test_an_empty_search_inside_a_plan_is_a_failed_step(make):
+    planner = FakePlanner(["что у меня в покупках про слона", "добавь в покупки хлеб"])
+    bot = make(planner=planner)
+    bot.notion.data_sources["ds-buy"] = {"id": "ds-buy"}
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.95, search_query="слон")))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Хлеб", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "план", progress=collect([]))
+    assert planner.checks[0] == ["failed"]

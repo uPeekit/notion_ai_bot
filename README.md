@@ -170,8 +170,10 @@ same checks, can search the web, and can ask you something; the plan waits for y
 then carries on. After each step Claude is asked whether the goal is reached or what to do
 next, so a step that failed can be retried differently or skipped. Each finished step is
 reported with its own undo button; the closing message has **«Отменить всё»**, which reverts
-every write of the plan. At most 15 steps. `PLAN_MODEL` (default `claude-haiku-4-5`) does the
-planning; the step's own writes cost the same as single messages.
+every write of the plan. At most 25 steps. `PLAN_MODEL` (default `claude-sonnet-5`) does the
+planning and the check after each step — it is what knows "all of Pelevin's novels", and Haiku
+knew far fewer. That is roughly 1 ¢ per step on top of the step itself (which costs the same
+as a single message).
 
 ## Web search and images
 

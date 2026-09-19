@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-MAX_STEPS = 15  # hard stop, whatever the checker says; a list of items is one step each
+MAX_STEPS = 25  # hard stop, whatever the checker says; a list of items is one step each
 StepStatus = Literal["done", "failed"]
 
 

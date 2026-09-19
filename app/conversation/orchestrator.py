@@ -398,7 +398,10 @@ class Orchestrator:
             # The write did not happen, so the text would be lost otherwise.
             return await self._inbox_or_error(turn, text, code, message=e.message)
         turn.audit(executed=1, notion_page_id=executed.page_id)
-        turn.outcome = "executed"
+        # A search that found nothing did nothing: inside a plan that is a failed step, which
+        # the planner should work around rather than count as progress.
+        turn.outcome = ("failed" if isinstance(command, Search) and not executed.hits
+                        else "executed")
         if executed.undo is not None:
             turn.last_undo = executed.undo.model_dump_json()
         if turn.plan is not None:

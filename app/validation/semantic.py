@@ -14,6 +14,17 @@ from app.notion.snapshot import Field, Item, Option, Target, WorkspaceSnapshot
 MAX_ITEM_CANDIDATES = 8
 MAX_TEXT = 4000
 MAX_CLARIFY = 300  # a question to the user, not an essay
+
+
+def clean_clarify(text: str | None) -> str | None:
+    """The model's question, or None when it is not one. Live, it once "asked"
+    '{"result":null}' — shown to the user as the question. Empty, null-ish, JSON-looking or
+    letterless text is no question."""
+    text = (text or "").strip()
+    if (not text or text.lower() in ("null", "none", "nil")
+            or text[0] in "{[" or not any(ch.isalpha() for ch in text)):
+        return None
+    return text[:MAX_CLARIFY]
 INTENT_OPS: dict[str, frozenset[str]] = {
     "create": frozenset({"create", "create_page"}),
     "update": frozenset({"update"}),
@@ -174,7 +185,7 @@ class SemanticValidator:
         issues: list[Issue] = []
         intent = interp.intent.value
         result = ValidationResult(intent, interp.intent.confidence, [], issues,
-                                  clarify=(interp.clarify or "").strip()[:MAX_CLARIFY] or None)
+                                  clarify=clean_clarify(interp.clarify))
         if intent == "unknown":
             issues.append(Issue("INTENT_UNKNOWN", "message is not a Notion request"))
             return result
