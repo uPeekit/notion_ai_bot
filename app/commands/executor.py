@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from app.commands.models import AppendBlocks, Command, CreateItem, CreatePage, Search, UpdateItem
 from app.llm.sections import SectionPicker
-from app.notion import props
+from app.notion import props, titles
 from app.notion.errors import NotionError
 from app.notion.images import ImageHost
 from app.notion.mapper import (
@@ -38,6 +38,11 @@ MAX_BLOCKS_PER_REQUEST = 100
 MAX_MATCHED_LINES = 3
 LIST_BLOCKS = ("to_do", "bulleted_list_item", "numbered_list_item")
 HEADINGS = ("heading_1", "heading_2", "heading_3")
+
+
+def _title_of(cmd: CreateItem) -> str:
+    value = next((p.value for p in cmd.properties if p.type == "title"), "")
+    return value if isinstance(value, str) else ""
 
 
 def _block_text(block: dict) -> str:
@@ -105,6 +110,9 @@ class ExecutionResult:
     written: list[Written] = field(default_factory=list)
     undo: UndoRecord | None = None
     hits: list[SearchHit] = field(default_factory=list)
+    # The row was already in the table, so nothing was written and there is nothing to undo;
+    # page_id and url point at the row that is already there.
+    existing: bool = False
 
 
 class Executor:
@@ -113,6 +121,14 @@ class Executor:
         self._p = provider
         self._images = images
         self._sections = sections
+
+    async def _duplicate(self, cmd: CreateItem) -> tuple[str, str] | None:
+        """The row this create would duplicate, if the table already has that title."""
+        title = _title_of(cmd)
+        name = next((p.property_name for p in cmd.properties if p.type == "title"), "")
+        if not title.strip():
+            return None
+        return await titles.existing(self._p, cmd.data_source_id, name, title)
 
     async def _prepare(self, blocks: list[dict]) -> list[dict]:
         """Image blocks re-hosted in Notion (see app.notion.images). One that cannot be fetched
@@ -206,9 +222,19 @@ class Executor:
 
     async def run(self, cmd: Command) -> ExecutionResult:
         if isinstance(cmd, CreateItem):
+            duplicate = await self._duplicate(cmd)
+            if duplicate is not None:
+                # Already in the table: writing it again is the one mistake a list of twenty
+                # books makes easily. Its fields are left exactly as they are — a row that says
+                # "Read" must not quietly become "To read" because a plan said so.
+                page_id, url = duplicate
+                return ExecutionResult(cmd, page_id, url, existing=True)
             parent, properties = create_item_payload(cmd)
             page = await self._create(parent, properties, content_blocks(cmd.body, cmd.markdown))
             page_id = page.get("id")
+            # So the next step of the same plan sees it: a list of twenty can repeat itself.
+            titles.remember(cmd.data_source_id, _title_of(cmd), page_id or "",
+                            page.get("url") or "")
             return ExecutionResult(
                 cmd,
                 page_id,

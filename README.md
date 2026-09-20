@@ -178,8 +178,11 @@ a row or a page, add a line to a page, or **change a row that already exists** (
 Карамазовы — читаю»). A step it could not express that way (or that names something the
 workspace does not have) falls back to being read like one of your own messages.
 
-The planner is shown what each database already holds, so a plan adds what is missing instead
-of a second copy of what is there — and it starts from the reading the interpreting model has
+No row is added twice: before a new row is written, the bot reads that database's titles once
+per message and skips a title it already has — «уже есть … — ничего не менял», with a link,
+and the existing row's own fields left untouched. It compares the way you would, ignoring case
+and spacing, so «KGBT+» and «kgbt+» are one book. The planner is also shown what each database
+already holds, so it plans around it — and it starts from the reading the interpreting model has
 already done of the same message, rather than working it out again from scratch.
 
 Either way a step goes through the same validator and policy as anything else, so it can ask

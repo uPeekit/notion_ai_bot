@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from app import texts
 from app.commands.executor import ExecutionResult, SearchHit, Written
 from app.commands.models import AppendBlocks, CreateItem, CreatePage, PropertyWrite, UpdateItem
 from app.conversation.reply import Button, Reply, format_execution, format_question, format_search
@@ -326,3 +327,18 @@ def test_format_question_target_name_ignored_for_types_without_a_with_target_var
                 proposed={"start": "2026-09-14", "end": None, "granularity": "date"})
     reply = format_question(q, [], TOKEN, inbox=False, target_name="Задачи")
     assert reply.text == "Дата «Срок»: 14.09.2026. Верно?"
+
+
+def test_a_row_that_was_already_there_says_so_and_offers_no_undo():
+    cmd = CreateItem(data_source_id="ds", target_name="Books", properties=[
+        PropertyWrite(property_id="title", property_name="Title", type="title",
+                      value="Омон Ра"),
+        PropertyWrite(property_id="st", property_name="Status", type="status",
+                      value={"id": "o1", "name": "To read"})])
+    result = ExecutionResult(cmd, "p1", "https://notion.so/p1", existing=True)
+
+    text = format_execution(result, target_url=None)
+
+    assert text.startswith(texts.ALREADY_THERE.format(target_name="Books",
+                                                      item_title="Омон Ра"))
+    assert "Status" not in text  # its fields were not touched, so none are reported

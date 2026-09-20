@@ -143,9 +143,17 @@ def format_execution(result: ExecutionResult, *, target_url: str | None) -> str:
     if isinstance(cmd, CreateItem):
         title_name = _title_property_name(cmd)
         item_title = next((w.value for w in result.written if w.name == title_name),
-                          cmd.target_name)
-        header = texts.DONE_CREATE_ITEM.format(target_name=cmd.target_name, item_title=item_title)
-        bullets = [w for w in result.written if w.name != title_name]
+                          next((p.value for p in cmd.properties if p.type == "title"),
+                               cmd.target_name))
+        if result.existing:
+            # Nothing was written: the row was already there and its fields were left alone.
+            header = texts.ALREADY_THERE.format(target_name=cmd.target_name,
+                                                item_title=item_title)
+            bullets = []
+        else:
+            header = texts.DONE_CREATE_ITEM.format(target_name=cmd.target_name,
+                                                   item_title=item_title)
+            bullets = [w for w in result.written if w.name != title_name]
     elif isinstance(cmd, UpdateItem):
         header = texts.DONE_UPDATE.format(target_name=cmd.target_name, item_title=cmd.item_title)
         bullets = list(result.written)

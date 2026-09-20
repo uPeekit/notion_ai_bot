@@ -5,6 +5,7 @@ import copy
 from app.interpretation.models import Interpretation
 from app.llm.base import LLMTrace
 from app.llm.context import Context
+from app.notion import props
 from app.notion.errors import NotionError
 from app.notion.snapshot import WorkspaceSnapshot
 
@@ -23,6 +24,7 @@ class FakeNotionProvider:
         self.fail_search: Exception | None = None
         self.fail_create_page: Exception | None = None
         self.fail_append_blocks: Exception | None = None
+        self.fail_query: Exception | None = None
 
     async def me(self) -> dict:
         return {"object": "user", "id": "bot"}
@@ -49,10 +51,15 @@ class FakeNotionProvider:
         return self.data_sources[data_source_id]
 
     async def query_data_source(self, data_source_id, *, filter=None, sorts=None, page_size=50):
-        self.calls.append(("query", data_source_id, page_size))
+        self.calls.append(("query", data_source_id, page_size, filter))
+        if self.fail_query is not None:
+            raise self.fail_query
         if data_source_id not in self.data_sources:
             raise NotionError(404, "object_not_found", data_source_id)
         rows = list(self.items.get(data_source_id, []))
+        wanted = ((filter or {}).get("title") or {}).get("contains")
+        if wanted:  # Notion answers `contains` without regard to case (checked live)
+            rows = [r for r in rows if wanted.casefold() in props.page_title(r).casefold()]
         if sorts and any(
             s.get("timestamp") == "last_edited_time" and s.get("direction") == "descending"
             for s in sorts

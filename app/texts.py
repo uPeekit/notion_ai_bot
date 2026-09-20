@@ -76,6 +76,8 @@ INTENT_UNKNOWN_LABEL = "запрос"
 # ---- execution results ------------------------------------------------------------------------
 
 DONE_CREATE_ITEM = "✅ Добавлено: {target_name} — {item_title}"
+# The row was already in the table: nothing written, nothing changed in it.
+ALREADY_THERE = "↩️ Уже есть в «{target_name}»: {item_title} — ничего не менял"
 DONE_UPDATE = "✅ Обновлено: {target_name} — {item_title}"
 DONE_CREATE_PAGE = "✅ Создано: {target_name} — {item_title}"
 DONE_APPEND = "✅ Дописано: {target_name} — {item_title}"

@@ -10,6 +10,7 @@ from app.commands.models import (
     Search,
     UpdateItem,
 )
+from app.notion import titles
 from app.notion.errors import NotionError
 from app.validation.semantic import SemanticValidator
 from tests.fakes import FakeNotionProvider
@@ -521,3 +522,37 @@ async def test_one_list_on_the_page_needs_no_model_call_even_with_sections(fake)
 
     assert picker.asked == []
     assert fake.calls[-1][2][0]["type"] == "to_do" and fake.calls[-1][3] == "b-Дюна"
+
+
+async def test_a_row_that_is_already_in_the_table_is_not_added_again(fake):
+    """Neither model sees more than a window of a database's rows, so the check that a book is
+    already there belongs here, against the table itself."""
+    fake.data_sources["ds-books"] = {"id": "ds-books"}
+    fake.items["ds-books"] = [{
+        "id": "p1", "url": "https://notion.so/p1",
+        "properties": {"Title": {"type": "title", "title": [{"plain_text": "KGBT+"}]}}}]
+    cmd = CreateItem(data_source_id="ds-books", target_name="Books", properties=[
+        pw("title", "Title", "title", "kgbt+"),
+        pw("st", "Status", "status", {"id": "o1", "name": "To read"})])
+
+    with titles.collect():
+        r = await Executor(fake).run(cmd)
+
+    assert r.existing is True and r.page_id == "p1"
+    assert r.undo is None  # nothing was written, so there is nothing to undo
+    assert not any(c[0] == "create_page" for c in fake.calls)
+    assert r.written == []  # and the row's own Status was left exactly as it was
+
+
+async def test_a_plan_reads_the_table_once_and_never_repeats_itself(fake):
+    fake.data_sources["ds-books"] = {"id": "ds-books"}
+    fake.items["ds-books"] = []
+    ex = Executor(fake)
+
+    with titles.collect():
+        for title in ("Омон Ра", "Чапаев и Пустота", "омон ра"):
+            await ex.run(CreateItem(data_source_id="ds-books", target_name="Books",
+                                    properties=[pw("title", "Title", "title", title)]))
+
+    assert len([c for c in fake.calls if c[0] == "query"]) == 1      # one read of the table
+    assert len([c for c in fake.calls if c[0] == "create_page"]) == 2  # the third was a repeat

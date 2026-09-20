@@ -441,7 +441,8 @@ async def test_f10_create_sub_page(bot):
 async def test_f11_search_formats_hits_without_an_execution_row(bot):
     bot.notion.data_sources["ds-buy"] = {"id": "ds-buy"}
     bot.notion.items["ds-buy"] = [page("b-bread", "Хлеб"), page("b-milk", "Молоко")]
-    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.95, search_query="Rimi")))
+    # The fake applies a title filter the way Notion does, so the query has to match a row.
+    bot.llm.queue(make_interp("search", cand(bot.ctx, "t2", 0.95, search_query="Хлеб")))
     reply = await bot.orch.handle_text(CHAT, USER, "что у меня в покупках?")
 
     assert reply.text.startswith(texts.SEARCH_HEADER)

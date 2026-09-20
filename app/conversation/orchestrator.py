@@ -79,6 +79,7 @@ from app.llm.prompts import plan_context, workspace_summary
 from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
 from app.logging_setup import bind_event
 from app.notion import stats as notion_stats
+from app.notion import titles
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
@@ -977,7 +978,8 @@ class Orchestrator:
         # a log line can be traced back to its `events` row. The id cannot be bound any earlier:
         # it does not exist until `_open` above has returned, and no caller upstream of this
         # method (a Telegram handler) ever sees it at all.
-        with bind_event(turn.event_id), notion_stats.collect() as calls:
+        with (bind_event(turn.event_id), notion_stats.collect() as calls,
+              titles.collect()):
             try:
                 reply = await work(turn)
             except Exception:  # the caller is a chat handler: it gets a Reply, always
