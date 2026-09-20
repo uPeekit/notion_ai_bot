@@ -1852,3 +1852,15 @@ async def test_a_looser_spelling_of_the_right_place_is_still_that_place(make):
     await bot.orch.handle_text(CHAT, USER, "допиши в идеи", progress=collect([]))
 
     assert notion_calls(bot, "append_blocks") != []  # «идеи» vs «Идеи»: the same place
+
+
+def test_the_model_naming_the_field_it_left_empty_is_not_a_question():
+    """Live, in order: '{"result":null}', '-null', '{"value":null}' and 'Clarify null' — the
+    flat answer shape has no null for clarify, so the model writes one in words."""
+    from app.validation.semantic import clean_clarify
+
+    for junk in ('{"result":null}', "-null", '{"value":null}', "\nClarify null",
+                 "clarify: null", "value = none", "  NULL  "):
+        assert clean_clarify(junk) is None, junk
+    kept = "Записать на массаж как задачу или просто заметкой?"
+    assert clean_clarify(kept) == kept

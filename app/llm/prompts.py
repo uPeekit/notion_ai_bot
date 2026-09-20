@@ -166,7 +166,9 @@ STEP_RULE = (
 FLAT_FORMAT_NOTE = """
 
 Формат ответа (упрощённый):
-- item, item_text, content, search_query, web_query: пустая строка "" вместо null.
+- item, item_text, content, search_query, web_query, clarify: пустая строка "" вместо null. \
+Именно пустая строка: не "null", не "-", не "Clarify null" — всё это будет показано \
+пользователю как вопрос.
 - fields — список, а не объект: {"key": ключ поля, "status": ..., "value_json": ..., \
 "confidence": ..., "source_text": ...}. Поля со статусом not_mentioned можно не перечислять.
 - value_json — значение в виде JSON-строки: "\\"Купить хлеб\\"", "42", "true", \

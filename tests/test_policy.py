@@ -213,3 +213,32 @@ def test_intent_confirm_single_candidate_low_intent():
         intent_conf=0.5,
     ))
     assert d.kind == "CLARIFY" and d.questions[0].type == "target"
+
+
+def test_a_required_tick_box_is_never_asked_about():
+    """Live: «Надо купить шампунь» stopped to ask about «Trackable», a checkbox the user had
+    marked required. Notion has no empty checkbox — unticked is its value — so the question
+    can only ever ask the user to confirm the default."""
+    from dataclasses import replace as dc_replace
+
+    ctx, snap = ctx_and_snapshot()
+    buy = snap.target("ds-buy")
+    done = next(f for f in buy.fields if f.type == "checkbox")
+    buy.fields[buy.fields.index(done)] = dc_replace(done, required=True)
+
+    result = SemanticValidator().validate(
+        make_interp("create", cand(ctx, "t2", 0.95, fields={"t2.f1": val("Шампунь")})), ctx, snap)
+    d = Policy(T).evaluate(result)
+
+    assert d.kind == "EXECUTE"
+    assert [q.field_name for q in d.questions] == []
+
+
+def test_a_required_field_of_any_other_type_is_still_asked_about():
+    ctx, snap = ctx_and_snapshot()
+    d = Policy(T).evaluate(SemanticValidator().validate(
+        make_interp("create", cand(ctx, "t3", 0.95, fields={"t3.f1": val("Купить билеты")})),
+        ctx, snap))
+
+    assert d.kind == "CLARIFY"
+    assert [q.field_name for q in d.questions] == ["Приоритет"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal
@@ -19,16 +20,23 @@ MIN_CLARIFY = 8  # the shortest real question is longer than this; junk is short
 # importing app.texts here would close the cycle texts -> policy -> semantic.
 NOT_A_QUESTION = frozenset({"null", "none", "nil", "nan", "undefined", "n/a", "empty", "no",
                             "true", "false"})
+# What the model calls the thing it has nothing to put in, next to one of the words above:
+# "Clarify null", '{"value": null}'. Both halves are noise, so together they are still noise.
+FIELD_WORDS = frozenset({"clarify", "question", "value", "result", "field", "string", "text"})
+_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
 def clean_clarify(text: str | None) -> str | None:
-    """The model's question, or None when it is not one. Live, it has "asked" '{"result":null}'
-    and '-null', both shown to the user as the question. So: JSON, anything null-ish once
-    punctuation is stripped, and anything too short to be a question are all no question."""
+    """The model's question, or None when it is not one. Live, it has "asked" '{"result":null}',
+    '-null' and 'Clarify null', each shown to the user as the question. So: JSON, anything
+    null-ish once punctuation is stripped, anything too short to be a question, and anything
+    whose every word is either a word for nothing or the name of the field itself."""
     text = (text or "").strip()
     bare = text.strip("-–—_.,:;!?*`'\"()[]{} \n\t").casefold()
+    words = _WORD.findall(bare)
     if (not text or text[0] in "{[" or bare in NOT_A_QUESTION
-            or len(bare) < MIN_CLARIFY or not any(ch.isalpha() for ch in bare)):
+            or len(bare) < MIN_CLARIFY or not words
+            or all(w in NOT_A_QUESTION or w in FIELD_WORDS for w in words)):
         return None
     if len(text) <= MAX_CLARIFY:
         return text
