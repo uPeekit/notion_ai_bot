@@ -273,3 +273,35 @@ async def test_workspace_root_is_offered_as_a_page_target_when_enabled(fake, tmp
     assert d.load()[WORKSPACE_ROOT_ID].name == texts.ROOT_TARGET_NAME  # hideable like any other
     plain = await Discovery(fake, d, items_per_target=10, ttl_s=60).refresh()
     assert plain.target(WORKSPACE_ROOT_ID) is None
+
+
+async def test_a_new_row_is_patched_into_the_cached_snapshot(disco, fake):
+    """A plan's next step may name what the step before it created; patching the one row in
+    beats re-reading the whole workspace after every write."""
+    await disco.get()
+    before = len(fake.calls)
+
+    disco.note_new_item("ds-buy", "row-new", "Кефир", "https://notion.so/row-new")
+    snap = await disco.get()
+
+    assert [i.title for i in snap.target("ds-buy").items][0] == "Кефир"
+    assert fake.calls[before:] == []  # nothing was refetched
+    disco.note_new_item("ds-buy", "row-new", "Кефир")  # twice is once
+    assert [i.title for i in snap.target("ds-buy").items].count("Кефир") == 1
+
+
+async def test_patching_keeps_the_item_limit(disco):
+    snap = await disco.get()
+    for n in range(15):
+        disco.note_new_item("ds-buy", f"row-{n}", f"Товар {n}")
+    assert len(snap.target("ds-buy").items) == 10  # items_per_target
+
+
+async def test_a_write_that_cannot_be_patched_falls_back_to_a_refetch(disco, fake):
+    await disco.get()
+    before = len(fake.calls)
+
+    disco.note_new_item("ds-unknown", "row-new", "Кефир")
+    await disco.get()
+
+    assert fake.calls[before:] != []  # the whole snapshot was read again

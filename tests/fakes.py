@@ -149,3 +149,8 @@ class FakeDiscovery:
 
     def invalidate(self) -> None:
         self.invalidations = getattr(self, "invalidations", 0) + 1
+
+    def note_new_item(self, target_id: str, item_id: str, title: str, url: str = "") -> None:
+        """Real Discovery patches its cached snapshot; here the calls are just recorded, and
+        the snapshot this serves is fixed anyway."""
+        self.noted = [*getattr(self, "noted", []), (target_id, item_id, title)]

@@ -87,6 +87,9 @@ PLAN_HEADER = "🗂 План: {goal}"
 PLAN_STEP = "Шаг {n}. {text}"
 PLAN_DONE = "🏁 Готово — {summary} (шагов выполнено: {done} из {total})"
 PLAN_STOPPED = "⏹ План остановлен: {summary} (шагов выполнено: {done} из {total})"
+# A plan whose question nobody answered in time: the plan is gone, and saying so beats leaving
+# the user to notice that the remaining steps never happened.
+PLAN_ABANDONED = " План «{goal}» отменён, невыполненных шагов: {left}."
 
 SEARCH_HEADER = "Нашёл:"
 SEARCH_EMPTY = "Ничего не нашёл."

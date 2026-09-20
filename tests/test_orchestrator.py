@@ -1699,3 +1699,39 @@ async def test_the_planner_is_told_how_the_interpreter_read_the_message(make):
     assert "это про книги" in hint
     assert "Books" in hint            # the target it settled on
     assert "романы Достоевского" in hint  # and what it wanted looked up
+
+
+async def test_every_model_call_of_a_plan_is_in_the_audit_row(make):
+    """One row per message, but a plan makes several calls: the row used to keep the first
+    call's answer under the last call's model name."""
+    steps = [StepSpec(text="добавь в покупки Хлеб", action="create", target="Покупки",
+                      title="Хлеб"),
+             StepSpec(text="добавь в покупки Молоко", action="create", target="Покупки",
+                      title="Молоко")]
+    bot = make(planner=FakePlanner(steps))
+    bot.llm.queue(plan_interp(bot))
+
+    await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect([]))
+
+    [row] = rows(bot, "events")
+    calls = json.loads(row["llm_response"])
+    assert [c["kind"] for c in calls] == ["interpret", "plan", "step", "step", "check"]
+    assert row["llm_model"] == "fake-model, fake-planner x2, plan-step x2"
+    assert calls[1]["steps"] == 2 and calls[2]["step"] == "добавь в покупки Хлеб"
+
+
+async def test_a_plan_whose_question_expires_says_so_instead_of_going_quiet(make):
+    steps = [StepSpec(text="добавь в задачи Купить билеты", action="create", target="Задачи",
+                      title="Купить билеты"),
+             StepSpec(text="добавь в задачи Собрать чемодан", action="create", target="Задачи",
+                      title="Собрать чемодан")]
+    bot = make(planner=FakePlanner(steps))
+    bot.llm.queue(plan_interp(bot))
+    question = await bot.orch.handle_text(CHAT, USER, "собери поездку", progress=collect([]))
+    assert question.buttons  # the plan is waiting on the required field
+
+    bot.clock.advance(901)
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.9)))
+    reply = await bot.orch.handle_text(CHAT, USER, "что там с планом?")
+
+    assert texts.PLAN_ABANDONED.format(goal="Всё разложено", left=2) in reply.text

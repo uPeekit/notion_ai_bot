@@ -80,6 +80,27 @@ class Discovery:
         self._invalidations += 1
         self._force = True
 
+    def note_new_item(self, target_id: str, item_id: str, title: str, url: str = "") -> None:
+        """A row or sub-page a write just created, put straight into the cached snapshot.
+
+        A plan's next step may well refer to what the step before it made, and the whole
+        snapshot used to be thrown away after every write to make sure it could — which meant a
+        plan of sixteen books re-read the entire workspace sixteen times, most of its wall
+        clock. Patching the one thing that changed leaves the rest of the cache alone. Anything
+        this cannot express (an unknown target, a write with no id) falls back to a refetch.
+
+        A field a step *changed* is not patched: `Item` only carries the title (and a hint),
+        the title is what later steps resolve by, and the TTL catches the rest."""
+        target = self._last.target(target_id) if self._last else None
+        if target is None or not item_id or not title:
+            self.invalidate()
+            return
+        if any(i.id == item_id for i in target.items):
+            return
+        target.items.insert(
+            0, Item(id=item_id, title=title, hint=None, last_edited=self._clock(), url=url))
+        del target.items[self._items_per_target:]
+
     async def get(self) -> WorkspaceSnapshot:
         async with self._lock:
             now = self._clock()

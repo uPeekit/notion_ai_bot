@@ -45,11 +45,13 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
 
+from pydantic import ValidationError
+
 from app import texts
 from app.audit.store import AuditStore
 from app.commands.builder import build_command
 from app.commands.executor import ExecutionResult, Executor, UndoRecord
-from app.commands.models import Search
+from app.commands.models import Command, CreateItem, CreatePage, Search
 from app.config import Settings
 from app.conversation.inbox import inbox_command, inbox_target
 from app.conversation.plan import PlanState, PlanStep, StepSpec
@@ -133,6 +135,28 @@ def _hint(interp: Interpretation | None) -> str:
     return "; ".join(parts)[:MAX_HINT]
 
 
+def _abandoned(session: PendingSession) -> str:
+    """A plan lives inside the question it is waiting on: when that question expires, the goal
+    and every step still to come go with it. Saying so beats letting the user discover it."""
+    if not session.plan:
+        return ""
+    try:
+        state = PlanState.model_validate(session.plan)
+    except ValidationError:
+        return ""
+    left = max(len(state.steps) - state.index, 0)
+    return texts.PLAN_ABANDONED.format(goal=state.goal, left=left) if left else ""
+
+
+def _models(calls: list[dict]) -> str:
+    """The models a message used, for the row's one model column: "claude-haiku-4-5,
+    claude-sonnet-5, plan-step x3"."""
+    counts: dict[str, int] = {}
+    for c in calls:
+        counts[c["model"]] = counts.get(c["model"], 0) + 1
+    return ", ".join(m if n == 1 else f"{m} x{n}" for m, n in counts.items())
+
+
 def _short(text: str, limit: int = 48) -> str:
     """What a log line shows of a message: enough to recognise which one it was."""
     one_line = " ".join(text.split())
@@ -213,9 +237,19 @@ class _Turn:
     last_undo: str | None = None
     # Sends an intermediate message (a finished plan step) before the turn's own reply.
     progress: Callable[[Reply], Awaitable[None]] | None = None
+    # Every model call this message made, in order (see `call`).
+    calls: list[dict] = field(default_factory=list)
 
     def audit(self, **cols: Any) -> None:
         self.cols.update(cols)
+
+    def call(self, model: str, kind: str, **detail: Any) -> None:
+        """One model call of this message. A plan makes several — the interpreter that read the
+        message, the planner, a step the planner could not express, the check at the end — and
+        the row used to keep the first one's response under the last one's model name, which
+        made a plan impossible to follow afterwards. They are all recorded now, in order."""
+        self.calls.append({"model": model, "kind": kind,
+                           **{k: v for k, v in detail.items() if v is not None}})
 
     def audit_fallback(self, code: str) -> None:
         self.fallback_error = code
@@ -440,7 +474,7 @@ class Orchestrator:
         if executed.undo is not None:
             turn.last_undo = executed.undo.model_dump_json()
         if turn.plan is not None:
-            self._discovery.invalidate()  # the next step may refer to what this one created
+            self._note_new_item(command, executed)  # the next step may refer to it by name
         if isinstance(command, Search):
             return Reply(format_search(executed))
         execution_id = self._record_execution(turn, executed)
@@ -520,9 +554,12 @@ class Orchestrator:
 
     def _question_note(self, session: PendingSession) -> str:
         """Why a rescued message is in the inbox rather than in its target: nobody answered
-        this. Written next to the text so the user can triage the page later."""
+        this. Written next to the text so the user can triage the page later — including, when
+        the question belonged to a plan, that the rest of the plan never ran. The sweeper has no
+        chat to say that in, so the inbox page is the only place it can be said at all."""
         return texts.INBOX_NOTE_UNANSWERED.format(
-            question=self._question_text(session, self._target_name(session)))
+            question=self._question_text(session, self._target_name(session))) \
+            + _abandoned(session)
 
     def _pending_block(self, session: PendingSession, snapshot: WorkspaceSnapshot) -> dict:
         """What the model is told about the question already on screen: its text, the target's
@@ -554,6 +591,7 @@ class Orchestrator:
             log.warning("planning failed: %s", e)
             return await self._inbox_or_error(turn, text, "PLAN_FAILED")
         turn.plan = PlanState(goal=goal, steps=steps)
+        turn.call(self._planner.model, "plan", steps=len(steps), goal=goal)
         log.info("llm %s planned %d steps: %s", self._planner.model, len(steps), _short(goal))
         lines = [texts.PLAN_HEADER.format(goal=goal)]
         lines += [f"{i}. {step.text}" for i, step in enumerate(steps, start=1)]
@@ -575,7 +613,8 @@ class Orchestrator:
         log.info("step %d/%d: %s", turn.plan.index + 1, len(turn.plan.steps), _short(step.text))
         interp = to_interpretation(step, ctx, turn.plan.field_answers)
         if interp is not None:
-            turn.audit(llm_model=PLAN_STEP_MODEL, interpretation=interp.model_dump_json())
+            turn.call(PLAN_STEP_MODEL, "step", step=step.text)
+            turn.audit(interpretation=interp.model_dump_json())
         else:
             try:
                 interp, trace = await self._llm.interpret(step.text, ctx, build_schema(ctx))
@@ -627,7 +666,11 @@ class Orchestrator:
         except Exception as e:
             log.warning("discovery failed: %s", e)
             return None
-        return await self._planner.next(state, self._workspace(snapshot))
+        verdict = await self._planner.next(state, self._workspace(snapshot))
+        turn.call(self._planner.model, "check", done=verdict.done, next_step=verdict.next_step)
+        log.info("llm %s checked the plan: %s", self._planner.model,
+                 "done" if verdict.done else _short(verdict.next_step))
+        return verdict
 
     def _plan_done(self, turn: _Turn, summary: str, *, stopped: bool = False) -> Reply:
         """The plan's closing message, with one button that undoes every write it made."""
@@ -910,7 +953,7 @@ class Orchestrator:
         if written is None:
             turn.audit_fallback("INBOX_FAILED")
         template = texts.INBOX_SAVED_EXPIRED if written is not None else texts.INBOX_FAILED
-        return template.format(target_name=target.name)
+        return template.format(target_name=target.name) + _abandoned(expired)
 
     # ---- audit -------------------------------------------------------------------------------
 
@@ -946,6 +989,21 @@ class Orchestrator:
                 log.exception("could not close audit event %s", turn.event_id)
             self._log_turn(turn, calls)
         return reply
+
+    def _note_new_item(self, command: Command, executed: ExecutionResult) -> None:
+        """What this step added, handed to discovery so the next step can name it without the
+        whole workspace being re-read. A write that added nothing nameable (an append, an
+        update) leaves the snapshot as it is."""
+        if isinstance(command, CreateItem):
+            title = next((p.value for p in command.properties if p.type == "title"), "")
+            target_id: str = command.data_source_id
+        elif isinstance(command, CreatePage):
+            title, target_id = command.title, command.parent_page_id
+        else:
+            return
+        if executed.page_id and isinstance(title, str):
+            self._discovery.note_new_item(target_id, executed.page_id, title,
+                                          executed.url or "")
 
     @staticmethod
     def _remember_answer(turn: _Turn, executed: ExecutionResult) -> None:
@@ -988,6 +1046,9 @@ class Orchestrator:
     def _finish(self, turn: _Turn) -> None:
         if turn.fallback_error and not turn.cols.get("error"):
             turn.audit(error=turn.fallback_error)
+        if turn.calls:
+            turn.audit(llm_model=_models(turn.calls),
+                       llm_response=json.dumps(turn.calls, ensure_ascii=False))
         self._store.update_event(
             turn.event_id, duration_ms=int((monotonic() - turn.started) * 1000), **turn.cols)
 
@@ -1020,17 +1081,12 @@ class Orchestrator:
             f" | {trace.attempts} attempts" if trace.attempts > 1 else "",
         )
         log.debug("llm %s: %s", trace.model, _short(turn.source_text or "", 200))
-        turn.audit(
-            llm_model=trace.model,
-            # The events table has no token columns, so the counts ride along with the response
-            # they describe. trace.messages (the prompt) is already in llm_context.
-            llm_response=json.dumps({
-                "raw": trace.raw_response, "attempts": trace.attempts,
-                "duration_ms": trace.duration_ms, "prompt_tokens": trace.prompt_tokens,
-                "output_tokens": trace.output_tokens, "done_reason": trace.done_reason,
-            }, ensure_ascii=False),
-            interpretation=interp.model_dump_json(),
-        )
+        # The events table has no token columns, so the counts ride along with the response
+        # they describe. trace.messages (the prompt) is already in llm_context.
+        turn.call(trace.model, "interpret", raw=trace.raw_response, attempts=trace.attempts,
+                  duration_ms=trace.duration_ms, prompt_tokens=trace.prompt_tokens,
+                  output_tokens=trace.output_tokens, done_reason=trace.done_reason)
+        turn.audit(interpretation=interp.model_dump_json())
 
     @staticmethod
     def _audit_result(turn: _Turn, result: ValidationResult, decision: Decision) -> None:
