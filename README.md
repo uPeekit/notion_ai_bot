@@ -220,10 +220,15 @@ internet addresses, never to your machine or local network.
 If a message makes no sense as heard — a voice note that came out as «**не** найди картинки…»
 — the bot asks back instead of guessing; answer in your own words and it re-reads the request.
 
-A search takes 20–40 s (the chat shows "typing…" meanwhile) and costs roughly 10–15 ¢ with
-`claude-sonnet-5`, which is what `RESEARCH_MODEL` ships as: this is the call whose writing you
-actually read. `claude-haiku-4-5` does it for about a third of that. Undo removes the whole
-written result.
+The bot only searches when your message asks it to — «найди», «поищи», «узнай», «с
+картинками», «референсы». «Хочу посмотреть фильм Uncharted» is a line for a list, not a
+research project, and is written as one even if the model offers to look it up.
+
+A search takes one to four minutes with `claude-sonnet-5` (what `RESEARCH_MODEL` ships as) and
+costs roughly 10–15 ¢; the chat says «🔎 Ищу в интернете…» while it runs, and it gives up after
+six minutes rather than leaving you waiting. `claude-haiku-4-5` is faster and about a third of
+the price, with shallower writing. Undo removes the whole written result, and its few minutes
+are counted from the moment the page appears — not from when you sent the message.
 
 ## Teaching the bot your workspace
 

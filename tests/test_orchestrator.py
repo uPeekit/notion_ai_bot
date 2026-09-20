@@ -1736,3 +1736,57 @@ async def test_a_plan_whose_question_expires_says_so_instead_of_going_quiet(make
     reply = await bot.orch.handle_text(CHAT, USER, "что там с планом?")
 
     assert texts.PLAN_ABANDONED.format(goal="Всё разложено", left=2) in reply.text
+
+
+async def test_no_web_search_for_a_message_that_never_asked_for_one(make):
+    """«Хочу посмотреть фильм Uncharted» is a line for a list. The model offers a web search
+    for it anyway, which costs minutes of waiting and writes a whole page instead of a line."""
+    researcher = FakeResearcher()
+    bot = make(researcher=researcher)
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t5", 0.95, web_query="фильм Uncharted",
+                                             fields={"t5.f1": val("Uncharted", 1.0)})))
+
+    reply = await bot.orch.handle_text(CHAT, USER, "Хочу посмотреть фильм Uncharted")
+
+    assert researcher.asked == []                       # nothing was looked up
+    assert notion_calls(bot, "create_page") == []       # and no page was made for it
+    assert notion_calls(bot, "append_blocks") != []     # the line went onto the page
+    assert reply.undo_id is not None
+
+
+async def test_a_search_the_user_did_ask_for_still_happens(make):
+    researcher = FakeResearcher()
+    bot = make(researcher=researcher)
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+
+    await bot.orch.handle_text(CHAT, USER, "найди рецепт борща и запиши в идеи")
+
+    assert researcher.asked != []
+
+
+async def test_a_message_with_nothing_but_a_query_is_looked_up_even_unasked(make):
+    """Dropping the query would leave nothing at all to write."""
+    researcher = FakeResearcher()
+    bot = make(researcher=researcher)
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+
+    await bot.orch.handle_text(CHAT, USER, "рецепт борща в идеи")
+
+    assert researcher.asked != []
+
+
+async def test_the_undo_window_starts_when_the_write_happens(make):
+    """A web search can spend minutes before anything is written; undo used to expire during
+    it, and the button was already dead by the time the page appeared."""
+    class SlowResearcher(FakeResearcher):
+        async def research(self, request, query, media="text"):
+            bot.clock.advance(240)  # four minutes of searching
+            return await super().research(request, query, media)
+
+    bot = make(researcher=SlowResearcher())
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+    await bot.orch.handle_text(CHAT, USER, "найди рецепт борща и запиши в идеи")
+
+    [row] = rows(bot, "executions")
+    written_at = bot.clock.t
+    assert datetime.fromisoformat(row["expires_at"]) > written_at + timedelta(seconds=290)

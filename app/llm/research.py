@@ -30,6 +30,10 @@ from app.llm.prompts import (
 log = logging.getLogger(__name__)
 
 MAX_CONTINUATIONS = 3  # pause_turn resumes: the server-side tool loop stops every 10 steps
+# What a whole search may take before the user is told it did not work out. Measured: Sonnet
+# with pictures took 3m45s on a film query, so this is generous rather than tight — but a
+# search that has not finished by then is not going to be worth the wait.
+DEADLINE_S = 360.0
 MAX_RESULT_CHARS = 20_000
 MAX_FETCH_TOKENS = 8_000  # per fetched page
 PREAMBLE_CHARS = 300  # how far into the answer a lead-in before the first heading may run
@@ -125,7 +129,7 @@ def merge(text: str, images: list[str]) -> str:
 
 class WebResearcher:
     def __init__(
-        self, api_key: str, model: str, *, max_searches: int = 5, timeout_s: float = 180.0,
+        self, api_key: str, model: str, *, max_searches: int = 5, timeout_s: float = 600.0,
         client: anthropic.AsyncAnthropic | None = None,
         is_image: Callable[[str], Awaitable[bool]] | None = None,
         search: ImageSearch | None = None,
@@ -133,7 +137,9 @@ class WebResearcher:
         self.model = model
         self._tools = research_tools(model, max_searches)
         self._client = client or anthropic.AsyncAnthropic(
-            api_key=api_key, timeout=timeout_s, max_retries=1)
+            # No retry: a search that ran long is slow, not broken, and trying again only
+            # doubles the wait. DEADLINE_S is what actually bounds it.
+            api_key=api_key, timeout=timeout_s, max_retries=0)
         # Checks an image link before it is kept (ImageHost.is_image); without one, every
         # link the model found is kept and the executor sorts them out at write time.
         self._is_image = is_image
@@ -148,6 +154,13 @@ class WebResearcher:
         (Claude only proposes the search phrases) and from the pages the text cites, because
         image links a model writes itself are mostly invented. Raises ResearchQuestion when the
         request needs the user first, ResearchError when nothing usable came back."""
+        try:
+            async with asyncio.timeout(DEADLINE_S):
+                return await self._research(request, query, media)
+        except TimeoutError:
+            raise ResearchError(f"gave up after {DEADLINE_S:.0f}s") from None
+
+    async def _research(self, request: str, query: str, media: str) -> str:
         want_text, want_images = media != "images", media != "text"
         text_call = (self._run(RESEARCH_PROMPT, request, query) if want_text
                      else asyncio.sleep(0, result=""))
@@ -258,6 +271,9 @@ class WebResearcher:
         for _ in range(MAX_CONTINUATIONS + 1):
             messages = [user, {"role": "assistant", "content": blocks}] if blocks else [user]
             try:
+                # Not streamed on purpose: max_tokens is small (the length comes from the
+                # server-side tool loop, not from the answer), so the request stays well inside
+                # what a single response may take. DEADLINE_S is the bound that matters.
                 resp = await self._client.messages.create(
                     model=self.model, max_tokens=4096, system=system,
                     messages=messages, tools=self._tools,

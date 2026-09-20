@@ -75,7 +75,7 @@ from app.llm.base import (
 from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
 from app.llm.planner import PlanError, Planner, Verdict
-from app.llm.prompts import plan_context, workspace_summary
+from app.llm.prompts import WEB_WORDS, plan_context, workspace_summary
 from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
 from app.logging_setup import bind_event
 from app.notion import stats as notion_stats
@@ -134,6 +134,22 @@ def _hint(interp: Interpretation | None) -> str:
         f"web: {best.web_query}" if best and best.web_query else "",
     ) if p]
     return "; ".join(parts)[:MAX_HINT]
+
+
+def _asked_to_search(raw_text: str) -> bool:
+    """Did the user actually ask for something to be looked up? A search is minutes of waiting
+    and a page rather than a line, so it takes a word of theirs to start one."""
+    text = raw_text.lower()
+    return any(w in text for w in WEB_WORDS)
+
+
+def _has_something_to_write(candidate: Any) -> bool:
+    """Is there anything to write without searching first? A title the user gave is enough; a
+    message that names only what to look up ("find a borsch recipe") has nothing else."""
+    if (candidate.content or "").strip():
+        return True
+    return any(f.status == "value" and str(f.value or "").strip()
+               for f in candidate.fields.values())
 
 
 def _abandoned(session: PendingSession) -> str:
@@ -493,8 +509,16 @@ class Orchestrator:
         if (candidate is None or not candidate.web_query
                 or result.intent not in ("create", "append")):
             return decision, None
+        if not _asked_to_search(text) and _has_something_to_write(candidate):
+            # The model offers a search for "I want to watch the film X" as readily as for
+            # "find a borsch recipe". The first costs minutes of waiting, a page instead of a
+            # line in the list, and a few cents — for a title the user already gave. Whether a
+            # search was asked for is in their own words, so it is decided here, not by a model.
+            log.info("no search: nothing in the message asks for one")
+            return replace(decision, candidate=replace(candidate, web_query=None)), None
         if self._researcher is None:
             return decision, await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
+        await self._progress(turn, Reply(texts.SEARCHING_THE_WEB))
         try:
             found = await self._researcher.research(text, candidate.web_query,
                                                     candidate.web_media)
@@ -687,7 +711,7 @@ class Orchestrator:
                            batch=[UndoRecord.model_validate_json(u) for u in state.undo])
         execution_id = self._store.add_execution(
             turn.event_id, turn.chat_id, None, batch.model_dump_json(),
-            turn.now + timedelta(seconds=self._s.undo_window_s),
+            self._clock() + timedelta(seconds=self._s.undo_window_s),  # from the last write
         )
         return Reply(text, [[Button(f"u:{execution_id}", texts.BTN_UNDO_ALL)]],
                      undo_id=execution_id)
@@ -1063,9 +1087,12 @@ class Orchestrator:
         Plan 3b after the reply is actually sent (there is no message id at this point)."""
         if result.undo is None:
             return None
+        # Measured from the write, not from when the message arrived: a web search can spend
+        # four minutes before anything is written, and undo used to expire during it — the user
+        # pressed the button two minutes after the page appeared and was told it was too late.
         return self._store.add_execution(
             turn.event_id, turn.chat_id, None, result.undo.model_dump_json(),
-            turn.now + timedelta(seconds=self._s.undo_window_s),
+            self._clock() + timedelta(seconds=self._s.undo_window_s),
         )
 
     @staticmethod

@@ -85,6 +85,9 @@ DONE_LINK = "Открыть: {url}"
 
 # ---- multi-step plans -------------------------------------------------------------------------
 
+# Sent before a web search starts: it takes minutes, and silence reads as a hang.
+SEARCHING_THE_WEB = "🔎 Ищу в интернете, это займёт пару минут…"
+
 PLAN_HEADER = "🗂 План: {goal}"
 PLAN_STEP = "Шаг {n}. {text}"
 PLAN_DONE = "🏁 Готово — {summary} (шагов выполнено: {done} из {total})"
