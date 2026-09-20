@@ -83,3 +83,13 @@ def test_the_planner_is_shown_every_field_it_could_fill_and_which_are_required()
     assert "поле «Задача» (title, обязательное)" in summary
     assert "поле «Приоритет» (select, обязательное): A, B, C" in summary
     assert "Created time" not in summary  # read-only fields are not a step's business
+
+
+def test_the_planner_is_shown_what_a_database_already_holds():
+    """So a plan adds what is missing instead of a second copy of what is there."""
+    from app.llm.prompts import workspace_summary
+
+    summary = workspace_summary(sample_snapshot().targets, note="")
+
+    assert "уже есть: «Хлеб», «Молоко»" in summary
+    assert "уже есть" not in summary.split("[страница]")[-1]  # pages have sub-pages, not rows

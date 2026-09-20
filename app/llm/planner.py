@@ -30,8 +30,9 @@ def _obj(props: dict) -> dict:
 # the model when action is "free" or a name does not resolve.
 STEP_SCHEMA = _obj({
     "text": _STRING,
-    "action": {"enum": ["create", "append", "free"]},
+    "action": {"enum": ["create", "append", "update", "free"]},
     "target": _STRING,
+    "item": _STRING,
     "title": _STRING,
     "content": _STRING,
     "fields": {"type": "array", "items": _obj({"name": _STRING, "value": _STRING})},
@@ -70,9 +71,11 @@ class Planner:
     async def aclose(self) -> None:
         await self._client.close()
 
-    async def plan(self, request: str, workspace: str) -> tuple[str, list[StepSpec]]:
-        """The goal and its steps. Raises PlanError when no usable plan came back."""
-        data = await self._ask(PLAN_PROMPT, PLAN_SCHEMA, plan_message(request, workspace))
+    async def plan(self, request: str, workspace: str,
+                   hint: str = "") -> tuple[str, list[StepSpec]]:
+        """The goal and its steps. `hint` is what the interpreter already made of the message.
+        Raises PlanError when no usable plan came back."""
+        data = await self._ask(PLAN_PROMPT, PLAN_SCHEMA, plan_message(request, workspace, hint))
         goal = str(data.get("goal", "")).strip()
         steps = []
         for raw in data.get("steps", []):

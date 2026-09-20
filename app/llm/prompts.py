@@ -11,6 +11,8 @@ from app.notion.snapshot import Target
 
 # The context's `pending` key under which a plan step carries its plan (goal, done steps).
 PLAN_KEY = "plan"
+# How many of a database's rows the planner is shown, so it can tell what is already there.
+MAX_KNOWN_ITEMS = 30
 
 # Asking for a page: a "make" verb followed by the word for a page. The rule below tells the
 # model the same thing, but it answers "create" for «надо посмотреть фильм X» all the same, so
@@ -238,6 +240,10 @@ PLAN_PROMPT = """Ты — планировщик личного ассистен
 заголовком. Список предметов — по шагу на каждый («добавь в Books книгу Солярис»). Не больше \
 25 шагов, без лишних; не проси подтверждений и ничего не спрашивай.
 
+У каждой базы показано, что в ней уже есть («уже есть»): список неполный (только недавно \
+изменённые записи), но то, что в нём видно, заново не добавляй — если у такой записи надо \
+поменять поле, это шаг update, а если менять нечего, шага вообще не нужно.
+
 Каждый шаг должен что-то записать в Notion: бот не умеет «просто найти и запомнить» — шаг \
 «найди в интернете список X» без места, куда записать, ничего не даст. Что знаешь сам (список \
 романов автора, города для маршрута) — сразу разложи по шагам. Интернет — только вместе с \
@@ -248,8 +254,10 @@ goal — одна фраза: каким будет результат, когд
 Каждый шаг заполняй так, чтобы бот выполнил его сам, без разбора текста:
 - text — человеческая формулировка шага (её видит пользователь): «Добавь в Books книгу Омон Ра».
 - action: create — новая запись в базе или новая подстраница; append — дописать на \
-страницу; free — всё остальное (тогда бот разберёт text моделью).
+страницу; update — изменить поля записи, которая уже есть; free — всё остальное (тогда бот \
+разберёт text моделью).
 - target — точное название места из списка выше («Books», «пройекты»).
+- item — только для update: заголовок изменяемой записи точно как в списке «уже есть».
 - title — заголовок новой записи или страницы (для append не нужен).
 - fields — значения полей: name — имя поля как в Notion («Tags», «Status»), value — \
 значение: название варианта точно как в списке поля, дата в виде YYYY-MM-DD, «да»/«нет» \
@@ -273,8 +281,12 @@ PLAN_NEXT_PROMPT = """Ты следишь за выполнением плана
 используй то, что знаешь сам."""
 
 
-def plan_message(request: str, workspace: str) -> str:
-    return f"{workspace}\n\nСообщение пользователя:\n«{request.strip()}»"
+def plan_message(request: str, workspace: str, hint: str = "") -> str:
+    """The planner's whole request. `hint` is how the interpreting model read this same message
+    a moment ago: a starting point, and wrong often enough to be labelled a guess."""
+    note = (f"\n\nКак это понял разбирающий модуль (подсказка, не решение): {hint.strip()}"
+            if hint.strip() else "")
+    return f"{workspace}\n\nСообщение пользователя:\n«{request.strip()}»{note}"
 
 
 def progress_message(state: PlanState, workspace: str) -> str:
@@ -312,6 +324,11 @@ def workspace_summary(targets: list[Target], note: str) -> str:
             options = (": " + ", ".join(o.name for o in f.options[:20])) if f.options else ""
             note_ = f" — {f.description[:100]}" if f.description else ""
             lines.append(f"    поле «{f.name}» ({marks}){options}{note_}")
+        # What the database already holds, so a plan adds what is missing instead of a second
+        # copy of what is there. Only the most recently edited rows: the list is not complete.
+        if t.kind == "database" and t.items:
+            known = ", ".join(f"«{i.title}»" for i in t.items[:MAX_KNOWN_ITEMS])
+            lines.append(f"    уже есть: {known}")
     if note:
         lines.append(f"\nЗаметка пользователя о воркспейсе: {note}")
     return "\n".join(lines)

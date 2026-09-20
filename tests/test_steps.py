@@ -100,3 +100,25 @@ def test_a_remembered_answer_that_does_not_fit_this_step_is_simply_not_used():
         ctx, {"Приоритет": "не вариант этого поля", "Поле которого нет": "x"})
     best = SemanticValidator().validate(interp, ctx, snap).best
     assert all(f.status != "value" or f.field.type == "title" for f in best.fields.values())
+
+
+def test_an_update_step_resolves_the_row_by_its_title():
+    """«отметь Братья Карамазовы как Reading»: a plan can change a row, not only add one."""
+    ctx, snap = ctx_and_snapshot()
+    interp = to_interpretation(step(
+        action="update", target="Покупки", item="Молоко",
+        fields=[StepField(name="Куплено", value="да")]), ctx)
+    result = SemanticValidator().validate(interp, ctx, snap)
+    best = result.best
+    assert result.intent == "update"
+    assert best.item is not None and best.item.title == "Молоко"
+    by_name = {f.field.name: f for f in best.fields.values() if f.status == "value"}
+    assert by_name["Куплено"].value is True
+    assert "Название" not in by_name  # the row keeps its own title
+
+
+def test_an_update_of_a_row_this_snapshot_does_not_have_goes_to_the_model():
+    ctx, _ = ctx_and_snapshot()
+    assert to_interpretation(step(
+        action="update", target="Покупки", item="Кефир с корицей",
+        fields=[StepField(name="Куплено", value="да")]), ctx) is None

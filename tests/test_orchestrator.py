@@ -1400,13 +1400,15 @@ class FakePlanner:
 
     def __init__(self, steps, *, fail: bool = False, then: list[str] | None = None):
         self.model = "fake-planner"
+        self.hints: list[str] = []
         self.steps = [free(s) if isinstance(s, str) else s for s in steps]
         self.fail, self.then = fail, list(then or [])
         self.checks: list[list[str]] = []
 
-    async def plan(self, request, workspace):
+    async def plan(self, request, workspace, hint=""):
         from app.llm.planner import PlanError
 
+        self.hints.append(hint)
         if self.fail:
             raise PlanError("empty plan")
         assert "Места в Notion" in workspace
@@ -1678,3 +1680,22 @@ async def test_a_field_answered_once_is_not_asked_again_for_every_later_step(mak
     assert all(c[2]["prio"] == {"select": {"id": "o-A"}} for c in created)
     assert reply.text.startswith("🏁")
     assert bot.sessions.get(CHAT, NOW) is None
+
+
+async def test_the_planner_is_told_how_the_interpreter_read_the_message(make):
+    """The interpreter has already read the message to decide it is a plan at all; its reading
+    goes to the planner as a hint instead of being thrown away."""
+    bot = make(planner=(planner := FakePlanner(["добавь в покупки молоко"])))
+    interp = make_interp("plan", cand(bot.ctx, "t2", 0.9, web_query="романы Достоевского"))
+    interp.notes = "это про книги, нужен список романов"
+    interp.candidates[0].target_name = "Books"
+    bot.llm.queue(interp)
+
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "все романы Достоевского", progress=collect([]))
+
+    [hint] = planner.hints
+    assert "это про книги" in hint
+    assert "Books" in hint            # the target it settled on
+    assert "романы Достоевского" in hint  # and what it wanted looked up

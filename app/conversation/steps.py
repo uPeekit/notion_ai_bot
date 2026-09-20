@@ -97,9 +97,20 @@ def to_interpretation(
         log.info("plan step: target %r not found; asking the model", step.target)
         return None
 
+    item_key: str | None = None
+    if step.action == "update":
+        # The row to change, by the title the workspace listed. Not found means the plan is
+        # talking about something this snapshot does not have (or has past its item limit):
+        # the model reads the step itself, and can search for it.
+        item_key = _find(ctx, "item", step.item or step.title, prefix=target_key)
+        if item_key is None:
+            log.info("plan step: item %r not in %r; asking the model",
+                     step.item or step.title, step.target)
+            return None
+
     fields: dict[str, dict] = {k: {"status": "not_mentioned"} for k in ctx.field_keys(target_key)}
     wanted = list(step.fields)
-    if step.title:
+    if step.title and item_key is None:
         title_key = next((k for k in ctx.field_keys(target_key)
                           if (ref := ctx.ref(k)) and ref.field_type == "title"), None)
         if title_key is None:
@@ -134,8 +145,8 @@ def to_interpretation(
 
     candidate = {
         "target_name": ctx.target_labels.get(target_key, step.target),
-        "target": target_key, "confidence": 1.0, "item": None, "item_candidates": [],
-        "item_text": None, "fields": fields, "content": step.content or None,
+        "target": target_key, "confidence": 1.0, "item": item_key, "item_candidates": [],
+        "item_text": step.item or None, "fields": fields, "content": step.content or None,
         "search_query": None, "web_query": step.web_query or None,
         "web_media": step.web_media,
     }

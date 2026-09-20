@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MAX_STEPS = 25  # hard stop, whatever the checker says; a list of items is one step each
 StepStatus = Literal["done", "failed"]
-StepAction = Literal["create", "append", "free"]
+StepAction = Literal["create", "append", "update", "free"]
 WebMedia = Literal["text", "text_and_images", "images"]
 
 
@@ -34,6 +34,7 @@ class StepSpec(BaseModel):
     text: str
     action: StepAction = "free"
     target: str = ""  # the page or database by name, as the workspace lists it
+    item: str = ""  # for update: the row to change, by its title as the workspace lists it
     title: str = ""
     content: str = ""
     fields: list[StepField] = Field(default_factory=list)

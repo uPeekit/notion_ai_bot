@@ -106,6 +106,8 @@ NO_USER = 0
 # What the audit log records as the "model" of a step the planner had already decided: no model
 # read it, so naming one would be a lie.
 PLAN_STEP_MODEL = "plan-step"
+# How much of the interpreter's reading is passed on to the planner (see _hint).
+MAX_HINT = 600
 
 
 def now_utc() -> datetime:
@@ -114,6 +116,21 @@ def now_utc() -> datetime:
 
 def _kind(kind: str) -> str:
     return json.dumps({"kind": kind})
+
+
+def _hint(interp: Interpretation | None) -> str:
+    """What the interpreter already worked out about this message, for the planner: its reading
+    of the request, the target it settled on, and anything it wanted looked up on the web. A
+    hint, not a decision — a single target is often wrong for a goal made of many items."""
+    if interp is None:
+        return ""
+    best = interp.candidates[0] if interp.candidates else None
+    parts = [p for p in (
+        interp.notes.strip(),
+        f"target: {best.target_name}" if best and best.target_name else "",
+        f"web: {best.web_query}" if best and best.web_query else "",
+    ) if p]
+    return "; ".join(parts)[:MAX_HINT]
 
 
 def _short(text: str, limit: int = 48) -> str:
@@ -368,7 +385,8 @@ class Orchestrator:
         if interp.intent.value == "plan" and turn.plan is None:
             # Even with a clarifying question attached: a plan's side question ("which dates?")
             # is not worth stopping for, and each step can still ask what it really needs.
-            return _prefixed(await self._start_plan(turn, prompt, snapshot), prefix)
+            return _prefixed(await self._start_plan(turn, prompt, snapshot, interp),
+                             prefix)
         result = self._validator.validate(interp, ctx, snapshot)
         decision = self._policy.evaluate(result)
         self._audit_result(turn, result, decision)
@@ -519,14 +537,19 @@ class Orchestrator:
 
     # ---- multi-step plans ----------------------------------------------------------------------
 
-    async def _start_plan(self, turn: _Turn, text: str, snapshot: WorkspaceSnapshot) -> Reply:
+    async def _start_plan(self, turn: _Turn, text: str, snapshot: WorkspaceSnapshot,
+                          interp: Interpretation | None = None) -> Reply:
         """A goal that takes several actions: the planner splits it into one-action steps, which
-        then run one by one (see _after_step)."""
+        then run one by one (see _after_step). The interpreter has already read this message to
+        decide it was a plan at all, so its reading goes along as a hint — otherwise that work
+        (which target it is about, what to look up on the web) is simply thrown away and the
+        planner derives it again from the raw text."""
         turn.audit(decision=_kind("PLAN"))
         if self._planner is None:
             return self._plain(turn, "PLAN_UNAVAILABLE")
         try:
-            goal, steps = await self._planner.plan(text, self._workspace(snapshot))
+            goal, steps = await self._planner.plan(text, self._workspace(snapshot),
+                                                   hint=_hint(interp))
         except PlanError as e:
             log.warning("planning failed: %s", e)
             return await self._inbox_or_error(turn, text, "PLAN_FAILED")
