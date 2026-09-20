@@ -179,7 +179,11 @@ read like one of your own messages.
 
 Either way a step goes through the same validator and policy as anything else, so it can ask
 you something; the plan waits for your answer and then carries on, and what you answered is
-remembered for the rest of the plan. Claude is asked what to do next only when it can change
+remembered for the rest of the plan — a required field you filled in once (the author of the
+books you are adding) is not asked again for every later step, it is written with the value you
+gave and shown in each step's report. The planner is told which fields are required, so it
+fills in what it knows itself («роман Достоевского» means the author is Достоевский) and only
+what neither of you can know is asked at all. Claude is asked what to do next only when it can change
 something: after a step that failed, or once the planned steps are done — a plan that goes
 smoothly costs no check calls at all. Each finished step is reported with its own undo button;
 the closing message has **«Отменить всё»**, which reverts every write of the plan. At most 25

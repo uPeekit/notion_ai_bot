@@ -68,3 +68,35 @@ def test_what_does_not_resolve_is_left_to_the_model():
     assert to_interpretation(step(action="create", target="Покупки",
                                   fields=[StepField(name="Количество", value="много")]),
                              ctx) is None
+
+
+def test_an_answer_the_user_already_gave_fills_a_field_the_step_left_empty():
+    """«все книги Достоевского»: the user names the author once, and every later step takes
+    it instead of stopping to ask again."""
+    ctx, snap = ctx_and_snapshot()
+    interp = to_interpretation(
+        step(action="create", target="Задачи", title="Купить билеты"),
+        ctx, {"Приоритет": "A"})
+    best = SemanticValidator().validate(interp, ctx, snap).best
+    by_name = {f.field.name: f for f in best.fields.values() if f.status == "value"}
+    assert by_name["Приоритет"].value.name == "A"
+
+
+def test_what_the_step_says_itself_wins_over_the_remembered_answer():
+    ctx, snap = ctx_and_snapshot()
+    interp = to_interpretation(
+        step(action="create", target="Задачи", title="Купить билеты",
+             fields=[StepField(name="Приоритет", value="B")]),
+        ctx, {"Приоритет": "A"})
+    best = SemanticValidator().validate(interp, ctx, snap).best
+    by_name = {f.field.name: f for f in best.fields.values() if f.status == "value"}
+    assert by_name["Приоритет"].value.name == "B"
+
+
+def test_a_remembered_answer_that_does_not_fit_this_step_is_simply_not_used():
+    ctx, snap = ctx_and_snapshot()
+    interp = to_interpretation(
+        step(action="create", target="Задачи", title="Купить билеты"),
+        ctx, {"Приоритет": "не вариант этого поля", "Поле которого нет": "x"})
+    best = SemanticValidator().validate(interp, ctx, snap).best
+    assert all(f.status != "value" or f.field.type == "title" for f in best.fields.values())

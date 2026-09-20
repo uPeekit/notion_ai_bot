@@ -81,8 +81,15 @@ def _value(ctx: Context, field_key: str, ref: KeyRef, raw: str) -> Any:
     return text  # title, rich_text, url
 
 
-def to_interpretation(step: StepSpec, ctx: Context) -> Interpretation | None:
-    """The step as an Interpretation, or None when the caller should ask the LLM instead."""
+def to_interpretation(
+    step: StepSpec, ctx: Context, remembered: dict[str, str] | None = None
+) -> Interpretation | None:
+    """The step as an Interpretation, or None when the caller should ask the LLM instead.
+
+    `remembered` is what the user has already told this plan when a step stopped to ask —
+    "author: Dostoevsky". A later step that says nothing about that field takes the same
+    answer instead of asking again, which is the difference between one question and one per
+    book. Only fields the user was actually asked about are in there."""
     if step.action == "free":
         return None
     target_key = _target_key(ctx, step.target)
@@ -112,6 +119,18 @@ def to_interpretation(step: StepSpec, ctx: Context) -> Interpretation | None:
             return None
         fields[field_key] = {"status": "value", "value": value, "confidence": 1.0,
                              "source_text": spec.value}
+
+    for name, answer in (remembered or {}).items():
+        field_key = _find(ctx, "field", name, prefix=target_key)
+        ref = ctx.ref(field_key) if field_key else None
+        if ref is None or fields.get(field_key, {}).get("status") != "not_mentioned":
+            continue  # not a field of this target, or this step said something about it
+        value = _value(ctx, field_key, ref, answer)
+        if value is None:
+            continue  # an answer that fits one step's field need not fit this one: just ask
+        log.info("plan step: %r taken from what the user already answered", name)
+        fields[field_key] = {"status": "value", "value": value, "confidence": 1.0,
+                             "source_text": answer}
 
     candidate = {
         "target_name": ctx.target_labels.get(target_key, step.target),

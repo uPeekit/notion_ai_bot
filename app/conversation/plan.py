@@ -59,6 +59,10 @@ class PlanState(BaseModel):
     # What the user answered to the plan's questions in their own words: later steps and the
     # progress check see it too, not only the step that asked.
     answers: list[str] = Field(default_factory=list)
+    # A field the user was asked about by name, and the value that was written after they
+    # answered ("author: Dostoevsky"). A later step that says nothing about that field takes
+    # the same value instead of asking again, once per book (app.conversation.steps).
+    field_answers: dict[str, str] = Field(default_factory=dict)
 
     @property
     def current(self) -> StepSpec | None:

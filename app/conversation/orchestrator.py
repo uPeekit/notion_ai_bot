@@ -189,6 +189,9 @@ class _Turn:
     # A multi-step plan this turn is working through (or resumed), and how its current step
     # ended: "executed", "asked" (a question is on screen, the plan waits) or "failed".
     plan: PlanState | None = None
+    # The field this message is answering a plan's question about ("author"): once the answer
+    # is written, later steps of the same plan reuse it instead of asking again.
+    asked_field: str | None = None
     outcome: str = "failed"
     last_undo: str | None = None
     # Sends an intermediate message (a finished plan step) before the turn's own reply.
@@ -340,6 +343,7 @@ class Orchestrator:
         if session is not None and session.plan is not None:
             turn.plan = PlanState.model_validate(session.plan)
             turn.plan.answers.append(text[:MAX_PROMPT])
+            turn.asked_field = session.question.field_name
             pending = {**(pending or {}), **plan_context(turn.plan)}
         # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
         # the tail instead freezes the conversation once the concatenation reaches the cap —
@@ -410,6 +414,7 @@ class Orchestrator:
             # The write did not happen, so the text would be lost otherwise.
             return await self._inbox_or_error(turn, text, code, message=e.message)
         turn.audit(executed=1, notion_page_id=executed.page_id)
+        self._remember_answer(turn, executed)
         # A search that found nothing did nothing: inside a plan that is a failed step, which
         # the planner should work around rather than count as progress.
         turn.outcome = ("failed" if isinstance(command, Search) and not executed.hits
@@ -545,7 +550,7 @@ class Orchestrator:
             return Reply(_error("DISCOVERY_FAILED"))
         ctx = self._builder.build(snapshot, turn.now, plan_context(turn.plan), allow_plan=False)
         log.info("step %d/%d: %s", turn.plan.index + 1, len(turn.plan.steps), _short(step.text))
-        interp = to_interpretation(step, ctx)
+        interp = to_interpretation(step, ctx, turn.plan.field_answers)
         if interp is not None:
             turn.audit(llm_model=PLAN_STEP_MODEL, interpretation=interp.model_dump_json())
         else:
@@ -707,6 +712,9 @@ class Orchestrator:
         self._audit_result(turn, result, decision)
         if session.plan is not None:
             turn.plan = PlanState.model_validate(session.plan)
+            # The answered question named a field; once this step writes it, the plan's later
+            # steps take the same value rather than asking again (_remember_answer).
+            turn.asked_field = session.question.field_name
         reply = await self._dispatch(turn, decision, result, ctx, session.original_text,
                                      list(session.asked))
         if turn.plan is not None:
@@ -915,6 +923,23 @@ class Orchestrator:
                 log.exception("could not close audit event %s", turn.event_id)
             self._log_turn(turn, calls)
         return reply
+
+    @staticmethod
+    def _remember_answer(turn: _Turn, executed: ExecutionResult) -> None:
+        """The user answered a plan's question about a field, and this step has now written a
+        value for it: the rest of the plan takes the same value rather than asking per step.
+        Only the field that was actually asked about — never what the planner filled in
+        itself, which is a guess the user never saw."""
+        if turn.plan is None or not turn.asked_field:
+            return
+        for written in executed.written:
+            if written.name != turn.asked_field:
+                continue
+            value = written.value
+            text = value.get("name") if isinstance(value, dict) else value
+            if isinstance(text, str) and text.strip():
+                turn.plan.field_answers[written.name] = text
+            return
 
     @staticmethod
     def _log_turn(turn: _Turn, calls: notion_stats.Tally) -> None:

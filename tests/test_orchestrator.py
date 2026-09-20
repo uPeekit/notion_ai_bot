@@ -1652,3 +1652,29 @@ async def test_more_junk_clarifies_are_not_asked(bot):
         "t2.f1": val("Хлеб", 1.0)})).model_copy(update={"clarify": "Сколько хлеба?"}))
     asked = await bot.orch.handle_text(CHAT, USER, "купи хлеб")
     assert asked.text == "Сколько хлеба?"  # a real question still gets through
+
+
+async def test_a_field_answered_once_is_not_asked_again_for_every_later_step(make):
+    """«все книги Достоевского»: the first step stops to ask for the required field, and after
+    the answer the rest of the plan takes the same value instead of asking per book."""
+    tasks = [StepSpec(text=f"добавь в задачи {name}", action="create", target="Задачи",
+                      title=name)
+             for name in ("Купить билеты", "Собрать чемодан", "Сдать ключи")]
+    bot = make(planner=FakePlanner(tasks))
+    bot.llm.queue(plan_interp(bot))
+    sent: list = []
+
+    question = await bot.orch.handle_text(CHAT, USER, "собери поездку", progress=collect(sent))
+
+    assert "Приоритет" in question.text
+    assert notion_calls(bot, "create_page") == []  # nothing written while the question is open
+
+    later: list = []
+    reply = await bot.orch.handle_callback(CHAT, USER, press(question, "o0"),
+                                           progress=collect(later))
+
+    created = notion_calls(bot, "create_page")
+    assert len(created) == 3  # all three written, only the first one asked
+    assert all(c[2]["prio"] == {"select": {"id": "o-A"}} for c in created)
+    assert reply.text.startswith("🏁")
+    assert bot.sessions.get(CHAT, NOW) is None
