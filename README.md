@@ -173,9 +173,14 @@ With Claude configured, a message that needs several actions becomes a **plan**:
 
 The bot posts the plan (the goal and numbered steps) and starts at once. The planner returns
 each step already decided — the action, the place, the field values — so the bot carries it out
-**without asking a model again**: 16 books cost one planning call, not 16 more. A step it could
-not express that way (or that names something the workspace does not have) falls back to being
-read like one of your own messages.
+**without asking a model again**: 16 books cost one planning call, not 16 more. A step can add
+a row or a page, add a line to a page, or **change a row that already exists** («отметь Братья
+Карамазовы — читаю»). A step it could not express that way (or that names something the
+workspace does not have) falls back to being read like one of your own messages.
+
+The planner is shown what each database already holds, so a plan adds what is missing instead
+of a second copy of what is there — and it starts from the reading the interpreting model has
+already done of the same message, rather than working it out again from scratch.
 
 Either way a step goes through the same validator and policy as anything else, so it can ask
 you something; the plan waits for your answer and then carries on, and what you answered is
@@ -187,7 +192,8 @@ what neither of you can know is asked at all. Claude is asked what to do next on
 something: after a step that failed, or once the planned steps are done — a plan that goes
 smoothly costs no check calls at all. Each finished step is reported with its own undo button;
 the closing message has **«Отменить всё»**, which reverts every write of the plan. At most 25
-steps.
+steps. If you never answer a question a step asked, the plan is dropped when that question
+expires — the bot says so, with how many steps were left, rather than going quiet.
 
 `PLAN_MODEL` (default `claude-sonnet-5`) does the planning: it is what knows "all of Pelevin's
 novels" (Haiku listed 8, one of them wrong). A plan costs about 2 ¢ of planning plus the writes
