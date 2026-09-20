@@ -38,11 +38,29 @@ MAX_BLOCKS_PER_REQUEST = 100
 MAX_MATCHED_LINES = 3
 LIST_BLOCKS = ("to_do", "bulleted_list_item", "numbered_list_item")
 HEADINGS = ("heading_1", "heading_2", "heading_3")
+# What a short append may be made of and still be fitted to the page's own list. The model
+# writes "- The Gentlemen" as readily as a bare line, and which of the two it chose says nothing
+# about the page it lands on; anything richer (a heading, a quote, an image) is a note it
+# meant to shape, and is left as written.
+MATCHABLE = ("paragraph", *LIST_BLOCKS)
 
 
 def _title_of(cmd: CreateItem) -> str:
     value = next((p.value for p in cmd.properties if p.type == "title"), "")
     return value if isinstance(value, str) else ""
+
+
+def _as(block: dict, kind: str) -> dict:
+    """The same line as a block of the page's own list type. A tick box the model wrote keeps
+    whether it was ticked; a bullet becoming a tick box starts unticked."""
+    body: dict = {"rich_text": _rich_text(block)}
+    if kind == "to_do":
+        body["checked"] = bool(block.get("to_do", {}).get("checked", False))
+    return {"object": "block", "type": kind, kind: body}
+
+
+def _rich_text(block: dict) -> list:
+    return block.get(block.get("type", ""), {}).get("rich_text", [])
 
 
 def _block_text(block: dict) -> str:
@@ -165,8 +183,8 @@ class Executor:
         at the very end, under whatever section happens to be last."""
         if not blocks or len(blocks) > MAX_MATCHED_LINES:
             return blocks, None
-        if any(b.get("type") != "paragraph" for b in blocks):
-            return blocks, None  # the model formatted it itself: leave it alone
+        if any(b.get("type") not in MATCHABLE for b in blocks):
+            return blocks, None  # a note the model shaped on purpose: leave it alone
         try:
             children = await self._p.block_children(page_id)
         except NotionError as e:
@@ -186,11 +204,7 @@ class Executor:
             chosen = lists[picked] if picked is not None else chosen
         kind = chosen.list_kind
         assert kind is not None
-        extra = {"checked": False} if kind == "to_do" else {}
-        joined = [{"object": "block", "type": kind,
-                   kind: {"rich_text": b["paragraph"]["rich_text"], **extra}}
-                  for b in blocks]
-        return joined, (chosen.tail or {}).get("id")
+        return [_as(b, kind) for b in blocks], (chosen.tail or {}).get("id")
 
     async def _pick(self, request: str, blocks: list[dict], titles: list[str]) -> int | None:
         if self._sections is None or not request.strip():

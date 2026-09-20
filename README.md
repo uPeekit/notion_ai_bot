@@ -24,7 +24,8 @@ phrasing:
 - **"в идеи: попробовать сыр с плесенью"**, **"надо посмотреть фильм Uncharted"** → appends to
   a page. A line with nothing under it always goes *onto* the page, never into a sub-page of
   its own, and it joins a list that is already there — a tick box under «смотреть» becomes
-  another tick box, right under that list rather than at the bottom of the page. When the page
+  another tick box, right under that list rather than at the bottom of the page, whether the
+  model wrote the line as a bullet or as a bare sentence. When the page
   has several lists under several headings («смотреть», «подкасты»), the bot asks the model
   which section the line belongs in; with one list, or a page marked local-only, it does not
   ask anyone and uses the last list.

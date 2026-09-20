@@ -403,11 +403,14 @@ async def test_a_list_that_is_not_at_the_end_or_a_long_note_is_not_matched(fake)
     assert [b["type"] for b in fake.calls[-1][2]][0] == "heading_2"
 
 
-async def test_the_page_is_not_read_when_the_model_formatted_the_note_itself(fake):
-    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="p", page_title="p",
-                                          paragraphs=["- [ ] Uncharted"], markdown=True))
+async def test_the_page_is_not_read_for_a_note_the_model_shaped_itself(fake):
+    """A heading with a list under it is a note, not a line for someone else's list."""
+    await Executor(fake).run(AppendBlocks(
+        page_id="pg", target_name="p", page_title="p",
+        paragraphs=["## Что взять", "- паспорт", "- зарядка"], markdown=True))
     assert not any(c[0] == "block_children" for c in fake.calls)
-    assert fake.calls[-1][2][0]["type"] == "to_do"
+    assert [b["type"] for b in fake.calls[-1][2]] == ["heading_2", "bulleted_list_item",
+                                                      "bulleted_list_item"]
 
 
 async def test_the_blank_line_notion_leaves_at_the_end_does_not_hide_the_list(fake):
@@ -556,3 +559,38 @@ async def test_a_plan_reads_the_table_once_and_never_repeats_itself(fake):
 
     assert len([c for c in fake.calls if c[0] == "query"]) == 1      # one read of the table
     assert len([c for c in fake.calls if c[0] == "create_page"]) == 2  # the third was a repeat
+
+
+async def test_a_line_the_model_wrote_as_a_bullet_still_joins_a_tick_box_list(fake):
+    """Live: «Хочу посмотреть сериал Джентльмены» came back as "- Джентльмены (сериал)", and a
+    Markdown bullet used to be left alone — so it started a second list next to the tick boxes
+    it was meant to join. Which of the two the model picked says nothing about the page."""
+    fake.page_blocks["pg"] = [heading("смотреть"), list_block("to_do", "Дюна")]
+
+    await Executor(fake).run(AppendBlocks(
+        page_id="pg", target_name="медиа", page_title="медиа",
+        paragraphs=["- Джентльмены, 2 сезон (сериал)", "- Пацаны (сериал)"], markdown=True))
+
+    written = fake.calls[-1][2]
+    assert [b["type"] for b in written] == ["to_do", "to_do"]
+    assert written[0]["to_do"]["rich_text"][0]["text"]["content"] == "Джентльмены, 2 сезон (сериал)"
+    assert written[0]["to_do"]["checked"] is False
+    assert fake.calls[-1][3] == "b-Дюна"
+
+
+async def test_a_tick_box_the_model_ticked_keeps_its_tick(fake):
+    fake.page_blocks["pg"] = [list_block("to_do", "Дюна")]
+
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                                          paragraphs=["- [x] Оппенгеймер"], markdown=True))
+
+    assert fake.calls[-1][2][0]["to_do"]["checked"] is True
+
+
+async def test_a_bullet_stays_a_bullet_when_the_page_has_no_list(fake):
+    fake.page_blocks["pg"] = [list_block("paragraph", "просто абзац")]
+
+    await Executor(fake).run(AppendBlocks(page_id="pg", target_name="медиа", page_title="медиа",
+                                          paragraphs=["- Джентльмены"], markdown=True))
+
+    assert fake.calls[-1][2][0]["type"] == "bulleted_list_item"
