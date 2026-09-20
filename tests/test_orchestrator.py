@@ -1790,3 +1790,28 @@ async def test_the_undo_window_starts_when_the_write_happens(make):
     [row] = rows(bot, "executions")
     written_at = bot.clock.t
     assert datetime.fromisoformat(row["expires_at"]) > written_at + timedelta(seconds=290)
+
+
+async def test_an_unknown_intent_with_a_question_asks_it_instead_of_giving_up(bot):
+    """Live: «Хочу посмотреть фильм Uncharted» came back as intent unknown (the model saw the
+    film already on the page) — together with a perfectly good question, which was thrown away
+    with the rest and the message filed to the inbox as "не понял"."""
+    question = "Создать задачу «Посмотреть Uncharted» в TODO или это просто информация?"
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t3", 0.6)).model_copy(
+        update={"clarify": question}))
+
+    reply = await bot.orch.handle_text(CHAT, USER, "Хочу посмотреть фильм Uncharted")
+
+    assert question in reply.text
+    assert notion_calls(bot, "create_page") == []  # nothing written, nothing filed
+    session = bot.sessions.get(CHAT, NOW)
+    assert session is not None and session.question.type == "clarify"
+
+
+async def test_an_unknown_intent_with_no_question_still_goes_to_the_inbox(bot):
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t3", 0.6)))
+
+    reply = await bot.orch.handle_text(CHAT, USER, "расскажи анекдот")
+
+    assert texts.INBOX_SAVED.split("{")[0] in reply.text
+    assert bot.sessions.get(CHAT, NOW) is None

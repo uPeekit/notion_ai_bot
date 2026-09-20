@@ -171,7 +171,7 @@ _INBOX = AnswerOption(id="inbox", label=texts.BTN_INBOX)
 
 
 def options_for(
-    q: Question, candidate: VCandidate, result: ValidationResult, ctx: Context
+    q: Question, candidate: VCandidate | None, result: ValidationResult, ctx: Context
 ) -> list[AnswerOption]:
     """Translate one Question's context-keyed options (plus its type-specific extra buttons)
     into id-based AnswerOptions. The only place a context key is read; must run while `ctx` (the

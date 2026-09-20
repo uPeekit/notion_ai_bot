@@ -158,7 +158,10 @@ def session_from_decision(
     has nothing to ask and still raises. `options` is the answer table for decision.questions[0]
     (Task 3's resolver.options_for(...)); `asked` is carried forward by the orchestrator across
     round-trips, not computed here. Generates a fresh `token`."""
-    if decision.candidate is None or not decision.questions:
+    # A clarify question is the one kind that needs no candidate: its answer is free text,
+    # re-read together with the original message, so there is nothing to act on in the session.
+    clarify_only = bool(decision.questions) and decision.questions[0].type == "clarify"
+    if not decision.questions or (decision.candidate is None and not clarify_only):
         raise ValueError(
             "session_from_decision requires a decision with a candidate and a question "
             "(CLARIFY, or the item_not_found/nothing_to_write REJECT cases)"

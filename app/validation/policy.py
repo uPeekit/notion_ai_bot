@@ -100,6 +100,15 @@ class Policy:
 
     def evaluate(self, r: ValidationResult) -> Decision:
         if r.rejected:
+            if r.clarify:
+                # The model could not settle on an action but wrote a question about it ("is
+                # this a task or just a note?"). Asking that is worth more to the user than
+                # "I did not understand" plus a copy of their message in the inbox, which is
+                # what a rejection comes to. The answer is re-read together with the original
+                # message, so a usable candidate (there may be none at all) is not needed.
+                q = Question(type="clarify", target_key=r.best.key if r.best else None,
+                             proposed=r.clarify)
+                return Decision("CLARIFY", r.best, [q], ["clarify"], None)
             reasons = [f"{i.code}: {i.message}" for i in r.issues] or ["no valid candidates"]
             return Decision("REJECT", None, [], reasons, None)
         best = r.best

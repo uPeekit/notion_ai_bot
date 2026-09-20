@@ -459,8 +459,11 @@ class Orchestrator:
             self._sessions.drop(turn.chat_id)
             return await self._execute(turn, decision, result, text)
         # CLARIFY, plus the two REJECTs that carry a candidate and a question: item_not_found is
-        # actionable through its BTN_ADD_NEW button, nothing_to_write through free text.
-        if decision.candidate is not None and decision.questions:
+        # actionable through its BTN_ADD_NEW button, nothing_to_write through free text. The
+        # model's own question needs no candidate — it may have failed to settle on one at all,
+        # which is half of why it is asking (see Policy.evaluate).
+        if decision.questions and (decision.candidate is not None
+                                   or decision.questions[0].type == "clarify"):
             question = await self._ask(turn, decision, result, ctx, text, asked)
             if question is not None:
                 return question
@@ -541,8 +544,7 @@ class Orchestrator:
         question = next_question(decision, asked, ctx)
         if question is None or len(asked) >= MAX_QUESTIONS:
             return None
-        candidate = decision.candidate
-        assert candidate is not None
+        candidate = decision.candidate  # None only for a clarify question (see policy)
         options = options_for(question, candidate, result, ctx)
         session = session_from_decision(
             turn.chat_id, turn.event_id, text, result, replace(decision, questions=[question]),
@@ -555,7 +557,7 @@ class Orchestrator:
         return format_question(
             question, [(o.id, o.label) for o in options if o.id not in RESERVED_OPTIONS],
             session.token, inbox=await self._inbox_target(forced=True) is not None,
-            target_name=candidate.target.name,
+            target_name=candidate.target.name if candidate else None,
         )
 
     def _target_name(self, session: PendingSession) -> str | None:
