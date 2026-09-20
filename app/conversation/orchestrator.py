@@ -42,6 +42,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from time import monotonic
 from typing import Any
 
@@ -111,6 +112,9 @@ NO_USER = 0
 PLAN_STEP_MODEL = "plan-step"
 # How much of the interpreter's reading is passed on to the planner (see _hint).
 MAX_HINT = 600
+# How alike two names must be to be the same place (see _wrong_place). A page's name spelled
+# two ways scores above 0.9; two unrelated pages score around 0.1.
+SAME_PLACE = 0.6
 
 
 def now_utc() -> datetime:
@@ -134,6 +138,25 @@ def _hint(interp: Interpretation | None) -> str:
         f"web: {best.web_query}" if best and best.web_query else "",
     ) if p]
     return "; ".join(parts)[:MAX_HINT]
+
+
+def _wrong_place(step: StepSpec, interp: Interpretation) -> bool:
+    """Did the model answer a plan step with a place nothing like the one the step named?
+
+    Only a plan step is checked, and only when it named a target: the user's own messages are
+    read by the model precisely because they do not name things exactly. A loose spelling of
+    the right place still passes (a planner's "proekty" for a page called "proyekty"); a
+    different page entirely does not."""
+    named = step.target.strip()
+    best = interp.candidates[0] if interp.candidates else None
+    if not named or best is None or not (best.target_name or "").strip():
+        return False
+    answered = best.target_name.split("[")[0]  # "Books [database]" -> "Books"
+    return SequenceMatcher(None, _fold(named), _fold(answered)).ratio() < SAME_PLACE
+
+
+def _fold(name: str) -> str:
+    return " ".join(name.split()).casefold()
 
 
 def _asked_to_search(raw_text: str) -> bool:
@@ -650,6 +673,14 @@ class Orchestrator:
                 return Reply(_error("LLM_UNAVAILABLE" if isinstance(e, LLMUnavailable)
                                     else "LLM_INVALID_OUTPUT"))
             self._audit_llm(turn, interp, trace)
+            if _wrong_place(step, interp):
+                # The step named a place, the model answered with a different one — which is
+                # what it does when the named place is missing from the context: it picks the
+                # nearest key and says so confidently. A step of a plan writes without asking
+                # anyone, so a guess like that lands a page of text in an unrelated page.
+                log.warning("plan step names %r, model answered %r: failing the step",
+                            step.target, interp.candidates[0].target_name)
+                return Reply(_error("STEP_WRONG_TARGET", target_name=step.target))
         result = self._validator.validate(interp, ctx, snapshot)
         decision = self._policy.evaluate(result)
         self._audit_result(turn, result, decision)
@@ -1031,6 +1062,11 @@ class Orchestrator:
             title = next((p.value for p in command.properties if p.type == "title"), "")
             target_id: str = command.data_source_id
         elif isinstance(command, CreatePage):
+            if executed.page_id:
+                # A page is a place of its own, not only a child of the one it sits in: the
+                # next step of the plan will want to write into it by name.
+                self._discovery.note_new_page(executed.page_id, command.title,
+                                              command.parent_page_id, executed.url or "")
             title, target_id = command.title, command.parent_page_id
         else:
             return

@@ -102,6 +102,30 @@ class Discovery:
             0, Item(id=item_id, title=title, hint=None, last_edited=self._clock(), url=url))
         del target.items[self._items_per_target:]
 
+    def note_new_page(self, page_id: str, title: str, parent_page_id: str, url: str = "") -> None:
+        """A page a step just created, added to the cached snapshot as a place of its own.
+
+        The next step of a plan usually writes *into* the page the step before it made, and it
+        names it by title — so until the page is a target, that step cannot resolve and falls
+        back to the model, which is handed a context the page is missing from and picks some
+        other page. (It did: a plan that created a page about Japanese torii gates filed its
+        contents under an unrelated borsch recipe, reasoning that this must be the page the
+        plan had just made.)
+        Re-reading the whole workspace would also fix it, at fifteen requests a step."""
+        snap = self._last
+        if snap is None or not page_id or not title:
+            self.invalidate()
+            return
+        if snap.target(page_id) is not None:
+            return
+        parent = snap.target(parent_page_id) if parent_page_id else None
+        snap.targets.append(Target(
+            id=page_id, kind="page", name=title,
+            path=f"{parent.path} / {title}" if parent else title, description="",
+            parent_page_id=parent_page_id or None, database_id=None, fields=[], items=[],
+            operations=PAGE_OPERATIONS, url=url,
+        ))
+
     async def get(self) -> WorkspaceSnapshot:
         """The workspace as it was last read. A snapshot past its TTL is still served — and
         replaced behind the answer — because re-reading it costs about fifteen Notion requests

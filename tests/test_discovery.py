@@ -340,3 +340,25 @@ async def test_a_failed_refresh_behind_an_answer_keeps_the_old_snapshot(fake, tm
     assert (await disco.get()) is first
     await disco.settled()
     assert (await disco.get()) is first  # still usable; nothing raised at the user
+
+
+async def test_a_page_a_step_created_is_a_place_the_next_step_can_name(disco):
+    """Live: a plan created «Виды ворот тории» and its second step, unable to find that page,
+    let the model choose — and it filed the contents under an unrelated borsch recipe."""
+    snap = await disco.get()
+    assert snap.target("new-page") is None
+
+    disco.note_new_page("new-page", "Виды ворот тории", "ideas", "https://notion.so/new-page")
+
+    made = snap.target("new-page")
+    assert made is not None and made.kind == "page"
+    assert made.name == "Виды ворот тории" and made.parent_page_id == "ideas"
+    assert made.path.endswith("Виды ворот тории") and "append" in made.operations
+
+
+async def test_a_page_with_nowhere_to_put_it_falls_back_to_a_refetch(disco, fake):
+    await disco.get()
+    disco.note_new_page("", "", "", "")
+    before = len(fake.calls)
+    await disco.get()
+    assert len(fake.calls) > before

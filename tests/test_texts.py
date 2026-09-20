@@ -52,7 +52,7 @@ ERROR_PLACEHOLDERS: dict[str, set[str]] = {
     "UNDO_FAILED": {"message"}, "SESSION_EXPIRED": set(), "nothing_to_write": set(),
     "item_not_found": {"item_text"}, "INTERNAL": set(),
     "WEB_UNAVAILABLE": set(), "WEB_FAILED": set(), "PLAN_UNAVAILABLE": set(),
-    "PLAN_FAILED": set(),
+    "PLAN_FAILED": set(), "STEP_WRONG_TARGET": {"target_name"},
 }
 
 

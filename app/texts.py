@@ -139,6 +139,9 @@ INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."
 # arrive without a candidate; their placeholder comes from Issue.detail. test_texts.py pins the
 # placeholder set of every code against that.
 ERRORS: dict[str, str] = {
+    # A plan step named a place the workspace does not have; the model offered a different one,
+    # and a step writes without asking, so nothing is written at all.
+    "STEP_WRONG_TARGET": "Не нашёл, куда записать: «{target_name}».",
     "STT_EMPTY": "Не разобрал голосовое сообщение. Повторите или напишите текстом.",
     "STT_FAILED": "Ошибка распознавания речи.",
     "DISCOVERY_FAILED": "Notion недоступен.",

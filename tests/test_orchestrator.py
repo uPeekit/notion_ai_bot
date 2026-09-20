@@ -1816,3 +1816,39 @@ async def test_an_unknown_intent_with_no_question_still_goes_to_the_inbox(bot):
 
     assert texts.INBOX_SAVED.split("{")[0] in reply.text
     assert bot.sessions.get(CHAT, NOW) is None
+
+
+async def test_a_step_does_not_write_to_a_place_the_plan_never_named(make):
+    """Live: step 2 could not find the page step 1 had just made, so the model picked another
+    page — and three thousand characters of torii gates went into a borsch recipe."""
+    steps = [StepSpec(text="допиши в Виды ворот тории", action="append",
+                      target="Виды ворот тории", content=""),
+             StepSpec(text="добавь в покупки Молоко", action="create", target="Покупки",
+                      title="Молоко")]
+    bot = make(planner=(planner := FakePlanner(steps)))
+    bot.llm.queue(plan_interp(bot))
+    # The step names a page this workspace does not have, so the model is asked — and answers
+    # with an entirely different place, which is what it does when the named one is missing.
+    wrong = make_interp("append", cand(bot.ctx, "t5", 0.95, content="текст"))
+    wrong.candidates[0].target_name = "Идеи [page]"
+    bot.llm.queue(wrong)
+    sent: list = []
+
+    await bot.orch.handle_text(CHAT, USER, "сделай страницу и наполни её", progress=collect(sent))
+
+    assert notion_calls(bot, "append_blocks") == []  # nothing was written to the wrong page
+    assert texts.ERRORS["STEP_WRONG_TARGET"].split("{")[0] in sent[1].text
+    assert planner.checks == [["failed"]]  # a failed step is the planner's to work around
+
+
+async def test_a_looser_spelling_of_the_right_place_is_still_that_place(make):
+    steps = [StepSpec(text="допиши в идеи", action="free", target="идеи")]
+    bot = make(planner=FakePlanner(steps))
+    bot.llm.queue(plan_interp(bot))
+    same = make_interp("append", cand(bot.ctx, "t5", 0.95, content="текст"))
+    same.candidates[0].target_name = "Идеи [page]"  # the same place, spelled the planner's way
+    bot.llm.queue(same)
+
+    await bot.orch.handle_text(CHAT, USER, "допиши в идеи", progress=collect([]))
+
+    assert notion_calls(bot, "append_blocks") != []  # «идеи» vs «Идеи»: the same place
