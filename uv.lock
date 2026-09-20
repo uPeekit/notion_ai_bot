@@ -452,7 +452,7 @@ wheels = [
 
 [[package]]
 name = "notion-ai-bot"
-version = "0.5.7"
+version = "0.5.8"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
