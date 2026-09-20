@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.notion.errors import NotionError, NotionUnavailable
+from app.notion.stats import record
 
 log = logging.getLogger(__name__)
 BASE_URL = "https://api.notion.com/v1"
@@ -48,6 +49,7 @@ class DirectNotionProvider:
         attempt_net = 0
         attempt_429 = 0
         attempt_5xx = 0
+        record(method, path)
         while True:
             try:
                 resp = await self._client.request(method, path, json=json)
@@ -199,6 +201,7 @@ class DirectNotionProvider:
             "POST", "/file_uploads", {"filename": filename, "content_type": content_type}
         )
         upload_id = created["id"]
+        record("POST", "/file_uploads")
         try:
             resp = await self._client.post(
                 f"/file_uploads/{upload_id}/send",

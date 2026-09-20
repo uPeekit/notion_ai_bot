@@ -1399,6 +1399,7 @@ class FakePlanner:
     """plan() returns the given steps; next() offers `then` in turn, then says done."""
 
     def __init__(self, steps, *, fail: bool = False, then: list[str] | None = None):
+        self.model = "fake-planner"
         self.steps = [free(s) if isinstance(s, str) else s for s in steps]
         self.fail, self.then = fail, list(then or [])
         self.checks: list[list[str]] = []

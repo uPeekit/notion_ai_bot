@@ -324,9 +324,19 @@ built. If your machine has no usable GPU, voice messages still work, just more s
 The bot logs to its console window **and** to `logs\bot.log` in the install folder, rotated at
 5 MB with five old files kept (`bot.log.1` … `bot.log.5`), so the log survives closing the window
 and never grows without bound. Change the location with `LOG_FILE` in `.env`; set it empty to
-switch the file off. At the default `LOG_LEVEL=INFO` you'll see one line per notable
-event (discovery results, warnings, errors) — never your message text, and never either token,
-however verbose you make it. That second part isn't just "we try not to log tokens": every line
+switch the file off. At the default `LOG_LEVEL=INFO` every message you send leaves a short trail
+— each model call (which model, what it decided, how long, how many tokens), each step of a
+plan, and one closing line with the decision and the Notion calls the message took:
+
+```
+INFO app.conversation.orchestrator [event=28] llm claude-haiku-4-5 read it as create -> Books | 3.9s | 5140+287 tok
+INFO app.conversation.orchestrator [event=28] step 2/12: "Добавь в Books роман «Идиот» со статусом Read"
+INFO app.conversation.orchestrator [event=28] done: execute in 8.1s | notion 6 calls: get pages 3, post data_sources 2, post search 1
+```
+
+`[event=28]` is the row in the audit database (`data\bot.sqlite`), which has the message itself
+and everything the model answered. The log never has your message text (it is there at
+`LOG_LEVEL=DEBUG` only), and never either token, however verbose you make it. That second part isn't just "we try not to log tokens": every line
 the bot writes is passed through a filter that replaces your Telegram and Notion token values
 with `***` first, whoever produced the line — in the file exactly as on screen. On top of that, Telegram's
 own client library normally puts your bot token straight into the URL of every request it makes,

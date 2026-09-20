@@ -254,7 +254,9 @@ goal — одна фраза: каким будет результат, когд
 - fields — значения полей: name — имя поля как в Notion («Tags», «Status»), value — \
 значение: название варианта точно как в списке поля, дата в виде YYYY-MM-DD, «да»/«нет» \
 для галочки, несколько вариантов через запятую. Поля, которых нет в этом месте, не \
-выдумывай.
+выдумывай. Поле с пометкой «обязательное» заполняй в каждом шаге, где знаешь ответ сам или \
+он следует из цели (автор книги, режиссёр фильма): иначе бот остановит шаг и спросит \
+пользователя — и так на каждом шаге. Чего не знаешь — оставь пустым, это нормально.
 - content — текст в Markdown: тело новой страницы или то, что дописать (если знаешь сам).
 - web_query — если содержимое надо найти в интернете: что искать, коротко (тогда content \
 оставь пустым); web_media — text, text_and_images или images (когда просят картинки).
@@ -301,10 +303,15 @@ def workspace_summary(targets: list[Target], note: str) -> str:
     for t in targets:
         desc = f" — {t.description[:150]}" if t.description else ""
         lines.append(f"- {t.path} [{kinds.get(t.kind, t.kind)}]{desc}")
-        for f in t.fields:  # the tags a step may use: one it invents would just be dropped
-            if f.type in ("select", "multi_select", "status") and f.options:
-                names = ", ".join(o.name for o in f.options[:20])
-                lines.append(f"    поле «{f.name}»: {names}")
+        # Every field a step can fill, not just the tags: a required field the planner does not
+        # know about is a question to the user on every single step of the plan.
+        for f in t.fields:
+            if not f.writable:
+                continue
+            marks = f.type + (", обязательное" if f.required else "")
+            options = (": " + ", ".join(o.name for o in f.options[:20])) if f.options else ""
+            note_ = f" — {f.description[:100]}" if f.description else ""
+            lines.append(f"    поле «{f.name}» ({marks}){options}{note_}")
     if note:
         lines.append(f"\nЗаметка пользователя о воркспейсе: {note}")
     return "\n".join(lines)

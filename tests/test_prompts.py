@@ -71,3 +71,15 @@ def test_plan_rule_only_when_planning_and_step_rule_only_inside_a_plan():
                                                pending=plan_context(state), allow_plan=False)
     assert STEP_RULE in system_prompt(step) and PLAN_RULE not in system_prompt(step)
     assert step.planning is False
+
+
+def test_the_planner_is_shown_every_field_it_could_fill_and_which_are_required():
+    """A required field the planner does not know about becomes a question to the user on
+    every step of the plan — which is what «все книги Достоевского» ran into."""
+    from app.llm.prompts import workspace_summary
+
+    summary = workspace_summary(sample_snapshot().targets, note="")
+
+    assert "поле «Задача» (title, обязательное)" in summary
+    assert "поле «Приоритет» (select, обязательное): A, B, C" in summary
+    assert "Created time" not in summary  # read-only fields are not a step's business

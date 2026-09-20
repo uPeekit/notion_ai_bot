@@ -61,5 +61,6 @@ class SectionPicker:
             return None
         if not isinstance(chosen, int) or not 1 <= chosen <= len(headings):
             return None
-        log.info("line goes under section %d of %d", chosen, len(headings))
+        log.info("llm %s put the line under section %d of %d", self.model, chosen,
+                 len(headings))
         return chosen - 1

@@ -271,7 +271,9 @@ class Discovery:
         targets = self._resolve_inbox(targets, self._inbox_target_id)
         targets.sort(key=lambda t: t.path)
         self._last = WorkspaceSnapshot(fetched_at=self._clock(), targets=targets)
-        log.info("discovered %d targets", len(targets))
+        # Once a minute per message, always the same number: the turn's own summary line says
+        # what the workspace cost, and a changed count still shows up in startup's own report.
+        log.debug("discovered %d targets", len(targets))
         return self._last
 
     @staticmethod

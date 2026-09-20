@@ -76,6 +76,7 @@ from app.llm.planner import PlanError, Planner, Verdict
 from app.llm.prompts import plan_context, workspace_summary
 from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
 from app.logging_setup import bind_event
+from app.notion import stats as notion_stats
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
@@ -113,6 +114,12 @@ def now_utc() -> datetime:
 
 def _kind(kind: str) -> str:
     return json.dumps({"kind": kind})
+
+
+def _short(text: str, limit: int = 48) -> str:
+    """What a log line shows of a message: enough to recognise which one it was."""
+    one_line = " ".join(text.split())
+    return f'"{one_line[:limit]}…"' if len(one_line) > limit else f'"{one_line}"'
 
 
 def _error(code: str, **fmt: Any) -> str:
@@ -519,6 +526,7 @@ class Orchestrator:
             log.warning("planning failed: %s", e)
             return await self._inbox_or_error(turn, text, "PLAN_FAILED")
         turn.plan = PlanState(goal=goal, steps=steps)
+        log.info("llm %s planned %d steps: %s", self._planner.model, len(steps), _short(goal))
         lines = [texts.PLAN_HEADER.format(goal=goal)]
         lines += [f"{i}. {step.text}" for i, step in enumerate(steps, start=1)]
         await self._progress(turn, Reply("\n".join(lines)))
@@ -536,6 +544,7 @@ class Orchestrator:
             log.warning("discovery failed: %s", e)
             return Reply(_error("DISCOVERY_FAILED"))
         ctx = self._builder.build(snapshot, turn.now, plan_context(turn.plan), allow_plan=False)
+        log.info("step %d/%d: %s", turn.plan.index + 1, len(turn.plan.steps), _short(step.text))
         interp = to_interpretation(step, ctx)
         if interp is not None:
             turn.audit(llm_model=PLAN_STEP_MODEL, interpretation=interp.model_dump_json())
@@ -894,7 +903,7 @@ class Orchestrator:
         # a log line can be traced back to its `events` row. The id cannot be bound any earlier:
         # it does not exist until `_open` above has returned, and no caller upstream of this
         # method (a Telegram handler) ever sees it at all.
-        with bind_event(turn.event_id):
+        with bind_event(turn.event_id), notion_stats.collect() as calls:
             try:
                 reply = await work(turn)
             except Exception:  # the caller is a chat handler: it gets a Reply, always
@@ -904,7 +913,17 @@ class Orchestrator:
                 self._finish(turn)
             except Exception:  # the answer is already earned; losing the row must not eat it
                 log.exception("could not close audit event %s", turn.event_id)
+            self._log_turn(turn, calls)
         return reply
+
+    @staticmethod
+    def _log_turn(turn: _Turn, calls: notion_stats.Tally) -> None:
+        """One line per message: what it was decided to be, and what Notion it took. The
+        per-call lines are the LLM ones; this is the receipt at the end."""
+        decision = json.loads(turn.cols.get("decision") or "{}").get("kind", "-")
+        notion = notion_stats.summary(calls)
+        log.info("done: %s in %.1fs%s", decision.lower(),
+                 (monotonic() - turn.started), f" | notion {notion}" if notion else "")
 
     def _open(self, chat_id: int, user_id: int, kind: str, **cols: Any) -> _Turn:
         event_id = self._store.new_event(
@@ -940,6 +959,19 @@ class Orchestrator:
 
     @staticmethod
     def _audit_llm(turn: _Turn, interp: Interpretation, trace: LLMTrace) -> None:
+        best = interp.candidates[0] if interp.candidates else None
+        # What the message said stays out of the log above DEBUG (tests/test_security.py); the
+        # event id in every line is the key back to the audit row, which has the text itself.
+        log.info(
+            "llm %s read it as %s%s | %.1fs%s%s",
+            trace.model, interp.intent.value,
+            f" -> {best.target_name}" if best and best.target_name else "",
+            trace.duration_ms / 1000,
+            f" | {trace.prompt_tokens}+{trace.output_tokens} tok"
+            if trace.prompt_tokens else "",
+            f" | {trace.attempts} attempts" if trace.attempts > 1 else "",
+        )
+        log.debug("llm %s: %s", trace.model, _short(turn.source_text or "", 200))
         turn.audit(
             llm_model=trace.model,
             # The events table has no token columns, so the counts ride along with the response

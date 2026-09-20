@@ -276,6 +276,6 @@ class WebResearcher:
             raise ResearchQuestion(question)
         if not text:
             raise ResearchError(f"no answer (stop_reason={resp.stop_reason})")
-        log.info("web research: %d chars, %d input / %d output tokens", len(text),
+        log.info("llm %s researched the web: %d chars | %d+%d tok", self.model, len(text),
                  resp.usage.input_tokens, resp.usage.output_tokens)
         return text[:MAX_RESULT_CHARS]
