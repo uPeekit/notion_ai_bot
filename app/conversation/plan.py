@@ -66,6 +66,12 @@ class PlanState(BaseModel):
     field_answers: dict[str, str] = Field(default_factory=dict)
 
     @property
+    def failures(self) -> int:
+        """Steps that did not do what they said. None of them means the planner has nothing
+        left to decide when the plan runs out of steps."""
+        return sum(1 for s in self.history if s.status == "failed")
+
+    @property
     def current(self) -> StepSpec | None:
         return self.steps[self.index] if self.index < len(self.steps) else None
 

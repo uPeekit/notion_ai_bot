@@ -69,6 +69,7 @@ class Discovery:
         # the save — while the README promises the save takes effect with no restart.
         self._invalidations = 0
         self._lock = asyncio.Lock()
+        self._refreshing: asyncio.Task[None] | None = None
 
     @property
     def last(self) -> WorkspaceSnapshot | None:
@@ -102,6 +103,19 @@ class Discovery:
         del target.items[self._items_per_target:]
 
     async def get(self) -> WorkspaceSnapshot:
+        """The workspace as it was last read. A snapshot past its TTL is still served — and
+        replaced behind the answer — because re-reading it costs about fifteen Notion requests
+        and several seconds, which is half the time a short message takes and all of it spent
+        after the user has already said what they want. An explicit invalidate (a save on the
+        admin page, /refresh) still waits, and so does the very first read of a run."""
+        last = self._last
+        if last is not None and not self._force:
+            age = self._clock() - last.fetched_at
+            if age < self._ttl:
+                return last
+            if age < STALE_MAX:
+                self._refresh_behind()
+                return last
         async with self._lock:
             now = self._clock()
             seen = self._invalidations
@@ -128,6 +142,26 @@ class Discovery:
     async def refresh(self) -> WorkspaceSnapshot:
         async with self._lock:
             return await self._refresh_locked()
+
+    def _refresh_behind(self) -> None:
+        """Start a refresh nobody waits for. One at a time: while it runs, callers keep getting
+        the snapshot it is replacing. A failure is logged and the old snapshot simply stays."""
+        if self._refreshing is not None and not self._refreshing.done():
+            return
+
+        async def run() -> None:
+            try:
+                async with self._lock:
+                    await self._refresh_locked()
+            except Exception as e:
+                log.warning("background discovery failed: %s", type(e).__name__)
+
+        self._refreshing = asyncio.create_task(run())
+
+    async def settled(self) -> None:
+        """Wait for a refresh running behind an answer (tests, and shutdown)."""
+        if self._refreshing is not None and not self._refreshing.done():
+            await asyncio.shield(self._refreshing)
 
     # ---- internals -------------------------------------------------------
 

@@ -194,7 +194,8 @@ gave and shown in each step's report. The planner is told which fields are requi
 fills in what it knows itself («роман Достоевского» means the author is Достоевский) and only
 what neither of you can know is asked at all. Claude is asked what to do next only when it can change
 something: after a step that failed, or once the planned steps are done — a plan that goes
-smoothly costs no check calls at all. Each finished step is reported with its own undo button;
+smoothly costs no check calls at all — when every planned step did what it said, the plan
+simply ends. Each finished step is reported with its own undo button;
 the closing message has **«Отменить всё»**, which reverts every write of the plan. At most 25
 steps. If you never answer a question a step asked, the plan is dropped when that question
 expires — the bot says so, with how many steps were left, rather than going quiet.
@@ -275,7 +276,7 @@ including `INBOX_MODE`'s three settings.
 | `/start`, `/help` | Prints a short usage reminder. |
 | `/undo` | Reverts the most recent change in this chat, if the undo window hasn't closed. |
 | `/cancel` | Drops whatever clarifying question is currently pending, without answering it. |
-| `/refresh` | Re-scans your Notion workspace right now instead of waiting for the normal cache (see `SCHEMA_CACHE_TTL_S` in `.env.example`) and replies with how many targets it found. |
+| `/refresh` | Re-scans your Notion workspace right now and replies with how many targets it found. Worth using right after you add or rename something in Notion: the bot re-reads the workspace about once a minute (`SCHEMA_CACHE_TTL_S`), and it does that *behind* your message rather than making you wait for it, so a change can take one message to show up. |
 | `/targets` | Lists every page/database the bot currently sees, with the inbox one marked. |
 
 All six are published to Telegram at startup, so they show up in the "/" menu in the chat rather

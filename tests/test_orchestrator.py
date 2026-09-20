@@ -1450,9 +1450,10 @@ async def test_a_plan_runs_every_step_reports_each_and_offers_undo_all(make):
     assert sent[1].text.startswith("Шаг 1.") and "Хлеб" in sent[1].text
     assert sent[1].undo_id is not None  # each step keeps its own undo
     assert sent[2].text.startswith("Шаг 2.") and "Молоко" in sent[2].text
-    assert reply.text == texts.PLAN_DONE.format(summary="сделано всё", done=2, total=2)
+    # Every step did what it said, so the planner is not asked anything at the end.
+    assert reply.text == texts.PLAN_DONE.format(summary="Всё разложено", done=2, total=2)
+    assert planner.checks == []
     assert [b.label for row in reply.buttons for b in row] == [texts.BTN_UNDO_ALL]
-    assert planner.checks == [["done", "done"]]  # asked once, after the planned steps
     assert len(notion_calls(bot, "create_page")) == 2
 
     await bot.orch.handle_callback(CHAT, USER, reply.buttons[0][0].id)
@@ -1607,7 +1608,7 @@ async def test_answers_to_a_plan_question_reach_the_later_steps(make):
     assert step2_context["pending"]["plan"]["ответы_пользователя"] == ["два батона"]
 
 
-async def test_structured_steps_cost_no_llm_calls_and_no_checks_until_the_end(make):
+async def test_structured_steps_cost_no_llm_calls_and_a_clean_plan_no_check_at_all(make):
     books = [StepSpec(text=f"добавь в покупки {name}", action="create", target="Покупки",
                       title=name, fields=[StepField(name="Магазин", value="Rimi")])
              for name in ("Хлеб", "Молоко", "Яйца")]
@@ -1619,7 +1620,7 @@ async def test_structured_steps_cost_no_llm_calls_and_no_checks_until_the_end(ma
                                        progress=collect(sent))
 
     assert bot.llm.calls == 1  # no call per step
-    assert planner.checks == [["done", "done", "done"]]  # one check, at the end
+    assert planner.checks == []  # and nothing to check: every step did what it said
     created = notion_calls(bot, "create_page")
     assert len(created) == 3
     titles = [next(v["title"][0]["text"]["content"] for k, v in c[2].items() if k == "title")
@@ -1716,8 +1717,8 @@ async def test_every_model_call_of_a_plan_is_in_the_audit_row(make):
 
     [row] = rows(bot, "events")
     calls = json.loads(row["llm_response"])
-    assert [c["kind"] for c in calls] == ["interpret", "plan", "step", "step", "check"]
-    assert row["llm_model"] == "fake-model, fake-planner x2, plan-step x2"
+    assert [c["kind"] for c in calls] == ["interpret", "plan", "step", "step"]
+    assert row["llm_model"] == "fake-model, fake-planner, plan-step x2"
     assert calls[1]["steps"] == 2 and calls[2]["step"] == "добавь в покупки Хлеб"
 
 

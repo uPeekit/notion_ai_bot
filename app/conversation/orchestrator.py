@@ -678,6 +678,11 @@ class Orchestrator:
             if state.exhausted:
                 return self._plan_done(turn, "", stopped=True)
             state.index += 1
+            if state.current is None and not failed and not state.failures:
+                # Every planned step did what it said. There is nothing left for the planner to
+                # decide, and asking it anyway costs a Sonnet call on the end of every plan —
+                # two of them for the two lines this started as.
+                return self._plan_done(turn, state.goal)
             if failed or state.current is None:
                 verdict = await self._check(turn, state)
                 if verdict is None or verdict.done:

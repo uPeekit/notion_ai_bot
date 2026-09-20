@@ -5,7 +5,7 @@ import pytest
 
 from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta
 from app.notion.discovery import Discovery
-from app.notion.errors import NotionUnavailable
+from app.notion.errors import NotionError, NotionUnavailable
 from tests.fakes import FakeNotionProvider
 
 
@@ -131,9 +131,16 @@ async def test_cache_ttl_and_invalidate(fake, tmp_path):
     a = await disco.get()
     b = await disco.get()
     assert a is b
+
+    # Past the TTL the caller still gets the snapshot it came for — re-reading the workspace
+    # costs about fifteen Notion requests, and nobody waits for them any more.
     t["now"] += timedelta(seconds=61)
+    assert (await disco.get()) is a
+    await disco.settled()
     c = await disco.get()
     assert c is not a
+
+    # An explicit invalidate is a different matter: that one waits.
     disco.invalidate()
     assert (await disco.get()) is not c
     assert sum(1 for c in fake.calls if c[0] == "search") == 3
@@ -305,3 +312,31 @@ async def test_a_write_that_cannot_be_patched_falls_back_to_a_refetch(disco, fak
     await disco.get()
 
     assert fake.calls[before:] != []  # the whole snapshot was read again
+
+
+async def test_a_refresh_behind_an_answer_does_not_hold_up_the_next_message(fake, tmp_path):
+    """The whole point: a message that arrives with a stale snapshot is answered from it."""
+    t = {"now": datetime(2026, 9, 9, 12, 0, tzinfo=UTC)}
+    disco = Discovery(fake, Descriptions(tmp_path / "t.yaml"), ttl_s=60, clock=lambda: t["now"])
+    first = await disco.get()
+    t["now"] += timedelta(seconds=61)
+
+    before = len(fake.calls)
+    served = [await disco.get() for _ in range(3)]
+
+    assert all(s is first for s in served)
+    assert len(fake.calls) == before  # nothing was fetched while they were being served
+    await disco.settled()
+    assert sum(1 for c in fake.calls if c[0] == "search") == 2  # exactly one refresh, behind
+
+
+async def test_a_failed_refresh_behind_an_answer_keeps_the_old_snapshot(fake, tmp_path):
+    t = {"now": datetime(2026, 9, 9, 12, 0, tzinfo=UTC)}
+    disco = Discovery(fake, Descriptions(tmp_path / "t.yaml"), ttl_s=60, clock=lambda: t["now"])
+    first = await disco.get()
+    t["now"] += timedelta(seconds=61)
+    fake.fail_search = NotionError(500, "server_error", "boom")
+
+    assert (await disco.get()) is first
+    await disco.settled()
+    assert (await disco.get()) is first  # still usable; nothing raised at the user
