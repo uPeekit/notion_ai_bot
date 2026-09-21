@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from app.conversation.resolver import (
     apply_answer,
+    apply_text_answer,
     next_question,
     options_for,
     rebuild_candidate,
@@ -233,6 +234,27 @@ def test_apply_answer_field_required():
     assert prio.status == "value" and prio.value == {"id": "o-B", "name": "B"}
     assert prio.confidence == 1.0
     assert updated.asked == ["field_required:prio"]
+
+
+def test_apply_text_answer_fills_a_text_field_verbatim():
+    s, *_ = build_session(make_interp("create", cand(ctx_and_snapshot()[0], "t2", 0.95)))
+    assert s.question.type == "field_required" and s.question.field_name == "Название"
+    updated = apply_text_answer(s, "  посылка ")
+    assert updated is not None
+    title = next(f for f in updated.candidates[0].fields if f.field_id == "title")
+    assert title.status == "value" and title.value == "посылка" and title.confidence == 1.0
+    assert updated.asked == ["field_required:title"]
+
+
+def test_apply_text_answer_leaves_everything_else_to_the_model():
+    s, *_ = build_session(make_interp("create", cand(ctx_and_snapshot()[0], "t2", 0.95)))
+    assert apply_text_answer(s, "молоко\nи хлеб") is None
+    assert apply_text_answer(s, "   ") is None
+    assert apply_text_answer(s, "x" * 201) is None
+    # A question with options (a select) is answered by its buttons, or re-read by the model.
+    s, *_ = build_session(make_interp(
+        "create", cand(ctx_and_snapshot()[0], "t3", 0.95, fields={"t3.f1": val("Документы")})))
+    assert s.question.options and apply_text_answer(s, "B") is None
 
 
 def test_apply_answer_field_ambiguous():

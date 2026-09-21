@@ -164,8 +164,11 @@ class Policy:
 
         for fk, f in best.fields.items():
             # A checkbox is never asked about: Notion has no empty one, so unticked is its
-            # value and the question can only ask the user to confirm the default.
+            # value and the question can only ask the user to confirm the default. Nor is a
+            # page's title: the message itself is the line (or the sub-page's name) when the
+            # model named none, so the answer would only be thrown away (see build_command).
             if (r.intent == "create" and f.field.required and f.field.type != "checkbox"
+                    and not (best.target.kind == "page" and f.field.type == "title")
                     and f.status in ("not_mentioned", "explicit_null")):
                 qs.append(self._field_q("field_required", best, fk, f))
             elif f.status == "ambiguous":

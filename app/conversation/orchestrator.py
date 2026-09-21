@@ -57,7 +57,13 @@ from app.config import Settings
 from app.conversation.inbox import inbox_command, inbox_target
 from app.conversation.plan import PlanState, PlanStep, StepSpec
 from app.conversation.reply import Button, Reply, format_execution, format_question, format_search
-from app.conversation.resolver import apply_answer, next_question, options_for, result_from_session
+from app.conversation.resolver import (
+    apply_answer,
+    apply_text_answer,
+    next_question,
+    options_for,
+    result_from_session,
+)
 from app.conversation.session import (
     MAX_QUESTIONS,
     PendingSession,
@@ -425,6 +431,10 @@ class Orchestrator:
         expired = self._sessions.pop_expired_one(turn.chat_id, turn.now)
         prefix = await self._expired_prefix(turn, expired) if expired is not None else ""
         session = None if expired is not None else self._sessions.get(turn.chat_id, turn.now)
+        # A plain value for a plain text field is taken as typed, with no model call.
+        answered = apply_text_answer(session, text) if session is not None else None
+        if answered is not None:
+            return await self._resume(turn, answered)
 
         # A live session makes this message a free-text answer: the model sees the question it is
         # answering and both halves of the request, and its fresh interpretation replaces the

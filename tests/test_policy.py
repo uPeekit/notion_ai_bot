@@ -69,6 +69,14 @@ def test_required_field_missing_asks_with_options():
     assert d.kind == "CLARIFY" and d.questions[0].type == "field_required"
 
 
+def test_page_title_is_never_asked_for():
+    """A line for a page is its own title: build_command falls back to the message, so asking
+    would only collect an answer nothing uses."""
+    ctx, _ = ctx_and_snapshot()
+    d, _ = decide(make_interp("create", cand(ctx, "t1", 0.95)))
+    assert d.kind == "EXECUTE" and d.questions == []
+
+
 def test_required_not_checked_for_update():
     ctx, _ = ctx_and_snapshot()
     d, _ = decide(make_interp("update", cand(ctx, "t3", 0.95, item="t3.i1",
