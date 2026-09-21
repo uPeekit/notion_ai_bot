@@ -269,39 +269,19 @@ async def test_f3_required_field_missing_then_option_button(bot):
 
 # ---- F4: free-text answer ----------------------------------------------------------------------
 
-async def test_f4_typed_title_is_taken_as_typed_without_the_llm(bot):
-    """The answer to "what should the title say?" is the title. Re-reading it through the model
-    let it redo the whole request: the original message went into the title, and the write
-    moved to another target the user had already picked with a button."""
+async def test_f4_free_text_answer_re_runs_the_llm_with_a_pending_block(bot):
     bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> ask for it
     question = await bot.orch.handle_text(CHAT, USER, "добавь в покупки")
     assert "Название" in question.text
     assert button_ids(question) == [press(question, "cancel"), press(question, "inbox")]
 
-    reply = await bot.orch.handle_text(CHAT, USER, "  молоко ")
-
-    assert bot.llm.calls == 1
-    _name, parent, properties, _children = notion_calls(bot, "create_page")[0]
-    written = json.dumps([parent, properties], ensure_ascii=False)
-    assert "ds-buy" in written and '"молоко"' in written
-    assert "добавь в покупки" not in written
-    assert "молоко" in reply.text
-    assert bot.sessions.get(CHAT, NOW) is None
-
-
-async def test_f4_free_text_answer_re_runs_the_llm_with_a_pending_block(bot):
-    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> ask for it
-    question = await bot.orch.handle_text(CHAT, USER, "добавь в покупки")
-    assert "Название" in question.text
-
-    # Two lines are not a title: the model reads them together with the request.
     bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
                                              fields={"t2.f1": val("Молоко", 1.0)})))
-    reply = await bot.orch.handle_text(CHAT, USER, "молоко\nиз рими")
+    reply = await bot.orch.handle_text(CHAT, USER, "молоко")
 
     assert bot.llm.calls == 2
     text, payload, _schema = bot.llm.seen[1]
-    assert text == "добавь в покупки\nмолоко\nиз рими"
+    assert text == "добавь в покупки\nмолоко"
     pending = payload["pending"]
     dumped = json.dumps(pending, ensure_ascii=False)
     assert "Название" in dumped and "Покупки" in dumped and "добавь в покупки" in dumped
@@ -990,9 +970,8 @@ async def test_repeated_free_text_answers_stop_growing_the_request(bot):
 async def test_a_title_falling_back_to_the_request_stays_one_line(bot):
     """A create with no title uses the user's words, which after a free-text answer are two
     lines joined by a newline — not a Notion page title."""
-    # The pending question is a select's (a typed title would be taken as typed, no model).
     bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95,
-                                             fields={"t3.f1": val("x", 1.0)})))
+                                             fields={"t3.f2": val("t3.f2.o1", 1.0)})))
     question = await bot.orch.handle_text(CHAT, USER, "создай страницу")
     assert question.buttons
 

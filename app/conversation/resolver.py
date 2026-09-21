@@ -29,10 +29,6 @@ from app.validation.semantic import Issue, ValidationResult, VCandidate, VField,
 
 _OPTION_TYPES = frozenset({"select", "status"})
 _LIST_OPTION_TYPES = frozenset({"multi_select", "relation"})
-# Field types whose value is whatever the user typed (see apply_text_answer), and how long a
-# typed reply may be and still be read as that value rather than as a new request.
-TEXT_TYPES = frozenset({"title", "rich_text"})
-MAX_TEXT_ANSWER = 200
 
 
 class _Unresolvable(Exception):
@@ -239,28 +235,6 @@ def _update_best(
 def _update_field(c: PendingCandidate, field_id: str | None, **updates) -> PendingCandidate:
     fields = [f.model_copy(update=updates) if f.field_id == field_id else f for f in c.fields]
     return c.model_copy(update={"fields": fields})
-
-
-def apply_text_answer(s: PendingSession, text: str) -> PendingSession | None:
-    """A typed reply to "what should the «X» field say?" when X is plain text: the reply is the
-    value, word for word. Re-reading it through the model instead lets it redo the whole request
-    — it has put the original message in the field and moved the write to another target the
-    user had already picked with a button. None when the question is not that kind, or the reply
-    does not look like a value (several lines, or long enough to be a new request)."""
-    q = s.question
-    value = text.strip()
-    if (q.type != "field_required" or q.options or not value or "\n" in value
-            or len(value) > MAX_TEXT_ANSWER or not s.candidates):
-        return None
-    field = next((f for f in s.candidates[0].fields
-                  if f.name == q.field_name and f.type in TEXT_TYPES), None)
-    if field is None:
-        return None
-    candidates = _update_best(list(s.candidates), lambda c: _update_field(
-        c, field.field_id, status="value", value=value, confidence=1.0, source_text=value))
-    return s.model_copy(update={
-        "candidates": candidates, "asked": [*s.asked, _answer_key(q.type, field.field_id)],
-    })
 
 
 def apply_answer(s: PendingSession, option_id: str) -> tuple[PendingSession, str | None]:
