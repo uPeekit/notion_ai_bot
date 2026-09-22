@@ -268,3 +268,15 @@ VAULT_GUIDE = """# Как бот раскладывает записи
 
 ## Области
 """
+VAULT_INBOX_NOTE = "Разное"
+# One line per write, appended to the reply: what the Obsidian side did.
+VAULT_REPLY = "Obsidian: {what}"
+VAULT_FAILED = "Obsidian: не записано ({error})"
+VAULT_WHAT = {
+    "task": "задача в «{note}»",
+    "note": "заметка «{note}»",
+    "append": "дописано в «{note}»",
+    "update": "обновлено «{note}»",
+    "log": "запись в дневнике «{note}»",
+    "inbox": "в «{note}» — не понял, куда это",
+}

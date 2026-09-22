@@ -41,6 +41,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NoReturn
 
 from telegram import Bot, BotCommand
@@ -77,6 +78,11 @@ from app.speech.whisper_local import WhisperLocal
 from app.telegram.handlers import register
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
+from app.vault.filer import Filer
+from app.vault.index import VaultIndex
+from app.vault.linker import Linker
+from app.vault.pipeline import VaultPipeline
+from app.vault.writer import VaultWriter
 
 log = logging.getLogger(__name__)
 
@@ -208,6 +214,23 @@ class App:
     fatal: tuple[int, str] | None = None
 
 
+def _vault_pipeline(settings: Settings) -> VaultPipeline | None:
+    """The Obsidian side, when a vault is configured and Claude is reachable. It is built even
+    when Notion is not: the two pipelines share nothing."""
+    key = settings.anthropic_api_key.get_secret_value()
+    if not (settings.obsidian_enabled and settings.obsidian_vault and key and settings.llm_cloud):
+        return None
+    root = Path(settings.obsidian_vault)
+    if not root.is_dir():
+        log.warning("OBSIDIAN_VAULT is not a folder: %s — the Obsidian side stays off", root)
+        return None
+    index = VaultIndex(root)
+    writer = VaultWriter(index)
+    linker = (Linker(index, writer, api_key=key, model=settings.linker_model)
+              if settings.linker_enabled else None)
+    return VaultPipeline(index, writer, Filer(key, settings.filer_model), linker)
+
+
 def build(
     settings: Settings, *,
     provider_factory: ProviderFactory = _default_provider,
@@ -252,9 +275,10 @@ def build(
                               settings.claude_model)
                 if uses_cloud(settings) else None)
     executor = Executor(provider, images=images, sections=sections)
+    vault = _vault_pipeline(settings)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
-        researcher=researcher, planner=planner, note=note.load,
+        researcher=researcher, planner=planner, note=note.load, vault=vault,
     )
     speech = speech_factory(settings)
     admin = AdminServer(settings, discovery, descriptions, note)
@@ -278,6 +302,8 @@ def build(
         # after this reaches for either.
         await sweeper.stop()
         admin.stop()
+        if vault is not None:
+            await vault.aclose()
         store.close()
 
     telegram_app.post_init = _post_init

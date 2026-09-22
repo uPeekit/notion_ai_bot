@@ -190,3 +190,19 @@ Any update from a user id outside `TELEGRAM_ALLOWED_USER_IDS` is ignored (no rep
    ```
 4. If nobody sends a follow-up message at all, the sweeper (`Orchestrator.flush_expired_sessions`, scheduled by Plan 3b) rescues the same text on its own; there is no reply to show since there is no chat turn to attach it to. It takes each chat's own lock around that chat's pop-and-rescue, so a turn already in flight for that chat finishes first and the message cannot be handled and rescued at the same time.
 5. Mode `button`: the expired session's text is dropped silently — an accepted limitation of that mode, since there is no button left to press. Mode `off`: same, always. Only `auto` (the default) rescues it without the user asking.
+
+## F19. Obsidian next to Notion
+
+Пользователь: «купи лампочки»
+
+1. Сообщение уходит в оба хранилища сразу: обычный notion-конвейер (F1–F3) и, параллельно,
+   Obsidian (`app/vault/pipeline.py`).
+2. Obsidian-сторона: индекс хранилища → один вызов Haiku (filer) → детерминированная проверка →
+   запись. Вопросов не задаёт: что не проверилось, уходит строкой в «Разное».
+3. Ответ бота — обычный ответ notion-стороны плюс одна строка: `Obsidian: задача в «Задачи»`.
+4. Кнопка «Отменить» отменяет обе стороны. Если notion-сторона ничего не записала (задала
+   вопрос), у записи в хранилище своя строка в `executions`, и её отменяет команда `/undo`.
+5. После ответа фоном работает linker: проставляет ссылки на существующие заметки.
+
+Ошибка Obsidian-стороны не ломает сообщение: в ответе появляется строка
+`Obsidian: не записано (...)`, notion-сторона отрабатывает как обычно.

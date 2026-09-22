@@ -471,6 +471,43 @@ Nothing in the 12B class fits an 8 GB card: measured on an RTX 4070 Laptop at `L
   that names `TELEGRAM_BOT_TOKEN` and prints nothing of the exception. See its module docstring
   and `documentation/ERRORS.md`'s "Logging" section.
 
+## 14a. The Obsidian side
+
+A second store, written next to Notion and independent of it (plan and decisions:
+[OBSIDIAN_PLAN.md](OBSIDIAN_PLAN.md)). `OBSIDIAN_VAULT` points at a folder of markdown files;
+`app/vault/` holds the whole pipeline, and nothing in it knows about Notion:
+
+```text
+message ─┬─ Notion pipeline (§4, unchanged)
+         └─ app.vault.pipeline.VaultPipeline
+               index.VaultIndex     what is in the vault (names, aliases, tags, headings),
+                                    refreshed by mtime
+               filer.Filer          one Haiku call: message -> actions, on the user's own
+                                    guide note (_bot.md), the folders and the tags
+               filer.check          the deterministic gate: an unknown note or folder, a made-up
+                                    date or repeat rule never reaches the writer
+               writer.VaultWriter   task / note / append / update / log / inbox, atomic, with
+                                    the file's previous text kept for Undo
+               linker.Linker        after the reply: names and aliases, then a Haiku pass for
+                                    the links matching cannot see
+```
+
+Rules that hold here:
+
+* **It never asks a question.** Anything unclear becomes a line in the inbox note.
+* **Only a fresh message** goes to the vault. A button press or an answer to a Notion question
+  does not (`Orchestrator._text`).
+* **One Undo for both stores.** `UndoRecord.vault` carries the files to put back; when Notion
+  wrote nothing, the vault's undo gets its own `executions` row with `kind: "vault"`, which
+  `/undo` reaches. `Orchestrator._finish_vault` is the one place the two sides meet.
+* **Never deletes.** Undo moves a created note to the vault's `.trash`; everything else is a
+  restore of the previous text.
+* **Stays inside the vault**, and never touches `.obsidian/`.
+* A failure on either side is one line in the reply, never a failed message.
+
+The one-off migration of the Notion workspace into a vault is `tools/notion_to_vault.py`
+(read-only against Notion, re-runnable, dry run by default).
+
 ## 15. Releases and migrations
 
 `pyproject.toml`'s `[project].version` is the version source (`app/version.py`); `release.py` bumps it, commits, tags, and builds `dist/notion_ai_bot-X.Y.Z.zip` (app files + `VERSION` + `manifest.json` with a lock hash). Production is a separate directory (e.g. `C:\apps\notion_ai_bot`) with its own `.env`/`.venv`/`data`, populated only from a release zip via `deploy/install.ps1` or `deploy/update.ps1` (`apply_update.py`), never `git clone`; `uv sync --frozen --no-dev` (re-run on updates only when the lock hash changed) provisions the venv. Schema migrations (`migrations/NNNN_name.sql`, journaled in `schema_migrations`) are applied only by the installer/updater or `tools/migrate.py` — never implicitly. At startup, `AuditStore.assert_schema_current()` verifies no migration is pending and refuses to run otherwise. See [RELEASE.md](../RELEASE.md) for the full process.

@@ -27,6 +27,7 @@ from app.notion.mapper import (
 )
 from app.notion.markdown import rich_text
 from app.notion.provider import NotionProvider
+from app.vault.writer import VaultUndo
 
 log = logging.getLogger(__name__)
 
@@ -110,13 +111,18 @@ class SearchHit:
 
 
 class UndoRecord(BaseModel):
-    kind: Literal["archive", "restore", "delete_blocks", "batch"]
+    # "vault" is a turn that wrote only to the Obsidian vault: there is nothing for the Notion
+    # executor to undo, and `vault` below holds the files to put back.
+    kind: Literal["archive", "restore", "delete_blocks", "batch", "vault"]
     page_id: str | None = None
     properties: dict | None = None
     block_ids: list[str] = []
     partial: bool = False
     # kind "batch": every write of a multi-step plan, undone newest first ("undo all").
     batch: list[UndoRecord] = []
+    # Files the Obsidian side wrote in the same turn (app/vault/writer.py). The Notion executor
+    # ignores these; the orchestrator hands them to the vault pipeline.
+    vault: list[VaultUndo] = []
 
 
 @dataclass
@@ -332,6 +338,8 @@ class Executor:
         ]
 
     async def undo(self, rec: UndoRecord) -> None:
+        if rec.kind == "vault":  # nothing of this turn was written to Notion
+            return
         if rec.kind == "batch":
             for part in reversed(rec.batch):
                 await self.undo(part)

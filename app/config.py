@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # wrong; Sonnet listed 15, all right.
     plan_model: str = "claude-sonnet-5"
 
+    # The Obsidian vault written next to Notion: a folder on this machine. Empty = off.
+    # Nothing about this pipeline depends on Notion, so NOTION_ENABLED=false leaves a working
+    # Obsidian-only bot.
+    obsidian_vault: Path | None = None
+    obsidian_enabled: bool = True
+    notion_enabled: bool = True
+    # The vault's own interpreter ("which note is this?") and the linker. Both are small jobs
+    # on a small context: Haiku.
+    filer_model: str = "claude-haiku-4-5"
+    linker_model: str = "claude-haiku-4-5"
+    linker_enabled: bool = True
+
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"

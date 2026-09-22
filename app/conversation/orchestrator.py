@@ -86,6 +86,7 @@ from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
 from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
+from app.vault.pipeline import VaultPipeline, VaultTurn
 
 log = logging.getLogger(__name__)
 
@@ -279,6 +280,10 @@ class _Turn:
     progress: Callable[[Reply], Awaitable[None]] | None = None
     # Every model call this message made, in order (see `call`).
     calls: list[dict] = field(default_factory=list)
+    # The Obsidian side of this message, running next to everything above, and the execution
+    # row this turn wrote (the two meet in _finish_vault).
+    vault: asyncio.Task | None = None
+    execution_id: int | None = None
 
     def audit(self, **cols: Any) -> None:
         self.cols.update(cols)
@@ -301,11 +306,12 @@ class Orchestrator:
         validator: SemanticValidator, policy: Policy, executor: Executor, store: AuditStore,
         sessions: SessionStore, clock: Callable[[], datetime] = now_utc,
         researcher: WebResearcher | None = None, planner: Planner | None = None,
-        note: Callable[[], str] | None = None,
+        note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
     ) -> None:
         self._s = settings
         self._researcher = researcher
         self._planner = planner
+        self._vault = vault
         self._note = note or (lambda: "")
         self._discovery = discovery
         self._builder = builder
@@ -425,6 +431,10 @@ class Orchestrator:
         expired = self._sessions.pop_expired_one(turn.chat_id, turn.now)
         prefix = await self._expired_prefix(turn, expired) if expired is not None else ""
         session = None if expired is not None else self._sessions.get(turn.chat_id, turn.now)
+        if self._vault is not None and session is None:
+            # A fresh thought goes to both stores at once. An answer to a question does not:
+            # it answers Notion, and the vault has already had the message it belongs to.
+            turn.vault = asyncio.create_task(self._vault.handle(text))
 
         # A live session makes this message a free-text answer: the model sees the question it is
         # answering and both halves of the request, and its fresh interpretation replaces the
@@ -747,7 +757,7 @@ class Orchestrator:
             return Reply(text)
         batch = UndoRecord(kind="batch",
                            batch=[UndoRecord.model_validate_json(u) for u in state.undo])
-        execution_id = self._store.add_execution(
+        execution_id = turn.execution_id = self._store.add_execution(
             turn.event_id, turn.chat_id, None, batch.model_dump_json(),
             self._clock() + timedelta(seconds=self._s.undo_window_s),  # from the last write
         )
@@ -856,11 +866,17 @@ class Orchestrator:
                else self._store.latest_execution(turn.chat_id, turn.now))
         if row is None or row["undone"] or row["chat_id"] != turn.chat_id:
             return self._plain(turn, "UNDO_EXPIRED", minutes=minutes)
+        record = UndoRecord.model_validate_json(row["undo"])
         try:
-            await self._executor.undo(UndoRecord.model_validate_json(row["undo"]))
+            await self._executor.undo(record)
         except NotionError as e:
             log.warning("undo failed: %s", e)
             return self._plain(turn, "UNDO_FAILED", message=e.message)
+        if record.vault and self._vault is not None:
+            try:
+                await self._vault.undo(record.vault)
+            except Exception:  # Notion is already back: say so rather than fail the undo
+                log.exception("undoing the vault side failed")
         self._store.mark_undone(row["id"])
         turn.audit(decision=_kind("UNDO"))
         return Reply(texts.UNDONE)
@@ -1048,6 +1064,10 @@ class Orchestrator:
                 log.exception("unhandled failure in event %s", turn.event_id)
                 reply = self._plain(turn, "INTERNAL")
             try:
+                reply = await self._finish_vault(turn, reply)
+            except Exception:  # the Notion answer is already earned
+                log.exception("obsidian side failed in event %s", turn.event_id)
+            try:
                 self._finish(turn)
             except Exception:  # the answer is already earned; losing the row must not eat it
                 log.exception("could not close audit event %s", turn.event_id)
@@ -1125,6 +1145,49 @@ class Orchestrator:
         turn.audit(error=code, decision=json.dumps({"kind": "ERROR", "code": code}))
         return Reply(_error(code, **fmt))
 
+    async def _finish_vault(self, turn: _Turn, reply: Reply) -> Reply:
+        """Wait for the Obsidian side of this message, say in one line what it did, and put its
+        undo where the reply's own Undo button will find it.
+
+        The two sides are joined here and nowhere else: whatever the Notion side ended as — a
+        write, a question, a rejection — the vault has already written, and the user is told so.
+        When Notion wrote too, both undos live in that write's record, so one button reverts
+        both; when it did not, the vault's undo gets a row of its own, which /undo still finds."""
+        if turn.vault is None:
+            return reply
+        try:
+            result: VaultTurn = await turn.vault
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("the obsidian side of event %s failed", turn.event_id)
+            return reply
+        if result.model and (result.writes or result.error):
+            turn.call(result.model, "vault", writes=len(result.writes) or None,
+                      error=result.error or None,
+                      prompt_tokens=result.prompt_tokens, output_tokens=result.output_tokens)
+        undos = result.undos
+        if undos:
+            self._record_vault_undo(turn, undos)
+        line = result.reply_line()
+        return replace(reply, text=f"{reply.text}\n{line}".strip()) if line else reply
+
+    def _record_vault_undo(self, turn: _Turn, undos: list[Any]) -> None:
+        if turn.execution_id is not None:
+            row = self._store.get_execution(turn.execution_id, turn.now)
+            if row is not None:
+                record = UndoRecord.model_validate_json(row["undo"])
+                record.vault = undos
+                self._store.update_execution_undo(turn.execution_id, record.model_dump_json())
+                return
+        # Notion wrote nothing this turn (it asked a question, or could not place the message):
+        # the vault's own row carries no Notion part, and /undo is what reaches it.
+        turn.execution_id = self._store.add_execution(
+            turn.event_id, turn.chat_id, None,
+            UndoRecord(kind="vault", vault=undos).model_dump_json(),
+            self._clock() + timedelta(seconds=self._s.undo_window_s),
+        )
+
     def _record_execution(self, turn: _Turn, result: ExecutionResult) -> int | None:
         """Executions are rows only when they can be reverted; `reply_message_id` is filled in by
         Plan 3b after the reply is actually sent (there is no message id at this point)."""
@@ -1133,10 +1196,11 @@ class Orchestrator:
         # Measured from the write, not from when the message arrived: a web search can spend
         # four minutes before anything is written, and undo used to expire during it — the user
         # pressed the button two minutes after the page appeared and was told it was too late.
-        return self._store.add_execution(
+        turn.execution_id = self._store.add_execution(
             turn.event_id, turn.chat_id, None, result.undo.model_dump_json(),
             self._clock() + timedelta(seconds=self._s.undo_window_s),
         )
+        return turn.execution_id
 
     @staticmethod
     def _audit_llm(turn: _Turn, interp: Interpretation, trace: LLMTrace) -> None:

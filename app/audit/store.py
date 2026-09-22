@@ -152,6 +152,14 @@ class AuditStore:
             self._conn.commit()
             return int(cur.lastrowid)
 
+    def update_execution_undo(self, execution_id: int, undo: str) -> None:
+        """Replace an execution's undo record — used when the Obsidian side finishes after the
+        Notion write, so one Undo button reverts both."""
+        with self._lock:
+            self._conn.execute("UPDATE executions SET undo = ? WHERE id = ?",
+                               (undo, execution_id))
+            self._conn.commit()
+
     def get_execution(self, execution_id: int, now: datetime) -> dict | None:
         with self._lock:
             row = self._conn.execute(
