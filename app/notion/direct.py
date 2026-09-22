@@ -144,6 +144,11 @@ class DirectNotionProvider:
         data = await self._request("POST", f"/data_sources/{data_source_id}/query", body)
         return data.get("results", [])
 
+    async def query_all(self, data_source_id: str) -> list[dict]:
+        """Every row of the data source, page after page — for a one-off export, not for a
+        message (a message reads at most a page of rows; see query_data_source)."""
+        return await self._paginate("POST", f"/data_sources/{data_source_id}/query", {})
+
     async def get_page(self, page_id: str) -> dict:
         return await self._request("GET", f"/pages/{page_id}")
 

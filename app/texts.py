@@ -222,3 +222,49 @@ ROOT_TARGET_DESCRIPTION = (
 PENDING_QUESTION = "вопрос"
 PENDING_TARGET = "цель"
 PENDING_TEXT = "исходный_текст"
+
+# ---- Obsidian vault ---------------------------------------------------------------------------
+
+# The vault's layout: folder and note names the user sees in Obsidian (see
+# documentation/OBSIDIAN_PLAN.md). Renaming one here renames it for every note written later,
+# not for notes already in the vault.
+VAULT_TASKS_NOTE = "Задачи"
+VAULT_ARCHIVE_NOTE = "Задачи — архив"
+VAULT_AREAS_DIR = "Области"
+VAULT_NOTES_DIR = "Заметки"
+VAULT_BOOKS_DIR = "Книги"
+VAULT_CLUB_DIR = "Кнуб"
+VAULT_FILES_DIR = "Вложения"
+VAULT_DAILY_DIR = "Дневник"
+VAULT_HOME_NOTE = "Главная"
+VAULT_NO_TAG_HEADING = "Без тэга"
+VAULT_COUNTDOWN_TAG = "отсчёт"
+# Books database status -> the name of its view in the books base.
+VAULT_BOOK_VIEWS = {"Reading": "Читаю", "To read": "Хочу прочитать", "Read": "Прочитано"}
+VAULT_BOOKS_ALL_VIEW = "Все"
+VAULT_BOOKS_COLUMNS = {"status": "Статус", "author": "Автор", "created": "Добавлена"}
+VAULT_CLUB_VIEW = "Встречи"
+VAULT_CLUB_COLUMNS = {"book": "Книга", "author": "Автор", "date": "Дата",
+                      "event_posted": "Анонс", "vyvody_posted": "Выводы"}
+VAULT_HOME_TODAY = "Сегодня и просрочено"
+VAULT_HOME_DOING = "В работе"
+VAULT_HOME_SOON = "Скоро"
+VAULT_HOME_COUNTDOWN = "Обратный отсчёт"
+VAULT_HOME_READING = "Читаю"
+# The guide note the bot's filer reads; the user edits it in Obsidian. Placeholders are the
+# folder names above.
+VAULT_GUIDE = """# Как бот раскладывает записи
+
+Эту заметку читает бот. Пишите правила простыми словами — он им следует.
+
+- Задачи — строками в [[{tasks}]], под заголовком своей области, с её тэгом.
+  Срок — `📅 ГГГГ-ММ-ДД`, повтор — `🔁 every week on Monday`.
+  Обратный отсчёт до срока — тэг `#{countdown}`.
+- Книги — заметка на книгу в папке «{books}»: свойства `status` (To read / Reading / Read)
+  и `author`.
+- Встречи книжного клуба — в папке «{club}».
+- Записи о прошедшем дне («сегодня …») — в дневник, папка «{daily}».
+- Остальное — заметкой в «{notes}», со ссылкой на свою область.
+
+## Области
+"""

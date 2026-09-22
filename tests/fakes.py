@@ -67,6 +67,10 @@ class FakeNotionProvider:
             rows.sort(key=lambda r: r.get("last_edited_time", ""), reverse=True)
         return rows[:page_size]
 
+    async def query_all(self, data_source_id) -> list[dict]:
+        self.calls.append(("query_all", data_source_id))
+        return list(self.items.get(data_source_id, []))
+
     async def get_page(self, page_id: str) -> dict:
         self.calls.append(("get_page", page_id))
         return self.pages.get(page_id, {"id": page_id, "properties": {}})
