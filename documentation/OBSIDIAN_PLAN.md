@@ -153,6 +153,10 @@ Haiku linker run over the vault, which can also be skipped.
 - «прост»: stays out of the vault.
 - Daily notes: **on**. «сегодня …» messages become a line in today's note (`Дневник/`);
   the Notion side may simply send them to its inbox.
+- 2026-09-22: **built and released in 0.5.10** — the migration, the vault index, the filer,
+  the writer, the linker and the wiring into the bot (see ARCHITECTURE §14a, FLOWS F19). Left
+  for later: the `search` action on the Obsidian side, and `NOTION_ENABLED=false` as a real
+  switch-over rather than a setting nobody has tried yet.
 - 2026-09-22: migration done into `C:\data\obsidian` (53 notes, 24 attachments) with
   `tools/notion_to_vault.py`; settings in git-ignored `data/vault_migration.yaml`.
 
