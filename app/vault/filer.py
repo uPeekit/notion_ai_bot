@@ -24,7 +24,7 @@ from app.vault.writer import VaultAction
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("task", "note", "append", "update", "log", "inbox")
+ACTIONS = ("task", "note", "append", "update", "log", "search", "inbox")
 MAX_ACTIONS = 10
 MAX_TOKENS = 4000
 MAX_BODY_LINES = 200
@@ -155,6 +155,9 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 continue
         if action.action in ("task", "log", "inbox") and not action.text.strip():
             continue
+        if action.action == "search" and not (action.text.strip() or action.tags
+                                              or action.folder or action.props):
+            action = VaultAction(action="inbox", text=message)
         out.append(action)
     return out
 

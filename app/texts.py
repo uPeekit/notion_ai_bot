@@ -139,6 +139,9 @@ INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."
 # arrive without a candidate; their placeholder comes from Issue.detail. test_texts.py pins the
 # placeholder set of every code against that.
 ERRORS: dict[str, str] = {
+    # Both stores are switched off on the admin page: there is nowhere to write.
+    "NOTHING_ENABLED": "Обе стороны выключены — включите Notion или Obsidian на странице "
+                        "настроек.",
     # A plan step named a place the workspace does not have; the model offered a different one,
     # and a step writes without asking, so nothing is written at all.
     "STEP_WRONG_TARGET": "Не нашёл, куда записать: «{target_name}».",
@@ -269,6 +272,11 @@ VAULT_GUIDE = """# Как бот раскладывает записи
 ## Области
 """
 VAULT_INBOX_NOTE = "Разное"
+# A question answered from the vault: the header, one line per hit, and the empty answer.
+VAULT_SEARCH_HEADER = "Obsidian — нашёл:"
+VAULT_SEARCH_HIT = "• {name}{line}"
+VAULT_SEARCH_TASK = "• {line}"
+VAULT_SEARCH_EMPTY = "Obsidian: ничего не нашёл."
 # One line per write, appended to the reply: what the Obsidian side did.
 VAULT_REPLY = "Obsidian: {what}"
 VAULT_FAILED = "Obsidian: не записано ({error})"

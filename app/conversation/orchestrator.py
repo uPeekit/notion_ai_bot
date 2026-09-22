@@ -84,6 +84,7 @@ from app.notion import titles
 from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
+from app.switches import Switches
 from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
 from app.vault.pipeline import VaultPipeline, VaultTurn
@@ -307,11 +308,13 @@ class Orchestrator:
         sessions: SessionStore, clock: Callable[[], datetime] = now_utc,
         researcher: WebResearcher | None = None, planner: Planner | None = None,
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
+        switches: Switches | None = None,
     ) -> None:
         self._s = settings
         self._researcher = researcher
         self._planner = planner
         self._vault = vault
+        self._switches = switches
         self._note = note or (lambda: "")
         self._discovery = discovery
         self._builder = builder
@@ -420,7 +423,17 @@ class Orchestrator:
 
     # ---- text pipeline -----------------------------------------------------------------------
 
+    def _on(self, name: str) -> bool:
+        return self._switches.get(name) if self._switches is not None else True
+
+    def _vault_on(self) -> bool:
+        return self._vault is not None and self._on("obsidian")
+
     async def _text(self, turn: _Turn, text: str) -> Reply:
+        if not self._on("notion"):
+            # Notion is switched off on the admin page: the vault answers on its own, which is
+            # what this pipeline was built to be able to do.
+            return await self._vault_only(turn, text)
         try:
             snapshot = await self._discovery.get()
         except Exception as e:  # any transport failure reads the same to the user
@@ -431,7 +444,7 @@ class Orchestrator:
         expired = self._sessions.pop_expired_one(turn.chat_id, turn.now)
         prefix = await self._expired_prefix(turn, expired) if expired is not None else ""
         session = None if expired is not None else self._sessions.get(turn.chat_id, turn.now)
-        if self._vault is not None and session is None:
+        if self._vault_on() and session is None:
             # A fresh thought goes to both stores at once. An answer to a question does not:
             # it answers Notion, and the vault has already had the message it belongs to.
             turn.vault = asyncio.create_task(self._vault.handle(text))
@@ -478,6 +491,16 @@ class Orchestrator:
         if turn.plan is not None:
             reply = await self._after_step(turn, reply)
         return _prefixed(reply, prefix)
+
+    async def _vault_only(self, turn: _Turn, text: str) -> Reply:
+        """A message when Notion is off. There is nothing to ask about — the vault never asks —
+        so the reply is whatever _finish_vault appends to it."""
+        if not self._vault_on():
+            return self._plain(turn, "NOTHING_ENABLED")
+        turn.audit(decision=_kind("VAULT"))
+        turn.source_text = text
+        turn.vault = asyncio.create_task(self._vault.handle(text))
+        return Reply("")
 
     async def _dispatch(
         self, turn: _Turn, decision: Decision, result: ValidationResult, ctx: Context, text: str,

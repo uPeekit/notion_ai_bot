@@ -49,6 +49,7 @@
   .option-row .option-name { min-width: 10em; font-size: 0.85rem; }
   .option-row input { flex: 1; }
   #workspace-note { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
+  #switches { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
   .target.is-hidden { opacity: 0.55; }
   .inbox-row { margin: 8px 0; font-size: 0.9rem; }
   .inbox-row label { margin-left: 4px; }
@@ -85,6 +86,17 @@
   Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
   Запустите бота и обновите эту страницу.
 </div>
+<h2>Что включено</h2>
+<p class="hint">
+  Куда бот пишет ваши сообщения. Меняется сразу, перезапуск не нужен. Если выключить Notion,
+  останется только Obsidian — бот продолжит работать, вопросов задавать не будет.
+</p>
+<div id="switches">
+  <label><input type="checkbox" id="switch-notion"> Notion</label>
+  <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
+  <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
+</div>
+<p class="hint" id="switches-note"></p>
 <h2>Заметка о воркспейсе</h2>
 <p class="hint">
   Как устроен ваш Notion — своими словами. Бот получает её с каждым сообщением. Например:
@@ -304,6 +316,15 @@ function load() {
       state.targets = data.targets || [];
       state.inboxLocked = !!data.inbox_locked;
       document.getElementById("workspace-note").value = data.workspace_note || "";
+      var switches = data.switches || {};
+      ["notion", "obsidian", "linker"].forEach(function (name) {
+        var el = document.getElementById("switch-" + name);
+        el.checked = switches[name] !== false;
+      });
+      document.getElementById("switches-note").textContent = data.obsidian_vault
+        ? "Хранилище: " + data.obsidian_vault
+        : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env, иначе сторона Obsidian "
+          + "выключена независимо от этой галочки.";
       showLoadError("");
       showFetchedAt(data.fetched_at || null);
       render();
@@ -360,6 +381,11 @@ function collectBody() {
   return {
     targets: targets,
     workspace_note: document.getElementById("workspace-note").value,
+    switches: {
+      notion: document.getElementById("switch-notion").checked,
+      obsidian: document.getElementById("switch-obsidian").checked,
+      linker: document.getElementById("switch-linker").checked,
+    },
   };
 }
 

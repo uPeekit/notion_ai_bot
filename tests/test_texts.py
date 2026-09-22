@@ -53,6 +53,7 @@ ERROR_PLACEHOLDERS: dict[str, set[str]] = {
     "item_not_found": {"item_text"}, "INTERNAL": set(),
     "WEB_UNAVAILABLE": set(), "WEB_FAILED": set(), "PLAN_UNAVAILABLE": set(),
     "PLAN_FAILED": set(), "STEP_WRONG_TARGET": {"target_name"},
+    "NOTHING_ENABLED": set(),
 }
 
 

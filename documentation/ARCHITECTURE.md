@@ -490,6 +490,8 @@ message ─┬─ Notion pipeline (§4, unchanged)
                                     the file's previous text kept for Undo
                linker.Linker        after the reply: names and aliases, then a Haiku pass for
                                     the links matching cannot see
+               search.search        a question ("что у меня по дому?") answered from the index
+                                    and the notes, with no model call of its own
 ```
 
 Rules that hold here:
@@ -504,6 +506,12 @@ Rules that hold here:
   restore of the previous text.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
+
+**Switches** (`app/switches.py`, `data/switches.json`, edited on the admin page): `notion`,
+`obsidian`, `linker`. `.env` says what they are until the file exists; the file then wins, and
+each is read per message, so a change needs no restart. With `notion` off the orchestrator goes
+straight to `_vault_only`: no snapshot, no interpreter, no questions — the Obsidian bot on its
+own. With both off, a message is refused rather than swallowed.
 
 The one-off migration of the Notion workspace into a vault is `tools/notion_to_vault.py`
 (read-only against Notion, re-runnable, dry run by default).

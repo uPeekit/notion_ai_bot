@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -19,6 +20,7 @@ from app import texts
 from app.vault.filer import Filer, FilerError, check, context
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
+from app.vault.search import Hit, search, vault_name
 from app.vault.writer import VaultAction, VaultUndo, VaultWrite, VaultWriter
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,10 @@ MAX_SUMMARY = 3
 @dataclass
 class VaultTurn:
     writes: list[VaultWrite] = field(default_factory=list)
+    # A question answered from the vault: its hits, and the vault's name for the links.
+    hits: list[Hit] = field(default_factory=list)
+    asked: bool = False
+    vault: str = ""
     error: str = ""
     model: str = ""
     prompt_tokens: int = 0
@@ -41,22 +47,42 @@ class VaultTurn:
     def reply_line(self) -> str:
         if self.error:
             return texts.VAULT_FAILED.format(error=self.error)
+        if self.asked and not self.writes:
+            return self._found()
         if not self.writes:
             return ""
         what = ", ".join(w.what for w in self.writes[:MAX_SUMMARY])
         if len(self.writes) > MAX_SUMMARY:
             what += f" (+{len(self.writes) - MAX_SUMMARY})"
-        return texts.VAULT_REPLY.format(what=what)
+        line = texts.VAULT_REPLY.format(what=what)
+        return f"{line}\n{self._found()}" if self.asked else line
+
+    def _found(self) -> str:
+        """The answer to a question, one line per hit, each a link that opens the note in
+        Obsidian — on the phone too."""
+        if not self.hits:
+            return texts.VAULT_SEARCH_EMPTY
+        lines = [texts.VAULT_SEARCH_HEADER]
+        for hit in self.hits:
+            if hit.kind == "task":
+                lines.append(texts.VAULT_SEARCH_TASK.format(line=hit.line))
+                continue
+            name = f"[{hit.name}]({hit.uri(self.vault)})" if self.vault else hit.name
+            lines.append(texts.VAULT_SEARCH_HIT.format(
+                name=name, line=f" — {hit.line}" if hit.line else ""))
+        return "\n".join(lines)
 
 
 class VaultPipeline:
     def __init__(self, index: VaultIndex, writer: VaultWriter, filer: Filer,
-                 linker: Linker | None = None, *, now=datetime.now) -> None:
+                 linker: Linker | None = None, *, now=datetime.now,
+                 linking: Callable[[], bool] = lambda: True) -> None:
         self._index = index
         self._writer = writer
         self._filer = filer
         self._linker = linker
         self._now = now
+        self._linking = linking
         self._tasks: set[asyncio.Task] = set()  # linking, running behind the reply
 
     async def aclose(self) -> None:
@@ -82,15 +108,23 @@ class VaultPipeline:
         if not actions:  # the model answered nothing usable: keep the words rather than drop them
             actions = [VaultAction(action="inbox", text=message)]
         turn = VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
-                         output_tokens=output_tokens)
+                         output_tokens=output_tokens, vault=vault_name(self._index.root))
+        questions = [a for a in actions if a.action == "search"]
+        actions = [a for a in actions if a.action != "search"]
+        for question in questions:
+            turn.asked = True
+            turn.hits += await asyncio.to_thread(
+                search, self._index, question.text, folder=question.folder,
+                tags=tuple(question.tags), props=question.props)
         try:
             turn.writes = await asyncio.to_thread(self._write_all, actions)
         except (OSError, ValueError) as e:
             log.warning("vault write failed: %s", e)
             turn.error = type(e).__name__
             return turn
-        log.info("vault %s wrote %s", self._filer.model,
-                 ", ".join(f"{w.kind}:{w.note}" for w in turn.writes))
+        log.info("vault %s: %s", self._filer.model,
+                 ", ".join([*(f"{w.kind}:{w.note}" for w in turn.writes),
+                            *([f"search:{len(turn.hits)} hits"] if turn.asked else [])]) or "-")
         self._link_later(turn.writes)
         return turn
 
@@ -98,7 +132,7 @@ class VaultPipeline:
         return [self._writer.run(a) for a in actions]
 
     def _link_later(self, writes: list[VaultWrite]) -> None:
-        if self._linker is None or not writes:
+        if self._linker is None or not writes or not self._linking():
             return
         task = asyncio.create_task(self._link(writes))
         self._tasks.add(task)

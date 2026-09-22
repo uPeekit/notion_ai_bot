@@ -15,6 +15,7 @@ from app.config import Settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
 from app.llm.context import ContextBuilder
+from app.switches import Switches
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
 from app.vault.filer import Filer
@@ -125,6 +126,38 @@ async def test_an_answer_to_a_question_does_not_reach_the_vault_again(bot):
 
     assert len(bot.claude.seen) == 1  # the filer read the message, not the answer to Notion
     assert bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md").count("- [ ] зубы") == 1
+
+
+async def test_notion_off_leaves_a_working_obsidian_bot(bot, tmp_path):
+    """The switch the whole design exists for: no Notion call, no question, the vault answers."""
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [{"actions": [{"action": "task", "text": "зубы", "heading": "дом"}]}]
+
+    reply = await bot.orch.handle_text(CHAT, USER, "зубы")
+
+    assert reply.text.startswith("Obsidian:") and not reply.buttons
+    assert bot.llm.calls == 0 and bot.notion.calls == []
+    assert "- [ ] зубы" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert json.loads(executions(bot)[0]["undo"])["kind"] == "vault"
+
+
+async def test_obsidian_off_leaves_the_notion_bot_exactly_as_it_was(bot, tmp_path):
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"obsidian": False})
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95, fields={
+        "t3.f1": val("зубы", 1.0), "t3.f2": val("t3.f2.o1", 1.0)})))
+
+    reply = await bot.orch.handle_text(CHAT, USER, "зубы")
+
+    assert "✅" in reply.text and "Obsidian" not in reply.text
+    assert bot.claude.seen == []  # the filer was never asked
+    assert "зубы" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+async def test_both_off_says_so_rather_than_swallowing_the_message(bot, tmp_path):
+    bot.orch._switches = Switches(tmp_path / "switches.json",
+                                  {"notion": False, "obsidian": False})
+    reply = await bot.orch.handle_text(CHAT, USER, "зубы")
+    assert reply.text == texts.ERRORS["NOTHING_ENABLED"]
 
 
 async def test_a_vault_failure_never_costs_the_notion_answer(bot):

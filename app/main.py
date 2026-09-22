@@ -75,6 +75,7 @@ from app.notion.images import ImageHost
 from app.notion.provider import NotionProvider
 from app.speech.base import SpeechToText
 from app.speech.whisper_local import WhisperLocal
+from app.switches import Switches
 from app.telegram.handlers import register
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
@@ -214,7 +215,7 @@ class App:
     fatal: tuple[int, str] | None = None
 
 
-def _vault_pipeline(settings: Settings) -> VaultPipeline | None:
+def _vault_pipeline(settings: Settings, switches: Switches) -> VaultPipeline | None:
     """The Obsidian side, when a vault is configured and Claude is reachable. It is built even
     when Notion is not: the two pipelines share nothing."""
     key = settings.anthropic_api_key.get_secret_value()
@@ -226,9 +227,9 @@ def _vault_pipeline(settings: Settings) -> VaultPipeline | None:
         return None
     index = VaultIndex(root)
     writer = VaultWriter(index)
-    linker = (Linker(index, writer, api_key=key, model=settings.linker_model)
-              if settings.linker_enabled else None)
-    return VaultPipeline(index, writer, Filer(key, settings.filer_model), linker)
+    linker = Linker(index, writer, api_key=key, model=settings.linker_model)
+    return VaultPipeline(index, writer, Filer(key, settings.filer_model), linker,
+                         linking=lambda: switches.get("linker"))
 
 
 def build(
@@ -275,13 +276,18 @@ def build(
                               settings.claude_model)
                 if uses_cloud(settings) else None)
     executor = Executor(provider, images=images, sections=sections)
-    vault = _vault_pipeline(settings)
+    switches = Switches(settings.db_path.with_name("switches.json"), {
+        "notion": settings.notion_enabled, "obsidian": settings.obsidian_enabled,
+        "linker": settings.linker_enabled,
+    })
+    vault = _vault_pipeline(settings, switches)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,
+        switches=switches,
     )
     speech = speech_factory(settings)
-    admin = AdminServer(settings, discovery, descriptions, note)
+    admin = AdminServer(settings, discovery, descriptions, note, switches)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
