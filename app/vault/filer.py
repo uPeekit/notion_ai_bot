@@ -71,6 +71,7 @@ class VaultContext:
     folders: list[str]
     tags: list[str]
     known_notes: list[str]
+    open_tasks: list[str]
     tasks_note: str
     daily_folder: str
     today: str
@@ -79,7 +80,8 @@ class VaultContext:
     def json(self) -> str:
         return filer_vault(guide=self.guide, today=self.today, weekday=self.weekday,
                            folders=self.folders, tags=self.tags, tasks_note=self.tasks_note,
-                           daily_folder=self.daily_folder, known_notes=self.known_notes)
+                           daily_folder=self.daily_folder, known_notes=self.known_notes,
+                           open_tasks=self.open_tasks)
 
 
 def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
@@ -90,6 +92,7 @@ def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
         folders=index.folders(),
         tags=index.tags(),
         known_notes=[n.name for n in index.candidates(message, MAX_CANDIDATES)],
+        open_tasks=index.open_tasks(message),
         tasks_note=texts.VAULT_TASKS_NOTE,
         daily_folder=texts.VAULT_DAILY_DIR,
         today=now.strftime("%Y-%m-%d"),

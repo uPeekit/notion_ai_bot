@@ -69,6 +69,13 @@ def test_context_shows_names_folders_tags_and_the_guide_but_no_paths(index):
     assert "2026-09-22" in payload and ".md" not in payload
 
 
+def test_context_offers_the_open_tasks_a_message_could_be_about(index):
+    """Without this the filer cannot tick anything: it sees note names, and a task is a line
+    inside one. «посылку забрал» has to find the task that is already there."""
+    assert context(index, "счета оплатил", NOW).open_tasks == ["счета #home"]
+    assert context(index, "что-то другое", NOW).open_tasks == []
+
+
 # ---- checking the model's answer ---------------------------------------------------------
 
 def test_check_keeps_a_good_task(index):

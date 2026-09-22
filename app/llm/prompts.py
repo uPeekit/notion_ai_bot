@@ -394,6 +394,9 @@ heading (заголовок внутри неё, если подходит), bod
 - "update" — изменить существующую заметку: note, и что меняем — props (значение "" очищает \
 свойство), либо task (текст строки-галочки) с done=true/false и/или due, либо heading + body \
 (заменить раздел целиком).
+- если сообщение говорит, что дело сделано («посылку забрал», «оплатил счета»), и в \
+"открытые_задачи" есть подходящая строка — это "update": note = файл задач, task = эта строка \
+целиком, done=true. В дневник такое не пиши.
 - "log" — запись о прошедшем дне («сегодня …», «вчера ходили…»): text. Уходит в дневник.
 - "inbox" — непонятно куда: text.
 
@@ -406,7 +409,8 @@ def filer_message(request: str, vault: str) -> str:
 
 
 def filer_vault(*, guide: str, today: str, weekday: str, folders: list[str], tags: list[str],
-                tasks_note: str, daily_folder: str, known_notes: list[str]) -> str:
+                tasks_note: str, daily_folder: str, known_notes: list[str],
+                open_tasks: list[str]) -> str:
     """What the filer is told about the vault, as JSON. Names only — never a path."""
     return json.dumps({
         "инструкция": guide,
@@ -416,6 +420,7 @@ def filer_vault(*, guide: str, today: str, weekday: str, folders: list[str], tag
         "файл_задач": tasks_note,
         "папка_дневника": daily_folder,
         "известные_заметки": known_notes,
+        "открытые_задачи": open_tasks,
     }, ensure_ascii=False, indent=1)
 
 

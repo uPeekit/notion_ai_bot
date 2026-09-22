@@ -186,6 +186,22 @@ class VaultIndex:
         scored.sort(key=lambda s: (-s[0], s[1].name))
         return [n for _, n in scored[:limit]]
 
+    def open_tasks(self, text: str, limit: int = 12) -> list[str]:
+        """Open tick boxes that share a word with the message, so "picked the parcel up" can
+        tick the task that is already there instead of writing a new line about it."""
+        from app.vault.mdedit import OPEN, task_lines
+
+        note = self.by_name(texts.VAULT_TASKS_NOTE)
+        if note is None:
+            return []
+        try:
+            lines = task_lines(self.read(note.path))
+        except OSError:
+            return []
+        wanted = stems(text)
+        hits = [line for _, mark, line in lines if mark == OPEN and stems(line) & wanted]
+        return hits[:limit]
+
     def guide(self) -> str:
         """The user's own instructions to the bot (`_bot.md`), without its frontmatter."""
         note = self.by_name(GUIDE_NOTE)
