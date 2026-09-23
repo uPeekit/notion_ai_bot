@@ -51,7 +51,10 @@ HOME_NOTE = texts.VAULT_HOME_NOTE
 GUIDE_NOTE = "_bot"
 MANIFEST = ".notion-import.json"
 
-# Tasks-plugin status characters (all four are in the plugin's default status set).
+# Tasks-plugin status characters. Only " " and "x" are standard; "/" (Doing) and "-" (Pass)
+# are custom statuses, which the user registers in one click — Tasks settings -> Task Statuses
+# -> "Add All Unknown Status Types". Until then the plugin reads them as not-done, which is
+# wrong only for Pass, and the home note's "in progress" list stays empty.
 STATUS_CHAR = {"To do": " ", "Doing": "/", "Done": "x", "Pass": "-"}
 CLOSED = ("Done", "Pass")
 REPEAT_RULE = {"Daily": "every day", "Weekly": "every week", "Monthly": "every month",

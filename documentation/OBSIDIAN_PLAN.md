@@ -114,6 +114,13 @@ toggles (→ foldable callouts), images and links. Links to other migrated pages
 `[[wikilinks]]`. Notion image URLs expire within an hour, so images are downloaded during the
 run. Finally, the linker's free pass runs once over the whole vault.
 
+### After installing Tasks
+
+`[/]` (Doing) and `[-]` (Pass) came over from Notion but are **custom** statuses: Tasks ships
+only `[ ]` and `[x]`. One click registers them — Settings → Tasks → Task Statuses → **"Add All
+Unknown Status Types"** — after which the home note's "В работе" list works and Pass stops
+counting as an open task.
+
 ## 6. Plugins
 
 **Core** (built in; switch on):
