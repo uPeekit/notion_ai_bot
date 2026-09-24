@@ -242,6 +242,8 @@ VAULT_DAILY_DIR = "Дневник"
 VAULT_HOME_NOTE = "Главная"
 VAULT_NO_TAG_HEADING = "Без тэга"
 VAULT_COUNTDOWN_TAG = "отсчёт"
+# Frontmatter properties a note may carry its own date in (a meeting, a trip, a birthday).
+VAULT_DATE_PROPS = ("date", "дата", "when", "due", "start")
 # Books database status -> the name of its view in the books base.
 VAULT_BOOK_VIEWS = {"Reading": "Читаю", "To read": "Хочу прочитать", "Read": "Прочитано"}
 VAULT_BOOKS_ALL_VIEW = "Все"
@@ -288,3 +290,16 @@ VAULT_WHAT = {
     "log": "запись в дневнике «{note}»",
     "inbox": "в «{note}» — не понял, куда это",
 }
+
+# ---- the vault's agenda: the morning message and the "what now" answer -------------------------
+
+VAULT_AGENDA_HEADER = "🌅 {date} — что на подходе:"
+VAULT_AGENDA_OVERDUE = "🔴 Просрочено ({n}):"
+VAULT_AGENDA_TODAY = "📌 Сегодня ({n}):"
+VAULT_AGENDA_TOMORROW = "➡️ Завтра ({n}):"
+VAULT_AGENDA_EVENTS = "📅 Встречи и даты ({n}):"
+VAULT_AGENDA_ITEM = "• {text}"
+# Answers to a question about a day or a range, and to "что мне сейчас делать".
+VAULT_ON_DAY = "📅 {date}:"
+VAULT_ON_RANGE = "📅 {start} — {end}:"
+VAULT_NOW = "С чего начать:"

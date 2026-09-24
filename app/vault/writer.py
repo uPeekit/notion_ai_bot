@@ -44,6 +44,11 @@ class VaultAction(BaseModel):
     countdown: bool = False
     done: bool | None = None
     task: str = ""
+    # A question about dates: a day or a range to look at, and which kind of answer is wanted
+    # ("day" = what is planned then, "now" = what to start with).
+    due_from: str = ""
+    due_to: str = ""
+    scope: str = ""
 
 
 class VaultUndo(BaseModel):

@@ -24,7 +24,7 @@ from app.vault.writer import VaultAction
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("task", "note", "append", "update", "log", "search", "inbox")
+ACTIONS = ("task", "note", "append", "update", "log", "search", "agenda", "inbox")
 MAX_ACTIONS = 10
 MAX_TOKENS = 4000
 MAX_BODY_LINES = 200
@@ -55,6 +55,9 @@ ACTION_SCHEMA = _obj({
     "countdown": {"type": "boolean"},
     "done": {"type": "boolean"},
     "task": _STRING,
+    "due_from": _STRING,
+    "due_to": _STRING,
+    "scope": {"enum": ["day", "now", "any"]},
 })
 FILER_SCHEMA = _obj({"actions": {"type": "array", "items": ACTION_SCHEMA}})
 
@@ -136,13 +139,19 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 countdown=bool(raw.get("countdown")),
                 done=raw.get("done") if isinstance(raw.get("done"), bool) else None,
                 task=str(raw.get("task", "")).strip(),
+                due_from=str(raw.get("due_from", "")).strip(),
+                due_to=str(raw.get("due_to", "")).strip(),
+                scope=str(raw.get("scope", "")).strip().lower(),
             )
         except ValidationError:
             continue
         if action.action not in ACTIONS:
             action = VaultAction(action="inbox", text=action.text or message)
-        if not _DATE.match(action.due):
-            action.due = ""
+        for field in ("due", "due_from", "due_to"):
+            if not _DATE.match(getattr(action, field)):
+                setattr(action, field, "")
+        if action.scope not in ("day", "now", "any"):
+            action.scope = ""
         if action.repeat and not action.repeat.lower().startswith("every"):
             action.repeat = ""
         if action.action in ("append", "update") and index.by_name(action.note) is None:
@@ -155,8 +164,11 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 continue
         if action.action in ("task", "log", "inbox") and not action.text.strip():
             continue
+        if action.action == "agenda" and not (action.scope or action.due_from or action.due_to):
+            action.scope = "now"
         if action.action == "search" and not (action.text.strip() or action.tags
-                                              or action.folder or action.props):
+                                              or action.folder or action.props
+                                              or action.due_from or action.due_to):
             action = VaultAction(action="inbox", text=message)
         out.append(action)
     return out

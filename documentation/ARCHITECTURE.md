@@ -492,6 +492,8 @@ message ─┬─ Notion pipeline (§4, unchanged)
                                     the links matching cannot see
                search.search        a question ("что у меня по дому?") answered from the index
                                     and the notes, with no model call of its own
+               agenda               dates: the morning digest, "what is planned on X", and
+                                    "what should I do now" — read from the files, never invented
 ```
 
 Rules that hold here:
@@ -506,6 +508,11 @@ Rules that hold here:
   restore of the previous text.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
+
+**The morning digest** (`app/daily.py`): one asyncio task sleeps until `DAILY_DIGEST_AT` in
+`TIMEZONE`, asks the vault for overdue / today / tomorrow plus dated notes, and sends it to the
+allowed chats. Nothing due means nothing sent. A restart within two hours of the time still
+sends that day's. It reads the Obsidian side only — that is where the dates live.
 
 **Switches** (`app/switches.py`, `data/switches.json`, edited on the admin page): `notion`,
 `obsidian`, `linker`. `.env` says what they are until the file exists; the file then wins, and

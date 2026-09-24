@@ -56,6 +56,7 @@ from app.commands.executor import Executor
 from app.config import Settings, load_settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
+from app.daily import DailyMessage, parse_at
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
@@ -232,6 +233,30 @@ def _vault_pipeline(settings: Settings, switches: Switches) -> VaultPipeline | N
                          linking=lambda: switches.get("linker"))
 
 
+def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
+                  application: Callable[[], Application]) -> DailyMessage | None:
+    """The morning agenda, if there is a vault to read it from and a time to send it at. It
+    reads the Obsidian side only: the vault is where the dates live."""
+    at = parse_at(settings.daily_digest_at)
+    if vault is None or at is None or not settings.allowed_user_ids:
+        return None
+
+    async def send() -> None:
+        if not switches.get("obsidian"):
+            return
+        text = await asyncio.to_thread(vault.digest)
+        if not text:
+            log.info("daily digest: nothing due, nothing sent")
+            return
+        for chat_id in sorted(settings.allowed_user_ids):
+            try:
+                await application().bot.send_message(chat_id, text)
+            except Exception:  # one blocked chat must not stop the others
+                log.exception("could not send the daily digest to a chat")
+
+    return DailyMessage(send, at, settings.timezone)
+
+
 def build(
     settings: Settings, *,
     provider_factory: ProviderFactory = _default_provider,
@@ -289,6 +314,7 @@ def build(
     speech = speech_factory(settings)
     admin = AdminServer(settings, discovery, descriptions, note, switches)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
+    daily = _daily_digest(settings, vault, switches, lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()
@@ -301,12 +327,16 @@ def build(
         await post_init_checks(app, application)
         if app.fatal is None:
             sweeper.start()
+            if daily is not None:
+                daily.start()
 
     async def _post_shutdown(_: Application) -> None:
         # Sweeper first: it is the one thing that still touches the store on its own timer, so it
         # must be off before the store underneath it closes. Admin next, store last — nothing
         # after this reaches for either.
         await sweeper.stop()
+        if daily is not None:
+            await daily.stop()
         admin.stop()
         if vault is not None:
             await vault.aclose()

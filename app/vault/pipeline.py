@@ -14,9 +14,10 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 from app import texts
+from app.vault import agenda as agenda_mod
 from app.vault.filer import Filer, FilerError, check, context
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -28,12 +29,21 @@ log = logging.getLogger(__name__)
 MAX_SUMMARY = 3
 
 
+def _day(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
 @dataclass
 class VaultTurn:
     writes: list[VaultWrite] = field(default_factory=list)
     # A question answered from the vault: its hits, and the vault's name for the links.
     hits: list[Hit] = field(default_factory=list)
     asked: bool = False
+    # An answer built from dates rather than from words: the agenda (see app/vault/agenda.py).
+    answer: str = ""
     vault: str = ""
     error: str = ""
     model: str = ""
@@ -47,6 +57,8 @@ class VaultTurn:
     def reply_line(self) -> str:
         if self.error:
             return texts.VAULT_FAILED.format(error=self.error)
+        if self.answer and not self.writes:
+            return self.answer
         if self.asked and not self.writes:
             return self._found()
         if not self.writes:
@@ -55,6 +67,8 @@ class VaultTurn:
         if len(self.writes) > MAX_SUMMARY:
             what += f" (+{len(self.writes) - MAX_SUMMARY})"
         line = texts.VAULT_REPLY.format(what=what)
+        if self.answer:
+            return f"{line}\n{self.answer}"
         return f"{line}\n{self._found()}" if self.asked else line
 
     def _found(self) -> str:
@@ -109,8 +123,12 @@ class VaultPipeline:
             actions = [VaultAction(action="inbox", text=message)]
         turn = VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
                          output_tokens=output_tokens, vault=vault_name(self._index.root))
+        dated = [a for a in actions if a.action == "agenda"]
         questions = [a for a in actions if a.action == "search"]
-        actions = [a for a in actions if a.action != "search"]
+        actions = [a for a in actions if a.action not in ("search", "agenda")]
+        for question in dated:
+            answer = await asyncio.to_thread(self._agenda_answer, question)
+            turn.answer = f"{turn.answer}\n{answer}".strip() if turn.answer else answer
         for question in questions:
             turn.asked = True
             turn.hits += await asyncio.to_thread(
@@ -127,6 +145,28 @@ class VaultPipeline:
                             *([f"search:{len(turn.hits)} hits"] if turn.asked else [])]) or "-")
         self._link_later(turn.writes)
         return turn
+
+    def _agenda_answer(self, action: VaultAction) -> str:
+        """A question about dates, answered from the vault: a day, a range, or "what now"."""
+        today = self._now().date()
+        if action.scope == "now":
+            return agenda_mod.listing(agenda_mod.suggest(self._index, today), texts.VAULT_NOW)
+        start = _day(action.due_from) or _day(action.due_to) or today
+        end = _day(action.due_to) or start
+        if end < start:
+            start, end = end, start
+        items = agenda_mod.on_day(self._index, start, end)
+        header = (texts.VAULT_ON_DAY.format(date=start.strftime("%d.%m")) if start == end
+                  else texts.VAULT_ON_RANGE.format(start=start.strftime("%d.%m"),
+                                                   end=end.strftime("%d.%m")))
+        return agenda_mod.listing(items, header)
+
+    def digest(self, today: date | None = None) -> str:
+        """The morning message: overdue, today, tomorrow, and the meetings around them. An
+        empty string when there is nothing to say — nobody wants "you have 0 tasks"."""
+        self._index.refresh()
+        day = today or self._now().date()
+        return agenda_mod.digest(agenda_mod.build(self._index, day), day)
 
     def _write_all(self, actions: list[VaultAction]) -> list[VaultWrite]:
         return [self._writer.run(a) for a in actions]
