@@ -34,6 +34,7 @@ _REAL_REGISTER_COMMANDS = main._register_commands
 TELEGRAM_TOKEN = "tg-test-token"
 NOTION_TOKEN = "ntn-test-token"
 ANTHROPIC_KEY = "sk-ant-test-key"
+GMAIL_PASSWORD = "abcdefghijklmnop"  # the shape of a Gmail app password
 
 
 class FakeTelegramBot:
@@ -394,6 +395,7 @@ def test_main_passes_every_token_value_to_the_log_redactor(env, monkeypatch, cle
     """The redaction only works if main() actually hands `configure` the secret values — and
     nothing else, no Settings object."""
     env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    env.setenv("GMAIL_APP_PASSWORD", GMAIL_PASSWORD)
     app = _build(env)
     app.store.migrate()
     recorded = {}
@@ -409,7 +411,7 @@ def test_main_passes_every_token_value_to_the_log_redactor(env, monkeypatch, cle
 
     main.main()
 
-    assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN, ANTHROPIC_KEY)
+    assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN, ANTHROPIC_KEY, GMAIL_PASSWORD)
     assert recorded["log_file"] == "logs/bot.log"  # the default reaches the file handler
 
 

@@ -56,7 +56,7 @@ from app.commands.executor import Executor
 from app.config import Settings, load_settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
-from app.daily import DailyMessage, parse_at
+from app.daily import DailyMessage, parse_at, parse_times
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
@@ -68,6 +68,9 @@ from app.llm.planner import Planner
 from app.llm.research import WebResearcher
 from app.llm.sections import SectionPicker
 from app.logging_setup import configure
+from app.mail.classify import Classifier
+from app.mail.imap import GmailIMAP
+from app.mail.service import MailService, MailState
 from app.notion.descriptions import Descriptions, WorkspaceNote
 from app.notion.direct import DirectNotionProvider
 from app.notion.discovery import Discovery
@@ -257,6 +260,41 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
     return DailyMessage(send, at, settings.timezone)
 
 
+def _mail_digest(settings: Settings, switches: Switches,
+                 application: Callable[[], Application],
+                 ) -> tuple[MailService | None, DailyMessage | None]:
+    """Read-only mail triage: fetch what arrived since the last digest, sort it into the user's
+    buckets, and send one message. Off unless both the address and the app password are set."""
+    key = settings.anthropic_api_key.get_secret_value()
+    password = settings.gmail_app_password.get_secret_value()
+    times = parse_times(settings.mail_digest_at)
+    if not (settings.gmail_address and password and key and times
+            and settings.allowed_user_ids):
+        return None, None
+    buckets = [b.strip() for b in settings.mail_buckets.split(",") if b.strip()]
+    service = MailService(
+        GmailIMAP(settings.gmail_address, password),
+        Classifier(key, settings.mail_model, buckets),
+        MailState(settings.db_path.with_name("mail_state.json")),
+        buckets=buckets, max_per_run=settings.mail_max_per_run,
+    )
+
+    async def send() -> None:
+        if not switches.get("mail"):
+            return
+        text = await service.digest()
+        if not text:
+            log.info("mail digest: nothing new, nothing sent")
+            return
+        for chat_id in sorted(settings.allowed_user_ids):
+            try:
+                await application().bot.send_message(chat_id, text)
+            except Exception:
+                log.exception("could not send the mail digest to a chat")
+
+    return service, DailyMessage(send, times, settings.timezone)
+
+
 def build(
     settings: Settings, *,
     provider_factory: ProviderFactory = _default_provider,
@@ -315,6 +353,7 @@ def build(
     admin = AdminServer(settings, discovery, descriptions, note, switches)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
     daily = _daily_digest(settings, vault, switches, lambda: telegram_app)
+    mail, mail_digest = _mail_digest(settings, switches, lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()
@@ -329,6 +368,8 @@ def build(
             sweeper.start()
             if daily is not None:
                 daily.start()
+            if mail_digest is not None:
+                mail_digest.start()
 
     async def _post_shutdown(_: Application) -> None:
         # Sweeper first: it is the one thing that still touches the store on its own timer, so it
@@ -338,6 +379,10 @@ def build(
         if daily is not None:
             await daily.stop()
         admin.stop()
+        if mail_digest is not None:
+            await mail_digest.stop()
+        if mail is not None:
+            await mail.aclose()
         if vault is not None:
             await vault.aclose()
         store.close()
@@ -508,6 +553,7 @@ def main() -> None:
                 settings.telegram_bot_token.get_secret_value(),
                 settings.notion_token.get_secret_value(),
                 settings.anthropic_api_key.get_secret_value(),
+                settings.gmail_app_password.get_secret_value(),
             ),
             log_file=settings.log_file or None,
         )

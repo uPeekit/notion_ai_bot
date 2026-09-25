@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     linker_model: str = "claude-haiku-4-5"
     linker_enabled: bool = True
 
+    # Mail: read-only triage over IMAP with a Gmail app password (no OAuth, no token that
+    # expires weekly). The bot only ever reads — there is no code path that marks, deletes or
+    # sends. Empty address or password = off.
+    gmail_address: str = ""
+    gmail_app_password: SecretStr = SecretStr("")
+    # When to send the digest, comma-separated wall-clock times in TIMEZONE.
+    mail_digest_at: str = "12:00,19:00"
+    mail_buckets: str = "bills,shopping,financial,notifications,personal,other"
+    mail_model: str = "claude-haiku-4-5"
+    mail_max_per_run: int = Field(40, ge=1, le=200)
+
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"

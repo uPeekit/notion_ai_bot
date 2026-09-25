@@ -317,3 +317,14 @@ ABOUT = ("Меня зовут {name}. Записываю в Notion и в Obsidia
 CALLED = "Да, слушаю."
 # Words that may come before the name when someone calls out to the bot ("эй Джеф", "ну Джеф").
 ADDRESS_OPENERS = ("эй", "ей", "hey", "ok", "окей", "ну", "слушай", "привет")
+
+# ---- mail digest ------------------------------------------------------------------------------
+
+MAIL_HEADER = "📬 Почта — {n} писем:"
+MAIL_BUCKET = "\n{bucket} ({n}):"
+MAIL_ITEM = "• {sender} — {summary}"
+MAIL_MORE = "  …и ещё {n}"
+MAIL_FAILED = "📬 Почту прочитать не удалось ({error})."
+# How a reply quotes what came before it ("25.09.2026 Иван написал:"): everything from there
+# down is the previous message again, so the classifier never sees it.
+MAIL_QUOTE_MARKERS = ("написал", "wrote", "schrieb", "kirjutas")

@@ -95,6 +95,7 @@
   <label><input type="checkbox" id="switch-notion"> Notion</label>
   <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
   <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
+  <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
 </div>
 <p class="hint" id="switches-note"></p>
 <h2>Заметка о воркспейсе</h2>
@@ -317,7 +318,7 @@ function load() {
       state.inboxLocked = !!data.inbox_locked;
       document.getElementById("workspace-note").value = data.workspace_note || "";
       var switches = data.switches || {};
-      ["notion", "obsidian", "linker"].forEach(function (name) {
+      ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);
         el.checked = switches[name] !== false;
       });
@@ -385,6 +386,7 @@ function collectBody() {
       notion: document.getElementById("switch-notion").checked,
       obsidian: document.getElementById("switch-obsidian").checked,
       linker: document.getElementById("switch-linker").checked,
+      mail: document.getElementById("switch-mail").checked,
     },
   };
 }

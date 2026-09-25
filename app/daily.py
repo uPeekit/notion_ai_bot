@@ -35,14 +35,20 @@ def parse_at(value: str) -> time | None:
         return None
 
 
+def parse_times(value: str) -> tuple[time, ...]:
+    """"12:00,19:00" -> two times a day, in order. Bad entries are dropped with a warning."""
+    found = [parse_at(part) for part in value.split(",")]
+    return tuple(sorted({t for t in found if t is not None}))
+
+
 class DailyMessage:
     """Calls `send()` once a day at `at`, in `tz`. `send` decides whether there is anything
     worth sending; this class only decides when."""
 
-    def __init__(self, send: Callable[[], Awaitable[object]], at: time, tz: str,
-                 *, now: Callable[[], datetime] | None = None) -> None:
+    def __init__(self, send: Callable[[], Awaitable[object]], at: time | tuple[time, ...],
+                 tz: str, *, now: Callable[[], datetime] | None = None) -> None:
         self._send = send
-        self._at = at
+        self._times = (at,) if isinstance(at, time) else tuple(sorted(at))
         self._zone = ZoneInfo(tz)
         self._now = now or (lambda: datetime.now(self._zone))
         self._task: asyncio.Task | None = None
@@ -52,10 +58,13 @@ class DailyMessage:
         return self._task is not None
 
     def next_run(self, after: datetime) -> datetime:
-        """The next moment the message is due, strictly after `after`."""
-        today = after.astimezone(self._zone).replace(
-            hour=self._at.hour, minute=self._at.minute, second=0, microsecond=0)
-        return today if today > after else today + timedelta(days=1)
+        """The next moment the message is due, strictly after `after` — the earliest of the
+        configured times today, or the first one tomorrow."""
+        local = after.astimezone(self._zone)
+        candidates = [local.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+                      for t in self._times]
+        later = [c for c in candidates if c > after]
+        return min(later) if later else min(candidates) + timedelta(days=1)
 
     def start(self) -> None:
         if self._task is None:
@@ -72,8 +81,11 @@ class DailyMessage:
         # A bot started shortly after the time still sends today's (GRACE), so a restart at
         # 09:05 does not silently skip the day.
         now = self._now()
-        due_today = self.next_run(now) - timedelta(days=1)
-        if now - due_today < GRACE:
+        # The most recent time that has already passed today (or yesterday's last one).
+        passed = [now.astimezone(self._zone).replace(hour=t.hour, minute=t.minute, second=0,
+                                                      microsecond=0) for t in self._times]
+        previous = max([p for p in passed if p <= now], default=min(passed) - timedelta(days=1))
+        if now - previous < GRACE:
             await self._fire()
         while True:
             now = self._now()

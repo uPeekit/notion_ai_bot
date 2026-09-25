@@ -125,10 +125,10 @@ def test_the_filer_is_told_which_notes_and_tasks_could_answer(index):
 def test_switches_default_to_env_and_are_overridden_by_the_file(tmp_path):
     path = tmp_path / "switches.json"
     switches = Switches(path, {"notion": False})
-    assert switches.all() == {"notion": False, "obsidian": True, "linker": True}
+    assert switches.all() == {"notion": False, "obsidian": True, "linker": True, "mail": True}
 
-    assert switches.save({"notion": True, "obsidian": False, "linker": True}) == 2
-    assert switches.save({"notion": True, "obsidian": False, "linker": True}) == 0
+    assert switches.save({"notion": True, "obsidian": False, "linker": True, "mail": True}) == 2
+    assert switches.save({"notion": True, "obsidian": False, "linker": True, "mail": True}) == 0
     assert json.loads(path.read_text(encoding="utf-8"))["obsidian"] is False
 
     fresh = Switches(path, {"notion": False})  # the file wins over .env once it exists
@@ -147,4 +147,4 @@ def test_a_broken_switches_file_leaves_everything_as_env_had_it(tmp_path, caplog
     path = tmp_path / "switches.json"
     path.write_text("{not json", encoding="utf-8")
     switches = Switches(path, {"notion": True, "obsidian": True, "linker": False})
-    assert switches.all() == {"notion": True, "obsidian": True, "linker": False}
+    assert switches.all() == {"notion": True, "obsidian": True, "linker": False, "mail": True}

@@ -7,6 +7,20 @@ never archives unless you ask for that later.
 Same shape as the rest of the bot: one model call decides, a deterministic layer checks what it
 decided, the write is small and reversible, and everything lands in the audit log.
 
+## 0. What was built (2026-09-25, v0.5.14)
+
+Phase 1, read-only, over **IMAP with a Gmail app password** rather than OAuth: the consent
+screen demanded an App domain, and publishing was the only way to avoid a 7-day token expiry.
+The app password sidesteps all of it, and the read-only guarantee is stronger than a scope —
+the mailbox is opened `readonly=True`, every fetch uses `BODY.PEEK` (so reading does not mark
+anything read), and no code path exists that marks, stars, labels, deletes or sends.
+
+`app/mail/`: `imap.py` (fetch and parse), `classify.py` (one Haiku call per 10 messages, plus
+the gate), `service.py` (the run, its state file, the digest). Digest at `MAIL_DIGEST_AT`
+(12:00 and 19:00), covering everything since the previous run, grouped into `MAIL_BUCKETS`
+(bills, shopping, financial, notifications, personal, other). A `mail` switch sits on the admin
+page. Sections 1–9 below describe the fuller design, including the actions of phase 2.
+
 ## 1. Access
 
 - **Gmail API directly** (`google-api-python-client`), not the Gmail MCP server. The MCP server
