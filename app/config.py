@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # far more than an ordinary message, and this is the call whose quality you read.
     research_model: str = "claude-sonnet-5"
     research_max_searches: int = Field(3, ge=1, le=20)
+    # How long one search may run before it is cut short. Two six-minute searches inside one
+    # plan is what 360 s produced; the user is told it was cut short, not that nothing exists.
+    research_deadline_s: float = Field(600.0, ge=30.0, le=1800.0)
     # Multi-step goals: the model that splits a goal into steps and checks after each one. Its
     # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
     # wrong; Sonnet listed 15, all right.

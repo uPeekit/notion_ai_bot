@@ -325,7 +325,8 @@ def build(
     researcher = (
         WebResearcher(settings.anthropic_api_key.get_secret_value(), settings.research_model,
                       max_searches=settings.research_max_searches, is_image=images.is_image,
-                      search=ImageSearch(), extra=lambda: tuning.research_note)
+                      search=ImageSearch(), extra=lambda: tuning.research_note,
+                      deadline_s=settings.research_deadline_s)
         if uses_cloud(settings) else None
     )
     planner = (Planner(settings.anthropic_api_key.get_secret_value(), settings.plan_model)

@@ -33,6 +33,33 @@ def words(text: str) -> set[str]:
     return {w.casefold() for w in _WORD.findall(text) if len(w) >= MIN_WORD}
 
 
+def related(one: str, two: str) -> bool:
+    """Are these the same word in different forms? A shared four-letter start is not enough:
+    that is what made "wall bars" match "Swedbank" and "page" match "fear" in Russian. Words
+    count as the same when their common start covers all but the last couple of letters of the
+    shorter one — which is where Russian endings live."""
+    a, b = one.casefold(), two.casefold()
+    if a == b:
+        return True
+    short = min(len(a), len(b))
+    if short < MIN_WORD:
+        return False
+    common = 0
+    for x, y in zip(a, b, strict=False):
+        if x != y:
+            break
+        common += 1
+    # An ending is one or two letters; a different word is more. Short words get the stricter
+    # rule, because in four letters there is no room to tell an ending from a difference.
+    need = short - 1 if short <= 6 else short - 2
+    return common >= max(MIN_WORD, need)
+
+
+def overlap(query: set[str], text_words: set[str]) -> set[str]:
+    """Which of the query's words the text actually carries, in any form."""
+    return {q for q in query if any(related(q, w) for w in text_words)}
+
+
 def stems(text: str) -> set[str]:
     """Words cut to their first few letters, which is all the matching Russian endings allow
     without a morphology library: a Russian name and the same name inflected share a stem.

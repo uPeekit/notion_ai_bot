@@ -77,7 +77,12 @@ from app.llm.context import Context, ContextBuilder
 from app.llm.output_schema import build_schema
 from app.llm.planner import PlanError, Planner, Verdict
 from app.llm.prompts import WEB_WORDS, plan_context, workspace_summary
-from app.llm.research import ResearchError, ResearchQuestion, WebResearcher
+from app.llm.research import (
+    ResearchError,
+    ResearchQuestion,
+    ResearchTimeout,
+    WebResearcher,
+)
 from app.logging_setup import bind_event
 from app.notion import stats as notion_stats
 from app.notion import titles
@@ -608,6 +613,12 @@ class Orchestrator:
         except ResearchQuestion as e:
             q = Question(type="clarify", target_key=candidate.key, proposed=e.question)
             return replace(decision, kind="CLARIFY", questions=[q], reasons=["clarify"]), None
+        except ResearchTimeout as e:
+            # Not the same as an empty web: it was cut short, and saying "found nothing" sent
+            # the user looking for a search that never finished.
+            log.warning("web research timed out: %s", e)
+            return decision, await self._inbox_or_error(
+                turn, text, "WEB_TIMEOUT", minutes=max(1, round(self._s.research_deadline_s / 60)))
         except ResearchError as e:
             log.warning("web research failed: %s", e)
             return decision, await self._inbox_or_error(turn, text, "WEB_FAILED")

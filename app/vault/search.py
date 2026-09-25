@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from app import texts
 from app.vault.frontmatter import split
-from app.vault.index import VaultIndex, stems
+from app.vault.index import VaultIndex, overlap, words
 from app.vault.mdedit import OPEN, task_lines
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class Hit:
         return f"obsidian://open?vault={quote(vault)}&file={quote(self.path)}"
 
 
-def _matching_lines(text: str, wanted: set[str]) -> list[str]:
+def _matching_lines(text: str, wanted: set[str], need: int = 1) -> list[str]:
     """Lines of the note's own text. Properties are matched separately and exactly, so the
     frontmatter is left out: a stem match there answered "which books am I reading" with books
     whose status was Read: four letters cannot tell Read from Reading."""
@@ -51,7 +51,7 @@ def _matching_lines(text: str, wanted: set[str]) -> list[str]:
         stripped = line.strip()
         if not stripped or stripped.startswith(("---", "#")):
             continue
-        if stems(stripped) & wanted:
+        if len(overlap(wanted, words(stripped))) >= need:
             out.append(stripped)
             if len(out) >= MAX_LINES_PER_NOTE:
                 break
@@ -73,7 +73,10 @@ def _props_match(note, props: dict[str, str]) -> bool:
 def search(index: VaultIndex, query: str, *, folder: str = "", tags: tuple[str, ...] = (),
            props: dict[str, str] | None = None, limit: int = MAX_HITS) -> list[Hit]:
     """Notes and open tasks that answer `query`, best first."""
-    wanted = stems(query)
+    wanted = {w for w in words(query) if w not in texts.SEARCH_STOP_WORDS}
+    # One matching word out of several is usually a coincidence (see index.related); with
+    # two or more content words in the question, a hit has to carry at least two of them.
+    need = 2 if len(wanted) > 2 else 1
     tags = tuple(t.lstrip("#").casefold() for t in tags)
     props = {k: v for k, v in (props or {}).items() if v.strip()}
     narrowed = bool(tags or props or folder)  # asked about a place, not only about words
@@ -96,15 +99,18 @@ def search(index: VaultIndex, query: str, *, folder: str = "", tags: tuple[str, 
         passed.append((note.name, note.path))
         score = 0.0
         for name in note.names:
-            if stems(name) & wanted:
-                score = max(score, NAME_SCORE * len(stems(name) & wanted) / len(stems(name) or {1}))
+            # How much of the *question* this name answers — not how much of the name the
+            # question covers, or a long title would always lose to a passing mention.
+            hit = overlap(wanted, words(name))
+            if hit:
+                score = max(score, NAME_SCORE * len(hit) / max(len(wanted), 1))
         for value in note.props.values():
-            if isinstance(value, str) and stems(value) & wanted:
+            if isinstance(value, str) and overlap(wanted, words(value)):
                 score += PROP_SCORE
         lines: list[str] = []
         if note.size <= MAX_FILE_BYTES:
             try:
-                lines = _matching_lines(index.read(note.path), wanted)
+                lines = _matching_lines(index.read(note.path), wanted, need)
             except OSError:
                 lines = []
         score += TEXT_SCORE * len(lines)
@@ -120,7 +126,7 @@ def search(index: VaultIndex, query: str, *, folder: str = "", tags: tuple[str, 
     if tags or not (folder or props):
         # A task has no folder and no properties, so a question narrowed by those alone is not
         # about tasks — but a tag is exactly how tasks are filed, so a tag brings them back.
-        scored += _task_hits(index, wanted, tags, tasks_note)
+        scored += _task_hits(index, wanted, tags, tasks_note, need)
     scored.sort(key=lambda s: (-s[0], s[1].name))
     return [hit for _, hit in scored[:limit]]
 
@@ -136,8 +142,8 @@ def _listed(notes: list[tuple[str, str]]) -> list[tuple[float, Hit]]:
             for i, (name, path) in enumerate(ordered)]
 
 
-def _task_hits(index: VaultIndex, wanted: set[str], tags: tuple[str, ...],
-               tasks_note) -> list[tuple[float, Hit]]:
+def _task_hits(index: VaultIndex, wanted: set[str], tags: tuple[str, ...], tasks_note,
+               need: int = 1) -> list[tuple[float, Hit]]:
     if tasks_note is None or not (wanted or tags):
         return []
     try:
@@ -151,7 +157,7 @@ def _task_hits(index: VaultIndex, wanted: set[str], tags: tuple[str, ...],
         line_tags = {w.lstrip("#").casefold() for w in line.split() if w.startswith("#")}
         if tags and not (line_tags & set(tags)):
             continue
-        if wanted and not stems(line) & wanted:
+        if wanted and len(overlap(wanted, words(line))) < need:
             continue  # a tag alone (tags and no words) already narrowed it above
         out.append((NAME_SCORE, Hit(tasks_note.name, tasks_note.path, line.strip(), "task")))
     return out

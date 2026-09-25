@@ -164,6 +164,9 @@ ERRORS: dict[str, str] = {
     "INTERNAL": "Не удалось обработать сообщение.",
     "WEB_UNAVAILABLE": "Поиск в интернете работает только с Claude (ANTHROPIC_API_KEY в .env).",
     "WEB_FAILED": "Не удалось ничего найти в интернете.",
+    # A search that ran past its deadline: it was cut short, not empty.
+    "WEB_TIMEOUT": "Поиск в интернете шёл дольше {minutes} мин — прервал его. "
+                    "Попробуйте запрос покороче или по частям.",
     "PLAN_UNAVAILABLE": "Планы из нескольких шагов работают только с Claude (ANTHROPIC_API_KEY).",
     "PLAN_FAILED": "Не удалось составить план.",
 }
@@ -279,6 +282,14 @@ VAULT_SEARCH_HEADER = "Obsidian — нашёл:"
 VAULT_SEARCH_HIT = "• {name}{line}"
 VAULT_SEARCH_TASK = "• {line}"
 VAULT_SEARCH_EMPTY = "Obsidian: ничего не нашёл."
+# Words a question is built from rather than about: they match everything and mean nothing.
+SEARCH_STOP_WORDS = frozenset({
+    "найди", "найти", "покажи", "напомни", "скажи", "дай", "хочу", "нужно", "надо",
+    "страница", "страницу", "страницы", "заметка", "заметку", "заметки", "файл",
+    "мою", "моя", "мои", "моего", "меня", "тебя", "себе", "там", "тут", "здесь",
+    "что", "чего", "какие", "какой", "какая", "когда", "куда", "если", "было", "есть",
+    "про", "для", "это", "этот", "эта", "вообще", "потом", "ещё", "еще",
+})
 # One line per write, appended to the reply: what the Obsidian side did.
 VAULT_REPLY = "Obsidian: {what}"
 VAULT_FAILED = "Obsidian: не записано ({error})"

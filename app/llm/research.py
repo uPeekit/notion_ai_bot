@@ -59,6 +59,11 @@ class ResearchError(Exception):
     pass
 
 
+class ResearchTimeout(ResearchError):
+    """The search ran past its deadline. Different from "found nothing": the user is told that
+    it was cut short, not that the web is empty."""
+
+
 class ResearchQuestion(Exception):
     """The request cannot be looked up as it stands; `question` is for the user."""
 
@@ -139,9 +144,10 @@ class WebResearcher:
         client: anthropic.AsyncAnthropic | None = None,
         is_image: Callable[[str], Awaitable[bool]] | None = None,
         search: ImageSearch | None = None,
-        extra: Callable[[], str] | None = None,
+        extra: Callable[[], str] | None = None, deadline_s: float = DEADLINE_S,
     ) -> None:
         self.model = model
+        self._deadline = deadline_s
         # The user's own additions to the research prompt, from the admin page.
         self._extra = extra or (lambda: "")
         self._tools = research_tools(model, max_searches)
@@ -164,10 +170,10 @@ class WebResearcher:
         image links a model writes itself are mostly invented. Raises ResearchQuestion when the
         request needs the user first, ResearchError when nothing usable came back."""
         try:
-            async with asyncio.timeout(DEADLINE_S):
+            async with asyncio.timeout(self._deadline):
                 return await self._research(request, query, media)
         except TimeoutError:
-            raise ResearchError(f"gave up after {DEADLINE_S:.0f}s") from None
+            raise ResearchTimeout(f"gave up after {self._deadline:.0f}s") from None
 
     async def _research(self, request: str, query: str, media: str) -> str:
         want_text, want_images = media != "images", media != "text"

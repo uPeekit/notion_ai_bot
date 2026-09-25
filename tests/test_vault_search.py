@@ -36,6 +36,10 @@ def index(tmp_path):
     return index
 
 
+def names_of(hits) -> list[str]:
+    return [h.name for h in hits]
+
+
 def names(hits) -> list[str]:
     return [h.line if h.kind == "task" else h.name for h in hits]
 
@@ -69,6 +73,34 @@ def test_search_can_be_limited_to_a_folder(index):
 def test_a_filter_with_no_words_lists_what_it_selected(index):
     assert names(search(index, "", props={"status": "Reading"})) == ["Чапаев и Пустота"]
     assert names(search(index, "", props={"status": "Read"})) == []  # exact, not by stem
+
+
+def test_words_match_by_form_not_by_a_shared_start(index):
+    """The bug this fixes: a four-letter stem made «шведскую» match «шведбанк» and «страницу»
+    match «страха», so a question about one page answered with three unrelated ones."""
+    from app.vault.index import related
+
+    assert related("шведскую", "шведская") and related("книги", "книга")
+    assert related("чапаева", "чапаев") and related("борщ", "борща")
+    assert not related("шведскую", "шведбанк")
+    assert not related("страницу", "страха")
+    assert not related("дом", "домой")  # too short to judge
+
+
+def test_command_words_do_not_drag_in_every_note(index):
+    """«найди мою страницу про X» must answer about X, not about every note containing
+    «страница»."""
+    names = names_of(search(index, "найди мою страницу про борщ"))
+    assert names == ["Рецепт борща"]
+
+
+def test_one_shared_word_in_the_text_is_not_an_answer(index):
+    # The recipe's text mentions "курица"; the book's does not mention "Пелевин" — a question
+    # naming several things is not answered by a note that happens to carry one of them.
+    hits = search(index, "курица пелевина чапаева")
+    assert all("куриц" not in h.line for h in hits)
+    # two of the words in one line is an answer, one is not
+    assert any("куриц" in h.line for h in search(index, "копчёная курица"))
 
 
 def test_a_search_finds_nothing_rather_than_guessing(index):
