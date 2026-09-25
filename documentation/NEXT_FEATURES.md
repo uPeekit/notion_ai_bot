@@ -1,5 +1,17 @@
 # Three things to build next — design
 
+> **Status: all three shipped.** Kept as the design record and the reasoning behind the
+> choices; what the code actually does is in ARCHITECTURE.md §14a and FLOWS.md F22–F24.
+> Two places where the build deviated from this design, both deliberate:
+>
+> * **A `reason` attribute rather than an `LLMNoCredit` class.** One mechanism covers all
+>   four causes (no credit, a rejected key, a rate limit, an outage) instead of a subclass
+>   for one of them.
+> * **No `heading` field on the Notion rewrite.** The instruction is free text and the
+>   rewriter sees the whole page, so «перепиши раздел про размеры» works without a
+>   schema field the interpreter would have to fill. The vault side, whose filer already
+>   names headings, does take one.
+
 Written 2026-09-26, after a session that surfaced all three: a plan whose enrichment reached
 only Notion, a request to rewrite a page that was refused, and a bot that silently switched to
 the local model because the Anthropic account had run out of credit.

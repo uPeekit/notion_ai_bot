@@ -486,8 +486,13 @@ message ─┬─ Notion pipeline (§4, unchanged)
                                     guide note (_bot.md), the folders and the tags
                filer.check          the deterministic gate: an unknown note or folder, a made-up
                                     date or repeat rule never reaches the writer
-               writer.VaultWriter   task / note / append / update / log / inbox, atomic, with
-                                    the file's previous text kept for Undo
+               rewrite.Rewriter     one Sonnet call for a note the user asked to be
+                                    rewritten: the pipeline reads the note (or one
+                                    section), the model returns markdown, the writer
+                                    writes it
+               writer.VaultWriter   task / note / append / update / rewrite / log /
+                                    inbox, atomic, with the file's previous text kept
+                                    for Undo
                linker.Linker        after the reply: names and aliases, then a Haiku pass for
                                     the links matching cannot see
                search.search        a question ("что у меня по дому?") answered from the index
@@ -508,6 +513,37 @@ Rules that hold here:
   restore of the previous text.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
+
+**Rewriting what is already there** (`rewrite` on both sides, `app/llm/rewrite.py`): the
+user names a place, optionally a section, and says what to change in their own words
+(«оставь один подход и одни размеры»). The current text is read at
+execution time — neither interpreter ever sees a page's contents — rewritten in one
+Sonnet call, written, and only then is the old text archived: a failure halfway leaves
+the page with too much rather than too little. Which blocks may be replaced is decided in
+code (`app/notion/to_markdown.py: is_rewritable`), never by the model: only blocks that
+are nothing but text and have no children of their own, so an image, a file, a sub-page, a
+database view or a nested list survives any instruction. The reply carries the size change
+and how many blocks were left alone, says so when the text shrank by more than four
+fifths, and offers Undo; in the vault the previous version also goes to `.trash`, where it
+outlives the undo window.
+
+**A plan reaches both stores.** The planner is unchanged, but every step is offered to
+Notion and then to the vault. Text a step has already produced (a web search's result) is
+handed over as `content`, so the same material is written twice over with one search, one
+wait and one bill — and it never enters a prompt, because what the web returned is
+data. The filer still chooses the note from its own index, so this stays a second pipeline
+rather than a mirror. The goal's own vault call starts before anyone knows the message is a
+plan, and is held at a gate rather than cancelled: its writes run in a thread, where
+cancelling could leave a half-written file. Each step's vault undo joins that step's
+record, so the plan's «Отменить всё» reverts both stores.
+
+**When Claude cannot be used** (`app/llm/health.py`): one `Health` instance is shared by
+every component that calls Anthropic. It names the reason behind a failure — no credit,
+a rejected key, a rate limit, an outage — keeps it until a call succeeds again, and
+hands out one plain sentence about it at most once an hour, appended to the reply and to
+either digest. The Obsidian line says the cause in the user's own language instead of
+`claude 400`, and an empty balance puts the interpreter's fallback on a 30-minute cooldown
+rather than 5: topping up an account takes longer than that.
 
 **The morning digest** (`app/daily.py`): one asyncio task sleeps until `DAILY_DIGEST_AT` in
 `TIMEZONE`, asks the vault for overdue / today / tomorrow plus dated notes, and sends it to the
