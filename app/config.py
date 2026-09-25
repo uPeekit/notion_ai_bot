@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # wrong; Sonnet listed 15, all right.
     plan_model: str = "claude-sonnet-5"
 
+    # What to call the bot. Several spellings separated by commas ("Jeff,Jeph,Geoff"): the
+    # name is taken off the front or the back of a message before anything reads it, so
+    # "Jeff, buy milk" is a shopping item and not a note about someone called Jeff.
+    bot_name: str = ""
+
     # The Obsidian vault written next to Notion: a folder on this machine. Empty = off.
     # Nothing about this pipeline depends on Notion, so NOTION_ENABLED=false leaves a working
     # Obsidian-only bot.

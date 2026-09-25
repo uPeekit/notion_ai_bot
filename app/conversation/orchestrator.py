@@ -48,7 +48,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app import texts
+from app import address, texts
 from app.audit.store import AuditStore
 from app.commands.builder import build_command
 from app.commands.executor import ExecutionResult, Executor, UndoRecord
@@ -315,6 +315,8 @@ class Orchestrator:
         self._planner = planner
         self._vault = vault
         self._switches = switches
+        # The bot's own name, if it has one: recognised deterministically (app/address.py).
+        self._names = address.names(settings.bot_name)
         self._note = note or (lambda: "")
         self._discovery = discovery
         self._builder = builder
@@ -430,6 +432,15 @@ class Orchestrator:
         return self._vault is not None and self._on("obsidian")
 
     async def _text(self, turn: _Turn, text: str) -> Reply:
+        called = address.strip(text, self._names)
+        if called.only_name or (called.called and address.about_question(called.text)):
+            # Being called by name with nothing else, or asked what it is: answered from
+            # texts.py, with no model call and nothing written anywhere.
+            turn.audit(decision=_kind("ABOUT"))
+            return Reply(texts.ABOUT.format(name=self._names[0],
+                                            digest_at=self._s.daily_digest_at)
+                         if not called.only_name else texts.CALLED)
+        text = called.text or text
         if not self._on("notion"):
             # Notion is switched off on the admin page: the vault answers on its own, which is
             # what this pipeline was built to be able to do.

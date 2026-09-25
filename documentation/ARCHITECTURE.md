@@ -514,6 +514,12 @@ Rules that hold here:
 allowed chats. Nothing due means nothing sent. A restart within two hours of the time still
 sends that day's. It reads the Obsidian side only — that is where the dates live.
 
+**The bot's name** (`app/address.py`, `BOT_NAME`): recognised deterministically, never by a
+model. The name is stripped from the start or the end of a message before either pipeline reads
+it, so "Jeff, buy milk" is a shopping item; anywhere else in the sentence it is ordinary words
+and stays. The name alone answers `texts.CALLED`, and a short question about the bot answers
+`texts.ABOUT` — both without a model call and without writing anything.
+
 **Switches** (`app/switches.py`, `data/switches.json`, edited on the admin page): `notion`,
 `obsidian`, `linker`. `.env` says what they are until the file exists; the file then wins, and
 each is read per message, so a change needs no restart. With `notion` off the orchestrator goes

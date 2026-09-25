@@ -303,3 +303,17 @@ VAULT_AGENDA_ITEM = "• {text}"
 VAULT_ON_DAY = "📅 {date}:"
 VAULT_ON_RANGE = "📅 {start} — {end}:"
 VAULT_NOW = "С чего начать:"
+
+# ---- the bot's own name -----------------------------------------------------------------------
+
+# Questions about the bot itself, answered without a model (app/address.py).
+ABOUT_QUESTIONS = ("кто ты", "ты кто", "как тебя зовут", "твоё имя", "твое имя",
+                   "что ты умеешь", "что умеешь", "чем помочь", "что ты можешь")
+# The answer to those, and to being called by name with nothing else in the message.
+ABOUT = ("Меня зовут {name}. Записываю в Notion и в Obsidian: задачи со сроками и повторами, "
+         "заметки, книги, дневник. Отвечаю на вопросы: «что у меня в пятницу», «что сейчас "
+         "делать», «что там про борщ». Утром в {digest_at} присылаю сводку. Любую запись можно "
+         "отменить кнопкой.")
+CALLED = "Да, слушаю."
+# Words that may come before the name when someone calls out to the bot ("эй Джеф", "ну Джеф").
+ADDRESS_OPENERS = ("эй", "ей", "hey", "ok", "окей", "ну", "слушай", "привет")
