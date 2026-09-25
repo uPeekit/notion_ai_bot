@@ -198,3 +198,31 @@ def test_the_writer_stays_inside_the_vault(writer):
     for bad in ("../x.md", ".obsidian/app.json"):
         with pytest.raises(ValueError):
             writer.undo(VaultUndo(path=bad, previous="x"))
+
+
+def test_syncthings_archive_is_not_a_note(tmp_path):
+    """Found live: Syncthing keeps every file it replaced in `.stversions`, named
+    "Главная~20260923-170805.md". Indexed, those show up as notes of their own — the filer
+    offers a week-old copy as a place to write, and a search answers with three stale versions
+    of the same page."""
+    from app.vault.index import VaultIndex
+
+    (tmp_path / ".stversions").mkdir()
+    (tmp_path / ".stversions/Главная~20260923-170805.md").write_text("старое", encoding="utf-8")
+    (tmp_path / "Главная.md").write_text("новое", encoding="utf-8")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+
+    assert [n.name for n in index.notes] == ["Главная"]
+
+
+def test_the_writer_refuses_to_write_into_a_sync_folder(tmp_path):
+    from app.vault.index import VaultIndex
+    from app.vault.writer import VaultWriter
+
+    writer = VaultWriter(VaultIndex(tmp_path))
+    for rel in (".stversions/что-то.md", ".obsidian/plugins/x.md", ".stfolder/y.md"):
+        with pytest.raises(ValueError):
+            writer._path(rel)
+    # Its own bin is the one exception: that is where undo puts a created note.
+    assert writer._path(".trash/что-то.md").name == "что-то.md"

@@ -17,7 +17,12 @@ from app.vault import frontmatter
 
 log = logging.getLogger(__name__)
 
-SKIP_DIRS = {".obsidian", ".trash", ".git", ".stfolder", ".sync"}
+# Folders inside a vault that are not notes. `.stversions` is Syncthing's archive of every
+# file it replaced, named "Note~20260923-170805.md": without it here the bot offers a
+# week-old copy of a note as a note, and a search answers with three stale versions of the
+# same page. `.trash` is our own undo bin, `.stfolder`/`.sync` are sync markers.
+SKIP_DIRS = {".obsidian", ".trash", ".git", ".stfolder", ".stversions", ".sync",
+             ".stversions-conflicts"}
 GUIDE_NOTE = "_bot"
 # A word of this length or more may carry a link on its own (see `words`); shorter ones only
 # count inside a longer name.

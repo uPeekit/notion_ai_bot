@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from app import texts
 from app.vault import frontmatter, mdedit
 from app.vault.frontmatter import render
-from app.vault.index import VaultIndex
+from app.vault.index import SKIP_DIRS, VaultIndex
 from app.vault.names import safe_name, unique
 
 log = logging.getLogger(__name__)
@@ -99,7 +99,12 @@ class VaultWriter:
     def _path(self, rel: str) -> Path:
         path = (self._root / rel).resolve()
         root = self._root.resolve()
-        if not path.is_relative_to(root) or ".obsidian" in PurePosixPath(rel).parts:
+        # Nothing the index refuses to read may be written either: a note written into
+        # Syncthing's archive would be invisible here and resurrected on the next sync.
+        # `.trash` is the one exception: it is where this writer puts things itself.
+        forbidden = SKIP_DIRS - {TRASH_DIR}
+        parts = PurePosixPath(rel).parts
+        if not path.is_relative_to(root) or any(p in forbidden for p in parts[:-1]):
             raise ValueError(f"refusing to write outside the vault's notes: {rel}")
         return path
 
