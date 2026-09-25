@@ -9,11 +9,12 @@ import asyncio
 import json
 import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from app import texts
-from app.mail.classify import Classifier, Sorted
+from app.mail.classify import OTHER, Classifier, Sorted
 from app.mail.imap import GmailIMAP, MailboxError, Message
 
 log = logging.getLogger(__name__)
@@ -83,19 +84,33 @@ def digest(run: MailRun, buckets: list[str]) -> str:
 
 class MailService:
     def __init__(self, mailbox: GmailIMAP, classifier: Classifier, state: MailState,
-                 *, buckets: list[str], max_per_run: int = 40) -> None:
+                 *, buckets: list[str] | None = None, max_per_run: int = 40,
+                 source: Callable[[], tuple[list[str], dict[str, str]]] | None = None) -> None:
         self._box = mailbox
         self._classifier = classifier
         self._state = state
-        self.buckets = classifier.buckets
+        self.buckets = buckets or classifier.buckets
+        self._source = source  # the admin page's text, re-read on every run
         self._max = max_per_run
 
     async def aclose(self) -> None:
         await self._classifier.aclose()
 
+    def _refresh_buckets(self) -> None:
+        """Whatever the user has on the admin page right now. A change needs no restart."""
+        if self._source is None:
+            return
+        names, meanings = self._source()
+        if not names:
+            return
+        self._classifier.buckets = ([*names, OTHER] if OTHER not in names else list(names))
+        self._classifier.meanings = meanings
+        self.buckets = self._classifier.buckets
+
     async def run(self) -> MailRun:
         """Fetch, sort, and remember where we stopped. Never raises: a mailbox that is down
         becomes one line in the digest, and the next run picks up from the same place."""
+        self._refresh_buckets()
         uid, validity = self._state.read()
         try:
             messages, newest, now_validity = await asyncio.to_thread(

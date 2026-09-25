@@ -48,7 +48,7 @@
   .option-row { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
   .option-row .option-name { min-width: 10em; font-size: 0.85rem; }
   .option-row input { flex: 1; }
-  #workspace-note { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
+  #workspace-note, #mail-buckets { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
   #switches { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
   .target.is-hidden { opacity: 0.55; }
   .inbox-row { margin: 8px 0; font-size: 0.9rem; }
@@ -105,6 +105,13 @@
   тоже задачи».
 </p>
 <textarea id="workspace-note"></textarea>
+<h2>Почта: корзины</h2>
+<p class="hint">
+  По каким корзинам бот раскладывает письма в сводке. Одна строка — одна корзина:
+  <code>имя: что в неё класть</code>. Описание важнее имени — именно по нему бот решает.
+  Порядок строк — порядок разделов в сводке.
+</p>
+<textarea id="mail-buckets"></textarea>
 <h2>Цели</h2>
 <div id="targets"></div>
 <div id="save-bar">
@@ -317,6 +324,9 @@ function load() {
       state.targets = data.targets || [];
       state.inboxLocked = !!data.inbox_locked;
       document.getElementById("workspace-note").value = data.workspace_note || "";
+      document.getElementById("mail-buckets").value =
+        (data.mail_buckets || "").split(",").join(",
+");
       var switches = data.switches || {};
       ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);
@@ -382,6 +392,10 @@ function collectBody() {
   return {
     targets: targets,
     workspace_note: document.getElementById("workspace-note").value,
+    mail_buckets: document.getElementById("mail-buckets").value
+      .split("
+").map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length; }).join(","),
     switches: {
       notion: document.getElementById("switch-notion").checked,
       obsidian: document.getElementById("switch-obsidian").checked,

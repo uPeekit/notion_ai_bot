@@ -24,6 +24,23 @@ MAX_SUMMARY = 200
 OTHER = "other"
 
 
+def parse_buckets(raw: str) -> tuple[list[str], dict[str, str]]:
+    """"name:what belongs in it, name:..." -> the bucket names, and what each one means. A
+    bucket without a description is still a bucket, but then the model has only its name to go
+    on — which is how a payment receipt ended up in "bills" instead of "financial"."""
+    names: list[str] = []
+    meanings: dict[str, str] = {}
+    for part in raw.split(","):
+        name, _, description = part.partition(":")
+        name = name.strip()
+        if not name:
+            continue
+        names.append(name)
+        if description.strip():
+            meanings[name] = description.strip()
+    return names, meanings
+
+
 class ClassifyError(Exception):
     pass
 
@@ -73,10 +90,12 @@ def gate(answer: object, batch: list[Message], buckets: list[str]) -> list[Sorte
 
 
 class Classifier:
-    def __init__(self, api_key: str, model: str, buckets: list[str], *, timeout_s: float = 60.0,
+    def __init__(self, api_key: str, model: str, buckets: list[str], *,
+                 meanings: dict[str, str] | None = None, timeout_s: float = 60.0,
                  client: anthropic.AsyncAnthropic | None = None) -> None:
         self.model = model
         self.buckets = [*buckets, OTHER] if OTHER not in buckets else list(buckets)
+        self.meanings = dict(meanings or {})
         self._client = client or anthropic.AsyncAnthropic(
             api_key=api_key, timeout=timeout_s, max_retries=1)
 
@@ -107,7 +126,7 @@ class Classifier:
             "subject": m.subject,
             "bulk": m.bulk,
             "text": m.body,
-        } for m in batch], self.buckets)
+        } for m in batch], self.buckets, self.meanings)
         try:
             resp = await self._client.messages.create(
                 model=self.model, max_tokens=MAX_TOKENS, system=MAIL_PROMPT,

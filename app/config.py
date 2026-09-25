@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     gmail_app_password: SecretStr = SecretStr("")
     # When to send the digest, comma-separated wall-clock times in TIMEZONE.
     mail_digest_at: str = "12:00,19:00"
-    mail_buckets: str = "bills,shopping,financial,notifications,personal,other"
+    # "name:what belongs in it", comma-separated. The description is what the classifier
+    # follows — a bare name leaves it guessing. Empty falls back to texts.MAIL_BUCKETS_DEFAULT.
+    mail_buckets: str = ""
     mail_model: str = "claude-haiku-4-5"
     mail_max_per_run: int = Field(40, ge=1, le=200)
 

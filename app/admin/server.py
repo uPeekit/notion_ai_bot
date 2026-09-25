@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.mail.buckets import Buckets
 from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta, WorkspaceNote
 from app.notion.discovery import Discovery
 from app.switches import Switches
@@ -229,6 +230,7 @@ class _AdminHTTPServer(ThreadingHTTPServer):
         descriptions: Descriptions,
         note: WorkspaceNote | None,
         switches: Switches | None = None,
+        buckets: Buckets | None = None,
     ) -> None:
         super().__init__(server_address, handler_cls)
         self.app_settings = settings
@@ -236,6 +238,7 @@ class _AdminHTTPServer(ThreadingHTTPServer):
         self.descriptions = descriptions
         self.note = note
         self.switches = switches
+        self.buckets = buckets
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -297,6 +300,8 @@ class _Handler(BaseHTTPRequestHandler):
             if self.server.switches is not None:
                 payload["switches"] = self.server.switches.all()
             payload["obsidian_vault"] = str(self.server.app_settings.obsidian_vault or "")
+            if self.server.buckets is not None:
+                payload["mail_buckets"] = self.server.buckets.load()
             self._send_json(HTTPStatus.OK, payload)
         else:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -336,6 +341,12 @@ class _Handler(BaseHTTPRequestHandler):
                 if note.strip() != self.server.note.load():
                     self.server.note.save(note)
                     saved += 1
+            buckets = body.get("mail_buckets") if isinstance(body, dict) else None
+            if buckets is not None:
+                if not isinstance(buckets, str):
+                    raise ValueError("'mail_buckets' must be a string")
+                if self.server.buckets is not None and self.server.buckets.save(buckets):
+                    saved += 1
             switches = body.get("switches") if isinstance(body, dict) else None
             if switches is not None:
                 if not isinstance(switches, dict):
@@ -357,12 +368,14 @@ class AdminServer:
     def __init__(
         self, settings: Settings, discovery: Discovery, descriptions: Descriptions,
         note: WorkspaceNote | None = None, switches: Switches | None = None,
+        buckets: Buckets | None = None,
     ) -> None:
         self._settings = settings
         self._discovery = discovery
         self._descriptions = descriptions
         self._note = note
         self._switches = switches
+        self._buckets = buckets
         self._httpd: _AdminHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -383,6 +396,7 @@ class AdminServer:
             self._descriptions,
             self._note,
             self._switches,
+            self._buckets,
         )
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="admin-http", daemon=True

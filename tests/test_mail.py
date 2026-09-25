@@ -171,6 +171,39 @@ async def test_a_mailbox_that_is_down_is_one_line_not_a_crash(tmp_path):
     assert digest(run, BUCKETS).startswith(texts.MAIL_FAILED.split("{")[0])
 
 
+def test_buckets_come_from_a_file_the_admin_page_writes(tmp_path):
+    from app.mail.buckets import Buckets
+
+    path = tmp_path / "mail_buckets.txt"
+    buckets = Buckets(path, "bills:что оплатить,other:остальное")
+    assert buckets.parsed() == (["bills", "other"],
+                                {"bills": "что оплатить", "other": "остальное"})
+    assert buckets.save("personal:письма от людей,other:остальное")
+    assert buckets.parsed()[0] == ["personal", "other"]
+    assert not buckets.save("personal:письма от людей,other:остальное")  # unchanged
+    path.write_text("", encoding="utf-8")
+    assert buckets.parsed()[0] == ["bills", "other"]  # empty file: back to the default
+
+
+async def test_a_run_picks_up_edited_buckets_without_a_restart(tmp_path):
+    from app.mail.buckets import Buckets
+
+    buckets = Buckets(tmp_path / "mail_buckets.txt", "bills:оплатить,other:остальное")
+    box = FakeMailbox([([message("1")], "1"), ([message("2")], "1")])
+    svc = MailService(box, Classifier("", "m", ["bills", "other"], client=FakeAnthropic(
+        {"messages": [{"id": "1", "bucket": "bills", "summary": "счёт"}]},
+        {"messages": [{"id": "2", "bucket": "financial", "summary": "чек"}]})),
+        MailState(tmp_path / "state.json"), source=buckets.parsed)
+
+    first = await svc.run()
+    assert first.sorted[0].bucket == "bills"
+
+    buckets.save("bills:оплатить,financial:банк и платежи,other:остальное")
+    second = await svc.run()
+    assert second.sorted[0].bucket == "financial"  # a bucket that did not exist a moment ago
+    assert "financial" in svc.buckets
+
+
 # ---- the message the user gets ------------------------------------------------------------------
 
 def test_digest_groups_by_bucket_in_the_configured_order():

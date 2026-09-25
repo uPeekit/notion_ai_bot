@@ -415,6 +415,29 @@ def test_hidden_flag_round_trips(server, descriptions):
     assert by_id["ds-buy"]["hidden"] is True and by_id["ds-todo"]["hidden"] is False
 
 
+def test_mail_buckets_are_served_and_saved_without_a_release(settings, discovery,
+                                                              descriptions, tmp_path):
+    """The buckets are vocabulary, not code: editing them must not need a new build."""
+    from app.mail.buckets import Buckets
+
+    buckets = Buckets(tmp_path / "mail_buckets.txt", "bills:что оплатить,other:остальное")
+    s = AdminServer(settings, discovery, descriptions, None, None, buckets)
+    s.start()
+    try:
+        assert json.loads(_get(s, "/api/targets")[1])["mail_buckets"].startswith("bills:")
+        wanted = "bills:что-то нужно оплатить,financial:банк и платежи,other:остальное"
+        status, body = _post(s, "/api/descriptions", {"targets": {}, "mail_buckets": wanted})
+        assert status == 200 and json.loads(body) == {"saved": 1}
+        names, meanings = buckets.parsed()
+        assert names == ["bills", "financial", "other"]
+        assert meanings["financial"] == "банк и платежи"
+        assert json.loads(_post(s, "/api/descriptions",
+                                {"targets": {}, "mail_buckets": wanted})[1]) == {"saved": 0}
+        assert _post(s, "/api/descriptions", {"targets": {}, "mail_buckets": 5})[0] == 400
+    finally:
+        s.stop()
+
+
 def test_workspace_note_is_served_and_saved(settings, discovery, descriptions, tmp_path):
     note = WorkspaceNote(tmp_path / "workspace_note.md")
     s = AdminServer(settings, discovery, descriptions, note)

@@ -68,6 +68,7 @@ from app.llm.planner import Planner
 from app.llm.research import WebResearcher
 from app.llm.sections import SectionPicker
 from app.logging_setup import configure
+from app.mail.buckets import Buckets
 from app.mail.classify import Classifier
 from app.mail.imap import GmailIMAP
 from app.mail.service import MailService, MailState
@@ -260,7 +261,7 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
     return DailyMessage(send, at, settings.timezone)
 
 
-def _mail_digest(settings: Settings, switches: Switches,
+def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets,
                  application: Callable[[], Application],
                  ) -> tuple[MailService | None, DailyMessage | None]:
     """Read-only mail triage: fetch what arrived since the last digest, sort it into the user's
@@ -271,12 +272,12 @@ def _mail_digest(settings: Settings, switches: Switches,
     if not (settings.gmail_address and password and key and times
             and settings.allowed_user_ids):
         return None, None
-    buckets = [b.strip() for b in settings.mail_buckets.split(",") if b.strip()]
+    buckets, meanings = buckets_file.parsed()
     service = MailService(
         GmailIMAP(settings.gmail_address, password),
-        Classifier(key, settings.mail_model, buckets),
+        Classifier(key, settings.mail_model, buckets, meanings=meanings),
         MailState(settings.db_path.with_name("mail_state.json")),
-        buckets=buckets, max_per_run=settings.mail_max_per_run,
+        max_per_run=settings.mail_max_per_run, source=buckets_file.parsed,
     )
 
     async def send() -> None:
@@ -350,10 +351,12 @@ def build(
         switches=switches,
     )
     speech = speech_factory(settings)
-    admin = AdminServer(settings, discovery, descriptions, note, switches)
+    buckets_file = Buckets(settings.db_path.with_name("mail_buckets.txt"),
+                           settings.mail_buckets or texts.MAIL_BUCKETS_DEFAULT)
+    admin = AdminServer(settings, discovery, descriptions, note, switches, buckets_file)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
     daily = _daily_digest(settings, vault, switches, lambda: telegram_app)
-    mail, mail_digest = _mail_digest(settings, switches, lambda: telegram_app)
+    mail, mail_digest = _mail_digest(settings, switches, buckets_file, lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()

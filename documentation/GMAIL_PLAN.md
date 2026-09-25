@@ -19,7 +19,10 @@ anything read), and no code path exists that marks, stars, labels, deletes or se
 the gate), `service.py` (the run, its state file, the digest). Digest at `MAIL_DIGEST_AT`
 (12:00 and 19:00), covering everything since the previous run, grouped into `MAIL_BUCKETS`
 (bills, shopping, financial, notifications, personal, other). A `mail` switch sits on the admin
-page. Sections 1–9 below describe the fuller design, including the actions of phase 2.
+page, and the **buckets themselves live on that page too** (`data/mail_buckets.txt`,
+"name:what belongs in it" per line), re-read on every run — vocabulary is configuration, not
+code, and tuning it must never need a release. Sections 1–9 below describe the fuller design,
+including the actions of phase 2.
 
 ## 1. Access
 
