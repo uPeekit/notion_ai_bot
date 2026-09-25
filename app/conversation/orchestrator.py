@@ -52,7 +52,13 @@ from app import address, texts
 from app.audit.store import AuditStore
 from app.commands.builder import build_command
 from app.commands.executor import ExecutionResult, Executor, Refused, UndoRecord
-from app.commands.models import Command, CreateItem, CreatePage, Search
+from app.commands.models import (
+    AppendBlocks,
+    Command,
+    CreateItem,
+    CreatePage,
+    Search,
+)
 from app.config import Settings
 from app.conversation.inbox import inbox_command, inbox_target
 from app.conversation.plan import PlanState, PlanStep, StepSpec
@@ -95,6 +101,7 @@ from app.tuning import Tuning
 from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
 from app.vault.pipeline import VaultPipeline, VaultTurn
+from app.vault.writer import VaultUndo
 
 log = logging.getLogger(__name__)
 
@@ -147,6 +154,27 @@ def _hint(interp: Interpretation | None) -> str:
         f"web: {best.web_query}" if best and best.web_query else "",
     ) if p]
     return "; ".join(parts)[:MAX_HINT]
+
+
+def _written_text(command: Command) -> str:
+    """The text a step wrote to Notion, so the vault can be given the same words instead of
+    searching for them again. A command that wrote no prose (a row's properties, a search)
+    has none, and the vault side reads the step text on its own."""
+    if isinstance(command, AppendBlocks):
+        return "\n".join(command.paragraphs)
+    if isinstance(command, CreatePage | CreateItem):
+        return "\n".join(command.body)
+    return ""
+
+
+def _vault_undos(record: UndoRecord) -> list[VaultUndo]:
+    """Every vault write under one undo record, oldest first — including the ones inside a
+    plan's batch, which is where a plan's Obsidian writes live. VaultPipeline.undo puts
+    them back newest first."""
+    out = list(record.vault)
+    for part in record.batch:
+        out += _vault_undos(part)
+    return out
 
 
 def _wrong_place(step: StepSpec, interp: Interpretation) -> bool:
@@ -292,7 +320,16 @@ class _Turn:
     # The Obsidian side of this message, running next to everything above, and the execution
     # row this turn wrote (the two meet in _finish_vault).
     vault: asyncio.Task | None = None
+    # Resolved once this message's kind is known: False when it turned out to be a plan,
+    # whose steps write to the vault one by one, True for everything else. The vault task
+    # starts before the interpreter has answered, so this is what holds its writes back
+    # without cancelling a write already running in a thread.
+    vault_go: asyncio.Future[bool] | None = None
     execution_id: int | None = None
+
+    def let_vault_write(self, allowed: bool) -> None:
+        if self.vault_go is not None and not self.vault_go.done():
+            self.vault_go.set_result(allowed)
 
     def audit(self, **cols: Any) -> None:
         self.cols.update(cols)
@@ -479,7 +516,9 @@ class Orchestrator:
         if self._vault_on() and session is None:
             # A fresh thought goes to both stores at once. An answer to a question does not:
             # it answers Notion, and the vault has already had the message it belongs to.
-            turn.vault = asyncio.create_task(self._vault.handle(text))
+            turn.vault_go = asyncio.get_running_loop().create_future()
+            turn.vault = asyncio.create_task(
+                self._vault.handle(text, go=lambda: turn.vault_go))
 
         # A live session makes this message a free-text answer: the model sees the question it is
         # answering and both halves of the request, and its fresh interpretation replaces the
@@ -511,6 +550,8 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
+        # The vault started on the whole message; a plan's steps write instead, one by one.
+        turn.let_vault_write(interp.intent.value != "plan" or turn.plan is not None)
         if interp.intent.value == "plan" and turn.plan is None:
             # Even with a clarifying question attached: a plan's side question ("which dates?")
             # is not worth stopping for, and each step can still ask what it really needs.
@@ -591,9 +632,42 @@ class Orchestrator:
             self._note_new_item(command, executed)  # the next step may refer to it by name
         if isinstance(command, Search):
             return Reply(format_search(executed))
+        text_reply = format_execution(executed, target_url=candidate.target.url)
+        if turn.plan is not None:
+            line = await self._vault_step(turn, text, command)
+            text_reply = f"{text_reply}\n{line}" if line else text_reply
         execution_id = self._record_execution(turn, executed)
-        return Reply(format_execution(executed, target_url=candidate.target.url),
-                     _undo_buttons(execution_id), undo_id=execution_id)
+        return Reply(text_reply, _undo_buttons(execution_id), undo_id=execution_id)
+
+    async def _vault_step(self, turn: _Turn, text: str, command: Command) -> str:
+        """The Obsidian half of one plan step, run after the Notion half so the text a
+        search already paid for is written to both stores — one search, one wait, one
+        bill. The filer still chooses the note: this is a second pipeline, not a mirror.
+
+        A failure here never stops the plan; the step keeps its Notion result and the
+        reply is one line shorter."""
+        if not self._vault_on():
+            return ""
+        try:
+            result = await self._vault.handle(text, content=_written_text(command))
+        except Exception:
+            log.exception("the obsidian side of a plan step failed")
+            return ""
+        if result.model and (result.writes or result.error):
+            turn.call(result.model, "vault", writes=len(result.writes) or None,
+                      error=result.error or None,
+                      prompt_tokens=result.prompt_tokens,
+                      output_tokens=result.output_tokens)
+        undos = result.undos
+        if undos:
+            # Into this step's own undo, so the plan's batch reverts both stores at once.
+            if turn.last_undo is not None:
+                record = UndoRecord.model_validate_json(turn.last_undo)
+                record.vault = undos
+            else:
+                record = UndoRecord(kind="vault", vault=undos)
+            turn.last_undo = record.model_dump_json()
+        return result.reply_line()
 
     async def _research(
         self, turn: _Turn, decision: Decision, result: ValidationResult, text: str
@@ -939,9 +1013,10 @@ class Orchestrator:
         except NotionError as e:
             log.warning("undo failed: %s", e)
             return self._plain(turn, "UNDO_FAILED", message=e.message)
-        if record.vault and self._vault is not None:
+        vault_undos = _vault_undos(record)
+        if vault_undos and self._vault is not None:
             try:
-                await self._vault.undo(record.vault)
+                await self._vault.undo(vault_undos)
             except Exception:  # Notion is already back: say so rather than fail the undo
                 log.exception("undoing the vault side failed")
         self._store.mark_undone(row["id"])
@@ -1130,6 +1205,8 @@ class Orchestrator:
             except Exception:  # the caller is a chat handler: it gets a Reply, always
                 log.exception("unhandled failure in event %s", turn.event_id)
                 reply = self._plain(turn, "INTERNAL")
+            # Whatever happened above, the vault must not be left waiting for permission.
+            turn.let_vault_write(True)
             try:
                 reply = await self._finish_vault(turn, reply)
             except Exception:  # the Notion answer is already earned

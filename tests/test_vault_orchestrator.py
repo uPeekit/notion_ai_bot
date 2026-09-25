@@ -200,3 +200,152 @@ async def test_an_account_out_of_credit_is_named_in_the_reply(bot):
 
     assert texts.LLM_DOWN_SHORT["credit"] in second.text  # still says why nothing was written
     assert texts.LLM_DOWN_NOTE["credit"] not in second.text  # but does not repeat the lecture
+
+
+# ---- multi-step plans reach both stores -------------------------------------------------------
+
+
+class ByMessage:
+    """A filer that answers by what it was asked, not by the order it was asked in.
+
+    A plan runs the goal's own vault call next to its steps' — deliberately, so nothing waits —
+    so a queue of answers by position is a race, and a test written on one would pass or fail
+    by scheduling luck."""
+
+    def __init__(self, answers: dict[str, object], default: object = None) -> None:
+        self.answers = answers
+        self.default = default if default is not None else {"actions": []}
+        self.seen: list[dict] = []
+        self.messages = self
+
+    async def create(self, **kwargs):
+        self.seen.append(kwargs)
+        sent = kwargs["messages"][0]["content"]
+        answer = next((a for k, a in self.answers.items() if k in sent), self.default)
+        if isinstance(answer, Exception):
+            raise answer
+        return type("Resp", (), {
+            "content": [type("Block", (), {"type": "text", "text": json.dumps(answer)})()],
+            "stop_reason": "end_turn",
+            "usage": type("U", (), {"input_tokens": 100, "output_tokens": 20})(),
+        })()
+
+    async def close(self) -> None:
+        pass
+
+
+def use(bot, answers: dict[str, object], default: object = None) -> ByMessage:
+    client = ByMessage(answers, default)
+    bot.orch._vault._filer._client = client
+    bot.claude = client
+    return client
+
+
+async def test_every_step_of_a_plan_reaches_the_vault_and_one_button_undoes_both(bot):
+    """The failure this exists for: a plan enriched a Notion page and Obsidian got nothing,
+    because the vault side read the whole goal once and took it for a question."""
+    from tests.test_orchestrator import FakePlanner, collect
+
+    bot.orch._planner = FakePlanner(["добавь в покупки хлеб", "добавь в покупки молоко"])
+    bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
+    for title in ("Хлеб", "Молоко"):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                                 fields={"t2.f1": val(title, 1.0)})))
+    use(bot, {
+        "хлеб": {"actions": [{"action": "task", "text": "хлеб", "heading": "дом"}]},
+        "молоко": {"actions": [{"action": "task", "text": "молоко", "heading": "дом"}]},
+    })
+    sent: list = []
+
+    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect(sent))
+
+    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "- [ ] хлеб" in tasks and "- [ ] молоко" in tasks
+    assert "Obsidian —" in sent[1].text and "Obsidian —" in sent[2].text
+
+    # Each step keeps its own row; the plan adds one batch row over them, which is what the
+    # "Отменить всё" button points at.
+    batch_row = executions(bot)[-1]
+    undo = json.loads(batch_row["undo"])
+    assert undo["kind"] == "batch" and len(undo["batch"]) == 2
+    assert all(part["vault"] for part in undo["batch"])  # both stores in the plan's own undo
+
+    await bot.orch.handle_callback(CHAT, USER, reply.buttons[0][0].id)
+
+    after = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "хлеб" not in after and "молоко" not in after
+
+
+async def test_the_goal_itself_is_not_written_to_the_vault_when_it_turns_out_to_be_a_plan(bot):
+    """The vault starts on the message before anyone knows it is a plan. It must not write the
+    goal as well as every step — and it must not be cancelled mid-write either, which is why it
+    is held at a gate rather than killed."""
+    from tests.test_orchestrator import FakePlanner, collect
+
+    bot.orch._planner = FakePlanner(["добавь в покупки хлеб"])
+    bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Хлеб", 1.0)})))
+    # The goal's own vault call is answered too, and must still write nothing.
+    use(bot, {
+        "купи хлеб и молоко": {"actions": [{"action": "task",
+            "text": "купи хлеб и молоко"}]},
+        "в покупки хлеб": {"actions": [{"action": "task",
+            "text": "хлеб", "heading": "дом"}]},
+    })
+
+    await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect([]))
+
+    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "купи хлеб и молоко" not in tasks
+    assert "- [ ] хлеб" in tasks
+
+
+async def test_text_a_step_already_found_is_written_to_the_vault_without_searching_again(bot):
+    """The research is paid for once: the words the Notion side wrote are handed to the vault,
+    which only decides where they go."""
+    from tests.test_orchestrator import FakePlanner, collect
+
+    found = "Шведская стенка\nВысота 220 см\nШирина 80 см"
+    bot.orch._planner = FakePlanner(["допиши на страницу Идеи что нашёл"])
+    bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, content=found)))
+    client = use(bot, {
+        "допиши на страницу": {"actions": [{
+            "action": "note", "folder": texts.VAULT_NOTES_DIR,
+            "title": "Шведская стенка", "body": ["что-то своё"]}]},
+    })
+
+    await bot.orch.handle_text(CHAT, USER, "найди про стенку и допиши", progress=collect([]))
+
+    note = (bot.dir / texts.VAULT_NOTES_DIR / "Шведская стенка.md").read_text(encoding="utf-8")
+    assert "Высота 220 см" in note and "Ширина 80 см" in note
+    assert "что-то своё" not in note  # the filer picked the place, not the words
+    # The model was never shown what the search found: that text is data, not a prompt.
+    assert found not in json.dumps(client.seen, ensure_ascii=False)
+
+
+async def test_a_vault_failure_inside_a_plan_never_stops_the_plan(bot):
+    from tests.test_orchestrator import FakePlanner, collect
+
+    bot.orch._planner = FakePlanner(["добавь в покупки хлеб", "добавь в покупки молоко"])
+    bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
+    for title in ("Хлеб", "Молоко"):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                                 fields={"t2.f1": val(title, 1.0)})))
+    use(bot, {
+        "в покупки хлеб": RuntimeError("vault on fire"),
+        "молоко": {"actions": [{"action": "task",
+            "text": "молоко", "heading": "дом"}]},
+    })
+    sent: list = []
+
+    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect(sent))
+
+    assert reply.text.startswith("🏁")  # the plan finished
+    assert len(notion_calls_create(bot)) == 2  # both Notion steps ran
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+def notion_calls_create(bot) -> list:
+    return [c for c in bot.notion.calls if c[0] == "create_page"]

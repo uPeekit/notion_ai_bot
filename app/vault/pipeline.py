@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -29,6 +29,32 @@ from app.vault.writer import VaultAction, VaultUndo, VaultWrite, VaultWriter
 log = logging.getLogger(__name__)
 
 MAX_SUMMARY = 3
+# Where a plan step's text goes when the filer picked no note for it. A folder, not the
+# inbox note: the inbox keeps one-line reminders, and this is a page of research.
+CARRIERS = ("note", "append", "update", "rewrite")
+MAX_TITLE = 60
+
+
+def with_content(actions: list[VaultAction], content: str,
+                 message: str) -> list[VaultAction]:
+    """Text a plan step has already produced, put into whichever action files it.
+
+    The filer chose the place; the words are not its to rewrite, and it never saw them —
+    what a web search brought back is data, and data does not go into a prompt. When the
+    filer picked nothing that can hold a body, the text becomes a note of its own rather
+    than a truncated line in the inbox."""
+    lines = content.splitlines()
+    out, used = [], False
+    for action in actions:
+        if not used and action.action in CARRIERS:
+            action = action.model_copy(update={"body": lines})
+            used = True
+        out.append(action)
+    if not used:
+        title = (message.strip() or texts.VAULT_INBOX_NOTE)[:MAX_TITLE]
+        out.append(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR,
+                               title=title, body=lines))
+    return out
 
 
 def _day(value: str) -> date | None:
@@ -117,8 +143,15 @@ class VaultPipeline:
         if self._rewriter is not None:
             await self._rewriter.aclose()
 
-    async def handle(self, message: str) -> VaultTurn:
-        """Read the message, write the vault, and start the linking behind the reply."""
+    async def handle(self, message: str, *, content: str = "",
+                     go: Callable[[], Awaitable[bool]] | None = None) -> VaultTurn:
+        """Read the message, write the vault, and start the linking behind the reply.
+
+        `content` is text the caller already has (a plan step's research): the filer still
+        decides where it goes, but it is written as it stands. `go` is awaited before
+        anything is written, so a caller that started this in parallel and then learned it
+        was not wanted can stop it without a half-finished write — cancelling the task
+        could not, because the writes happen in a thread."""
         try:
             await asyncio.to_thread(self._index.refresh)
             ctx = context(self._index, message, self._now())
@@ -129,9 +162,15 @@ class VaultPipeline:
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
+        if go is not None and not await go():
+            log.info("vault: the message turned out to be a plan; its steps write instead")
+            return VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
+                             output_tokens=output_tokens)
         actions = check(raw, self._index, message)
         if not actions:  # the model answered nothing usable: keep the words rather than drop them
             actions = [VaultAction(action="inbox", text=message)]
+        if content:
+            actions = with_content(actions, content, message)
         turn = VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
                          output_tokens=output_tokens, vault=vault_name(self._index.root))
         dated = [a for a in actions if a.action == "agenda"]
