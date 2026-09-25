@@ -18,6 +18,7 @@ from collections.abc import Callable
 import anthropic
 
 from app import texts
+from app.llm.health import Health
 from app.vault.frontmatter import split
 from app.vault.index import MIN_WORD, VaultIndex, stems
 from app.vault.writer import VaultWrite, VaultWriter
@@ -103,8 +104,10 @@ def obvious_links(body: str, index: VaultIndex, *, exclude: str = "") -> list[tu
 class Linker:
     def __init__(self, index: VaultIndex, writer: VaultWriter, *, api_key: str = "",
                  model: str = "", client: anthropic.AsyncAnthropic | None = None,
-                 timeout_s: float = 30.0, extra: Callable[[], str] | None = None) -> None:
+                 timeout_s: float = 30.0, extra: Callable[[], str] | None = None,
+                 health: Health | None = None) -> None:
         self._index = index
+        self._health = health or Health()
         self._writer = writer
         self.model = model
         self._extra = extra or (lambda: "")  # the user's additions, from the admin page
@@ -175,6 +178,8 @@ class Linker:
             )
             data = json.loads(next((b.text for b in resp.content if b.type == "text"), "{}"))
         except (anthropic.APIError, json.JSONDecodeError, ValueError) as e:
+            if isinstance(e, anthropic.APIError):
+                self._health.record(e)
             log.info("linker model call failed (%s)", type(e).__name__)
             return []
         known = {c.casefold(): c for c in candidates}

@@ -69,7 +69,7 @@ def test_format_execution_create_item_three_fields():
     )
     text = format_execution(result, target_url=None)
     assert text == (
-        "✅ Добавлено: Покупки — Молоко\n"
+        "✅ Notion — добавлено в «Покупки»: Молоко\n"
         "• Магазин: Rimi\n"
         "• Количество: 2\n"
         "Открыть: https://notion.so/p1"
@@ -99,7 +99,7 @@ def test_format_execution_renders_json_shaped_values():
     )
     text = format_execution(result, target_url=None)
     assert text == (
-        "✅ Обновлено: Задачи — Отчёт\n"
+        "✅ Notion — обновлено в «Задачи»: Отчёт\n"
         "• Приоритет: A\n"
         "• Срок: 14.09.2026\n"
         "• Теги: дом, работа\n"
@@ -127,7 +127,7 @@ def test_format_execution_update_one_field():
     result = ExecutionResult(command=cmd, page_id="p2", url="https://notion.so/p2",
                              written=[Written("Куплено", True)])
     text = format_execution(result, target_url=None)
-    assert text == "✅ Обновлено: Покупки — Молоко\n• Куплено: Да\nОткрыть: https://notion.so/p2"
+    assert text == "✅ Notion — обновлено в «Покупки»: Молоко\n• Куплено: Да\nОткрыть: https://notion.so/p2"
 
 
 def test_format_execution_create_page():
@@ -136,7 +136,7 @@ def test_format_execution_create_page():
     result = ExecutionResult(command=cmd, page_id="p3", url="https://notion.so/p3",
                              written=[Written("title", "Отпуск 2027")])
     text = format_execution(result, target_url=None)
-    assert text == "✅ Создано: Идеи — Отпуск 2027\nОткрыть: https://notion.so/p3"
+    assert text == "✅ Notion — создано в «Идеи»: Отпуск 2027\nОткрыть: https://notion.so/p3"
 
 
 def test_format_execution_append_falls_back_to_target_url():
@@ -145,7 +145,7 @@ def test_format_execution_append_falls_back_to_target_url():
     result = ExecutionResult(command=cmd, page_id="p4", url=None, block_ids=["b1", "b2"],
                              written=[Written("paragraphs", ["Абзац раз", "Абзац два"])])
     text = format_execution(result, target_url="https://notion.so/p4")
-    assert text == "✅ Дописано: Идеи — Книги\nОткрыть: https://notion.so/p4"
+    assert text == "✅ Notion — дописано в «Идеи»: Книги\nОткрыть: https://notion.so/p4"
 
 
 def test_format_execution_cleared_field_is_not_rendered_as_python_none():
@@ -160,7 +160,7 @@ def test_format_execution_cleared_field_is_not_rendered_as_python_none():
     result = ExecutionResult(command=cmd, page_id="p5", url="https://notion.so/p5",
                              written=[Written("Магазин", None)])
     text = format_execution(result, target_url=None)
-    assert text == "✅ Обновлено: Покупки — Молоко\n• Магазин: очищено\nОткрыть: https://notion.so/p5"
+    assert text == "✅ Notion — обновлено в «Покупки»: Молоко\n• Магазин: очищено\nОткрыть: https://notion.so/p5"
     assert "None" not in text
 
 
@@ -169,7 +169,7 @@ def test_format_execution_cleared_field_is_not_rendered_as_python_none():
 def test_format_search_empty():
     cmd = CreateItem(data_source_id="ds-buy", target_name="Покупки", properties=[])
     result = ExecutionResult(command=cmd, hits=[])
-    assert format_search(result) == "Ничего не нашёл."
+    assert format_search(result) == "🔍 Notion — ничего не нашёл."
 
 
 def test_format_search_three_hits():
@@ -181,7 +181,7 @@ def test_format_search_three_hits():
     ]
     result = ExecutionResult(command=cmd, hits=hits)
     assert format_search(result) == (
-        "Нашёл:\n"
+        "🔍 Notion — нашёл:\n"
         "1. Хлеб — https://notion.so/h1\n"
         "2. Молоко — https://notion.so/h2\n"
         "3. Яйца — https://notion.so/h3"

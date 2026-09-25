@@ -46,6 +46,10 @@ class VaultTurn:
     answer: str = ""
     vault: str = ""
     error: str = ""
+    # Why Claude could not be used, when that is what went wrong: a code from
+    # app/llm/health.py, so the reply names the cause in the user's own language rather than
+    # showing them "claude 400".
+    reason: str = ""
     model: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
@@ -56,7 +60,8 @@ class VaultTurn:
 
     def reply_line(self) -> str:
         if self.error:
-            return texts.VAULT_FAILED.format(error=self.error)
+            why = texts.LLM_DOWN_SHORT.get(self.reason) or self.error
+            return texts.VAULT_FAILED.format(error=why)
         if self.answer and not self.writes:
             return self.answer
         if self.asked and not self.writes:
@@ -114,7 +119,7 @@ class VaultPipeline:
             raw, prompt_tokens, output_tokens = await self._filer.file(message, ctx)
         except FilerError as e:
             log.warning("filer failed: %s", e)
-            return VaultTurn(error=str(e), model=self._filer.model)
+            return VaultTurn(error=str(e), reason=e.reason, model=self._filer.model)
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)

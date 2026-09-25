@@ -13,6 +13,7 @@ import anthropic
 from pydantic import ValidationError
 
 from app.conversation.plan import MAX_STEPS, PlanState, StepSpec
+from app.llm.health import Health, describe
 from app.llm.prompts import PLAN_NEXT_PROMPT, PLAN_PROMPT, plan_message, progress_message
 
 log = logging.getLogger(__name__)
@@ -49,7 +50,12 @@ MAX_TOKENS = 16_000
 
 
 class PlanError(Exception):
-    pass
+    """`reason` is a code from app/llm/health.py when the call failed because Claude
+    could not be used at all, and "" for every other failure."""
+
+    def __init__(self, message: str, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -63,8 +69,10 @@ class Planner:
     def __init__(
         self, api_key: str, model: str, *, timeout_s: float = 180.0,
         client: anthropic.AsyncAnthropic | None = None,
+        health: Health | None = None,
     ) -> None:
         self.model = model
+        self._health = health or Health()
         self._client = client or anthropic.AsyncAnthropic(
             api_key=api_key, timeout=timeout_s, max_retries=1)
 
@@ -110,8 +118,8 @@ class Planner:
                 output_config={"format": {"type": "json_schema", "schema": schema}},
             )
         except anthropic.APIError as e:
-            raise PlanError(f"claude {getattr(e, 'status_code', None) or type(e).__name__}") \
-                from None
+            raise PlanError(describe(e), self._health.record(e)) from None
+        self._health.ok()
         if resp.stop_reason == "max_tokens":
             raise PlanError("answer cut off (max_tokens)")
         text = next((b.text for b in resp.content if b.type == "text"), "")

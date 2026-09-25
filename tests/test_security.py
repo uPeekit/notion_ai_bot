@@ -260,7 +260,7 @@ def _build_full_app(env, *, provider: FakeNotionProvider, llm: FakeLLM) -> main.
     env.setenv("ADMIN_UI_PORT", "0")
     settings = Settings()
     app = main.build(
-        settings, provider_factory=lambda s: provider, llm_factory=lambda s: llm,
+        settings, provider_factory=lambda s: provider, llm_factory=lambda s, h: llm,
         speech_factory=lambda s: FakeSpeech(),
     )
     app.store.migrate()

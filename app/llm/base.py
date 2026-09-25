@@ -12,7 +12,13 @@ class LLMError(Exception):
 
 
 class LLMUnavailable(LLMError):
-    pass
+    """The service could not be reached or refused to serve us. `reason` is one of the codes in
+    app/llm/health.py when the failure is one the user can act on (no credit, a rejected key, a
+    rate limit, an outage), and "" when it is not."""
+
+    def __init__(self, message: str, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class LLMInvalidOutput(LLMError):

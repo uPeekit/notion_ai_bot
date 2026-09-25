@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import anthropic
 
+from app.llm.health import Health, describe
 from app.llm.prompts import MAIL_PROMPT, mail_message
 from app.mail.imap import Message
 
@@ -42,7 +43,12 @@ def parse_buckets(raw: str) -> tuple[list[str], dict[str, str]]:
 
 
 class ClassifyError(Exception):
-    pass
+    """`reason` is a code from app/llm/health.py when the call failed because Claude
+    could not be used at all, and "" for every other failure."""
+
+    def __init__(self, message: str, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -92,8 +98,10 @@ def gate(answer: object, batch: list[Message], buckets: list[str]) -> list[Sorte
 class Classifier:
     def __init__(self, api_key: str, model: str, buckets: list[str], *,
                  meanings: dict[str, str] | None = None, timeout_s: float = 60.0,
-                 client: anthropic.AsyncAnthropic | None = None) -> None:
+                 client: anthropic.AsyncAnthropic | None = None,
+                 health: Health | None = None) -> None:
         self.model = model
+        self._health = health or Health()
         self.buckets = [*buckets, OTHER] if OTHER not in buckets else list(buckets)
         self.meanings = dict(meanings or {})
         self._client = client or anthropic.AsyncAnthropic(
@@ -135,8 +143,8 @@ class Classifier:
                                           "schema": _schema(self.buckets)}},
             )
         except anthropic.APIError as e:
-            raise ClassifyError(f"claude {getattr(e, 'status_code', None) or type(e).__name__}") \
-                from None
+            raise ClassifyError(describe(e), self._health.record(e)) from None
+        self._health.ok()
         if resp.stop_reason == "max_tokens":
             raise ClassifyError("answer cut off (max_tokens)")
         text = next((b.text for b in resp.content if b.type == "text"), "")

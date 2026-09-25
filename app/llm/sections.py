@@ -17,6 +17,7 @@ import logging
 
 import anthropic
 
+from app.llm.health import Health
 from app.llm.prompts import SECTION_PROMPT, section_message
 
 log = logging.getLogger(__name__)
@@ -33,8 +34,10 @@ class SectionPicker:
     def __init__(
         self, api_key: str, model: str, *, timeout_s: float = 20.0,
         client: anthropic.AsyncAnthropic | None = None,
+        health: Health | None = None,
     ) -> None:
         self.model = model
+        self._health = health or Health()
         self._client = client or anthropic.AsyncAnthropic(
             api_key=api_key, timeout=timeout_s, max_retries=1)
 
@@ -57,6 +60,8 @@ class SectionPicker:
             text = next((b.text for b in resp.content if b.type == "text"), "")
             chosen = json.loads(text).get("section")
         except (anthropic.APIError, ValueError, AttributeError) as e:
+            if isinstance(e, anthropic.APIError):
+                self._health.record(e)
             log.info("section pick skipped (%s)", type(e).__name__)
             return None
         if not isinstance(chosen, int) or not 1 <= chosen <= len(headings):

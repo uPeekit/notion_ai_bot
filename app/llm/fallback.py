@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 
 from app.interpretation.models import Interpretation
+from app.llm import health as health_mod
 from app.llm.base import LLMClient, LLMError, LLMTrace, LLMUnavailable
 from app.llm.context import Context
 
@@ -18,6 +19,9 @@ log = logging.getLogger(__name__)
 # After the primary fails for lack of service (offline, rate-limited, no credit, bad key), skip
 # it for this long: each message would otherwise wait for the same failure before falling back.
 DEFAULT_COOLDOWN_S = 300.0
+# An empty balance is not a blip: retrying every five minutes only buys another wasted round
+# trip per message. The user has to top the account up, and that takes longer than that.
+BILLING_COOLDOWN_S = 1800.0
 
 
 class FallbackLLM:
@@ -42,9 +46,11 @@ class FallbackLLM:
             try:
                 interp, trace = await self.primary.interpret(text, context, schema)
             except LLMUnavailable as e:
-                self._skip_until = self._clock() + self._cooldown_s
+                wait = (BILLING_COOLDOWN_S if getattr(e, "reason", "") == health_mod.CREDIT
+                        else self._cooldown_s)
+                self._skip_until = self._clock() + wait
                 log.warning("primary LLM unavailable (%s); local model for the next %.0f s",
-                            e, self._cooldown_s)
+                            e, wait)
             except LLMError as e:  # an answer that failed validation: this message only
                 log.warning("primary LLM gave no usable answer (%s); asking the local model", e)
             else:

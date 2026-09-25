@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from app.interpretation.models import WEB_MEDIA, Interpretation
 from app.llm.base import LLMInvalidOutput, LLMTrace, LLMUnavailable
 from app.llm.context import Context
+from app.llm.health import Health, describe
 from app.llm.output_schema import intents
 from app.llm.prompts import FLAT_FORMAT_NOTE, build_messages, retry_message
 
@@ -158,9 +159,11 @@ class ClaudeClient:
         timeout_s: float = 30.0,
         max_tokens: int = 4096,
         client: anthropic.AsyncAnthropic | None = None,
+        health: Health | None = None,
     ) -> None:
         self.model = model
         self._max_tokens = max_tokens
+        self._health = health or Health()
         # One SDK retry covers a blip; anything longer is the fallback's job, not a wait here.
         self._client = client or anthropic.AsyncAnthropic(
             api_key=api_key, timeout=timeout_s, max_retries=1
@@ -181,7 +184,8 @@ class ClaudeClient:
         try:
             info = await self._client.models.retrieve(self.model)
         except anthropic.APIError as e:
-            raise LLMUnavailable(_describe(e)) from None
+            raise LLMUnavailable(describe(e), self._health.record(e)) from None
+        self._health.ok()
         return [self.model, info.id]
 
     async def interpret(
@@ -204,7 +208,8 @@ class ClaudeClient:
                     output_config=output_config,
                 )
             except anthropic.APIError as e:
-                raise LLMUnavailable(_describe(e)) from None
+                raise LLMUnavailable(describe(e), self._health.record(e)) from None
+            self._health.ok()
             raw = next((b.text for b in resp.content if b.type == "text"), "")
             if resp.stop_reason == "refusal":
                 raise LLMInvalidOutput("claude declined to answer", raw=raw)
@@ -237,15 +242,3 @@ class ClaudeClient:
         raise LLMInvalidOutput(
             f"invalid LLM output after {MAX_ATTEMPTS} attempts: {error}", raw=raw
         )
-
-
-def _describe(e: anthropic.APIError) -> str:
-    """Status and the API's own error message — never the request, which carries the key."""
-    if isinstance(e, anthropic.APITimeoutError):
-        return "claude timed out"
-    if isinstance(e, anthropic.APIConnectionError):
-        return "claude unreachable"
-    status = getattr(e, "status_code", None)
-    body = getattr(e, "body", None)
-    detail = body.get("error", {}).get("message") if isinstance(body, dict) else None
-    return f"claude {status}: {(detail or getattr(e, 'message', type(e).__name__))[:300]}"

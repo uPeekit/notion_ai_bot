@@ -21,6 +21,7 @@ from app import main, texts
 from app.config import Settings
 from app.llm.claude import ClaudeClient
 from app.llm.fallback import FallbackLLM
+from app.llm.health import Health
 from app.llm.ollama import OllamaClient
 from app.notion.errors import NotionError
 from tests.fakes import FakeLLM, FakeNotionProvider
@@ -100,7 +101,7 @@ def _build(env, *, provider=None, llm=None, admin_port: int = 0) -> main.App:
     settings = Settings()
     provider = provider if provider is not None else _page_provider()
     llm = llm if llm is not None else FakeLLM()
-    return main.build(settings, provider_factory=lambda s: provider, llm_factory=lambda s: llm)
+    return main.build(settings, provider_factory=lambda s: provider, llm_factory=lambda s, h: llm)
 
 
 def _messages(caplog, logger_name: str = "app.main") -> list[str]:
@@ -193,12 +194,12 @@ async def test_notion_5xx_only_warns_and_continues(env, caplog):
 
 
 def test_default_llm_is_local_without_an_anthropic_key(env):
-    assert isinstance(main._default_llm(Settings()), OllamaClient)
+    assert isinstance(main._default_llm(Settings(), Health()), OllamaClient)
 
 
 def test_default_llm_is_claude_with_local_fallback_when_a_key_is_set(env):
     env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
-    llm = main._default_llm(Settings())
+    llm = main._default_llm(Settings(), Health())
     assert isinstance(llm, FallbackLLM)
     assert isinstance(llm.primary, ClaudeClient) and llm.primary.model == "claude-haiku-4-5"
     assert isinstance(llm.fallback, OllamaClient)
@@ -207,7 +208,7 @@ def test_default_llm_is_claude_with_local_fallback_when_a_key_is_set(env):
 def test_llm_cloud_false_keeps_everything_local_even_with_a_key(env):
     env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
     env.setenv("LLM_CLOUD", "false")
-    assert isinstance(main._default_llm(Settings()), OllamaClient)
+    assert isinstance(main._default_llm(Settings(), Health()), OllamaClient)
 
 
 # ---- post_init_checks: warnings, not fatal ------------------------------------------------------

@@ -150,7 +150,7 @@ async def test_pipeline_writes_and_says_what_it_did(index):
             {"name": "status", "value": "Read"}]},
     ]}).handle("купи лампочки и отметь что дочитал чапаева")
     assert [w.kind for w in turn.writes] == ["task", "update"]
-    assert "Obsidian:" in turn.reply_line()
+    assert "Obsidian —" in turn.reply_line()
     assert "- [ ] купить лампочки #home" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert "status: Read" in index.read(f"{texts.VAULT_BOOKS_DIR}/Чапаев и Пустота.md")
     assert len(turn.undos) == 2

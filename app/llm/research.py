@@ -15,6 +15,7 @@ from typing import Any
 
 import anthropic
 
+from app.llm.health import Health, describe
 from app.llm.image_search import ImageSearch
 from app.llm.prompts import (
     IMAGE_FILTER_PROMPT,
@@ -56,7 +57,12 @@ _LINK = re.compile(r"\((https?://[^\s)]+)\)")
 
 
 class ResearchError(Exception):
-    pass
+    """`reason` is a code from app/llm/health.py when the call failed because Claude
+    could not be used at all, and "" for every other failure."""
+
+    def __init__(self, message: str, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class ResearchTimeout(ResearchError):
@@ -145,8 +151,10 @@ class WebResearcher:
         is_image: Callable[[str], Awaitable[bool]] | None = None,
         search: ImageSearch | None = None,
         extra: Callable[[], str] | None = None, deadline_s: float = DEADLINE_S,
+        health: Health | None = None,
     ) -> None:
         self.model = model
+        self._health = health or Health()
         self._deadline = deadline_s
         # The user's own additions to the research prompt, from the admin page.
         self._extra = extra or (lambda: "")
@@ -209,6 +217,7 @@ class WebResearcher:
                 messages=[{"role": "user", "content": research_message(request, query)}],
             )
         except anthropic.APIError as e:
+            self._health.record(e)
             log.info("image phrases failed (%s)", getattr(e, "status_code", type(e).__name__))
             return []
         text = "".join(b.text for b in resp.content if b.type == "text")
@@ -295,8 +304,8 @@ class WebResearcher:
                     messages=messages, tools=self._tools,
                 )
             except anthropic.APIError as e:
-                status = getattr(e, "status_code", None)
-                raise ResearchError(f"claude {status or type(e).__name__}") from None
+                raise ResearchError(describe(e), self._health.record(e)) from None
+            self._health.ok()
             blocks = [*blocks, *resp.content]
             if resp.stop_reason != "pause_turn":
                 break

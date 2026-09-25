@@ -74,6 +74,7 @@ from app.llm.base import (
     LLMUnavailable,
 )
 from app.llm.context import Context, ContextBuilder
+from app.llm.health import Health
 from app.llm.output_schema import build_schema
 from app.llm.planner import PlanError, Planner, Verdict
 from app.llm.prompts import WEB_WORDS, plan_context, workspace_summary
@@ -316,8 +317,10 @@ class Orchestrator:
         researcher: WebResearcher | None = None, planner: Planner | None = None,
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
         switches: Switches | None = None, tuning: Tuning | None = None,
+        health: Health | None = None,
     ) -> None:
         self._s = settings
+        self._health = health or Health()
         self._researcher = researcher
         self._planner = planner
         self._vault = vault
@@ -1125,6 +1128,13 @@ class Orchestrator:
                 reply = await self._finish_vault(turn, reply)
             except Exception:  # the Notion answer is already earned
                 log.exception("obsidian side failed in event %s", turn.event_id)
+            # Last line of every reply, at most once an hour: why the answers got worse. It
+            # goes here rather than in any one branch because every branch above can be the
+            # degraded one — a question the local model asked, a vault line that says nothing
+            # was written, a plan that stopped.
+            warning = self._health.note()
+            if warning:
+                reply = replace(reply, text=f"{reply.text}\n\n{warning}".strip())
             try:
                 self._finish(turn)
             except Exception:  # the answer is already earned; losing the row must not eat it

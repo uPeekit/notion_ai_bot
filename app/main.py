@@ -62,6 +62,7 @@ from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
 from app.llm.context import ContextBuilder
 from app.llm.fallback import FallbackLLM
+from app.llm.health import Health
 from app.llm.image_search import ImageSearch
 from app.llm.ollama import OllamaClient
 from app.llm.planner import Planner
@@ -128,7 +129,7 @@ _TELEGRAM_TOKEN_REJECTED = (
 )
 
 ProviderFactory = Callable[[Settings], NotionProvider]
-LLMFactory = Callable[[Settings], LLMClient]
+LLMFactory = Callable[[Settings, Health], LLMClient]
 SpeechFactory = Callable[[Settings], SpeechToText]
 
 
@@ -136,7 +137,7 @@ def _default_provider(settings: Settings) -> NotionProvider:
     return DirectNotionProvider(settings.notion_token.get_secret_value(), settings.notion_version)
 
 
-def _default_llm(settings: Settings) -> LLMClient:
+def _default_llm(settings: Settings, health: Health) -> LLMClient:
     local = OllamaClient(
         settings.ollama_base_url, settings.llm_model,
         temperature=settings.llm_temperature, num_ctx=settings.llm_num_ctx,
@@ -146,7 +147,7 @@ def _default_llm(settings: Settings) -> LLMClient:
         return local
     claude = ClaudeClient(
         settings.anthropic_api_key.get_secret_value(), settings.claude_model,
-        timeout_s=settings.claude_timeout_s,
+        timeout_s=settings.claude_timeout_s, health=health,
     )
     return FallbackLLM(claude, local)
 
@@ -222,8 +223,8 @@ class App:
     fatal: tuple[int, str] | None = None
 
 
-def _vault_pipeline(settings: Settings, switches: Switches,
-                    tuning: Tuning) -> VaultPipeline | None:
+def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
+                    health: Health) -> VaultPipeline | None:
     """The Obsidian side, when a vault is configured and Claude is reachable. It is built even
     when Notion is not: the two pipelines share nothing."""
     key = settings.anthropic_api_key.get_secret_value()
@@ -236,13 +237,14 @@ def _vault_pipeline(settings: Settings, switches: Switches,
     index = VaultIndex(root)
     writer = VaultWriter(index, tag_source=lambda: tuning.countdown_tag)
     linker = Linker(index, writer, api_key=key, model=settings.linker_model,
-                    extra=lambda: tuning.linker_note)
-    return VaultPipeline(index, writer, Filer(key, settings.filer_model), linker,
-                         linking=lambda: switches.get("linker"))
+                    extra=lambda: tuning.linker_note, health=health)
+    return VaultPipeline(index, writer, Filer(key, settings.filer_model, health=health),
+                         linker, linking=lambda: switches.get("linker"))
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
-                  tuning: Tuning, application: Callable[[], Application]) -> DailyMessage | None:
+                  tuning: Tuning, health: Health,
+                  application: Callable[[], Application]) -> DailyMessage | None:
     """The morning agenda, if there is a vault to read it from and a time to send it at. It
     reads the Obsidian side only: the vault is where the dates live."""
     if vault is None or not settings.allowed_user_ids or not parse_times(tuning.agenda_at):
@@ -252,9 +254,12 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
         if not switches.get("obsidian"):
             return
         text = await asyncio.to_thread(vault.digest)
-        if not text:
+        warning = health.note()
+        if not text and not warning:
             log.info("daily digest: nothing due, nothing sent")
             return
+        # A digest that silently did not run is worse than one that says why.
+        text = f"{text}\n\n{warning}".strip() if warning else text
         for chat_id in sorted(settings.allowed_user_ids):
             try:
                 await application().bot.send_message(chat_id, text)
@@ -265,7 +270,7 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
 
 
 def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, tuning: Tuning,
-                 application: Callable[[], Application],
+                 health: Health, application: Callable[[], Application],
                  ) -> tuple[MailService | None, DailyMessage | None]:
     """Read-only mail triage: fetch what arrived since the last digest, sort it into the user's
     buckets, and send one message. Off unless both the address and the app password are set."""
@@ -277,7 +282,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
     buckets, meanings = buckets_file.parsed()
     service = MailService(
         GmailIMAP(settings.gmail_address, password),
-        Classifier(key, settings.mail_model, buckets, meanings=meanings),
+        Classifier(key, settings.mail_model, buckets, meanings=meanings, health=health),
         MailState(settings.db_path.with_name("mail_state.json")),
         max_per_run=settings.mail_max_per_run, source=buckets_file.parsed,
     )
@@ -286,9 +291,11 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
         if not switches.get("mail"):
             return
         text = await service.digest()
-        if not text:
+        warning = health.note()
+        if not text and not warning:
             log.info("mail digest: nothing new, nothing sent")
             return
+        text = f"{text}\n\n{warning}".strip() if warning else text
         for chat_id in sorted(settings.allowed_user_ids):
             try:
                 await application().bot.send_message(chat_id, text)
@@ -312,6 +319,9 @@ def build(
     anywhere in reach."""
     store = AuditStore(settings.db_path)
     sessions = SessionStore(store)
+    # One health record for the whole process: whichever Anthropic call fails first is the
+    # one that explains it, and every reply and digest can say so (app/llm/health.py).
+    health = Health()
     descriptions = Descriptions(settings.targets_file)
     note = WorkspaceNote(settings.targets_file.with_name("workspace_note.md"))
     provider = provider_factory(settings)
@@ -326,21 +336,22 @@ def build(
         WebResearcher(settings.anthropic_api_key.get_secret_value(), settings.research_model,
                       max_searches=settings.research_max_searches, is_image=images.is_image,
                       search=ImageSearch(), extra=lambda: tuning.research_note,
-                      deadline_s=settings.research_deadline_s)
+                      deadline_s=settings.research_deadline_s, health=health)
         if uses_cloud(settings) else None
     )
-    planner = (Planner(settings.anthropic_api_key.get_secret_value(), settings.plan_model)
+    planner = (Planner(settings.anthropic_api_key.get_secret_value(), settings.plan_model,
+                       health=health)
                if uses_cloud(settings) else None)
     context_builder = ContextBuilder(settings.timezone, settings.items_per_target, note=note.load,
                                      web_research=researcher is not None,
                                      planning=planner is not None)
-    llm = llm_factory(settings)
+    llm = llm_factory(settings, health)
     validator = SemanticValidator()
     policy = Policy(Thresholds.from_settings(settings))
     # Which list on a page a line joins: a page with two lists under two headings needs the
     # model to choose. Cheap and rare enough that it shares the interpreter's model.
     sections = (SectionPicker(settings.anthropic_api_key.get_secret_value(),
-                              settings.claude_model)
+                              settings.claude_model, health=health)
                 if uses_cloud(settings) else None)
     executor = Executor(provider, images=images, sections=sections)
     switches = Switches(settings.db_path.with_name("switches.json"), {
@@ -352,11 +363,11 @@ def build(
         mail_at=settings.mail_digest_at, web_words=WEB_WORDS,
         countdown_tag=texts.VAULT_COUNTDOWN_TAG, date_props=texts.VAULT_DATE_PROPS,
     ))
-    vault = _vault_pipeline(settings, switches, tuning)
+    vault = _vault_pipeline(settings, switches, tuning, health)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,
-        switches=switches, tuning=tuning,
+        switches=switches, tuning=tuning, health=health,
     )
     speech = speech_factory(settings)
     buckets_file = Buckets(settings.db_path.with_name("mail_buckets.txt"),
@@ -364,8 +375,8 @@ def build(
     admin = AdminServer(settings, discovery, descriptions, note, switches, buckets_file,
                         tuning)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
-    daily = _daily_digest(settings, vault, switches, tuning, lambda: telegram_app)
-    mail, mail_digest = _mail_digest(settings, switches, buckets_file, tuning,
+    daily = _daily_digest(settings, vault, switches, tuning, health, lambda: telegram_app)
+    mail, mail_digest = _mail_digest(settings, switches, buckets_file, tuning, health,
                                      lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN

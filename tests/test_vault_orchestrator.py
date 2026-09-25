@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import datetime
 
+import anthropic
 import pytest
 
 from app import texts
@@ -15,6 +16,7 @@ from app.config import Settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
 from app.llm.context import ContextBuilder
+from app.llm.health import Health
 from app.switches import Switches
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
@@ -49,12 +51,16 @@ def bot(tmp_path, env):
     index.refresh()
     writer = VaultWriter(index, now=lambda: VAULT_NOW)
     claude = FakeAnthropic()
-    vault = VaultPipeline(index, writer, Filer("", "claude-haiku-4-5", client=claude),
+    # One health record for the process, exactly as main.build wires it: the filer is what
+    # notices Claude is down, the orchestrator is what tells the user.
+    health = Health()
+    vault = VaultPipeline(index, writer,
+                          Filer("", "claude-haiku-4-5", client=claude, health=health),
                           None, now=lambda: VAULT_NOW)
     builder = ContextBuilder(settings.timezone, settings.items_per_target)
     orch = Orchestrator(settings, FakeDiscovery(snap), builder, llm, SemanticValidator(),
                         Policy(Thresholds.from_settings(settings)), Executor(notion), store,
-                        SessionStore(store), clock=Clock(NOW), vault=vault)
+                        SessionStore(store), clock=Clock(NOW), vault=vault, health=health)
     yield type("VaultBot", (), {
         "orch": orch, "llm": llm, "claude": claude, "index": index, "store": store,
         "notion": notion,
@@ -80,7 +86,7 @@ async def test_one_message_reaches_both_stores_and_one_undo_reverts_both(bot):
 
     reply = await bot.orch.handle_text(CHAT, USER, "купить лампочки")
 
-    assert "Obsidian:" in reply.text  # the Notion answer, plus one line about the vault
+    assert "Obsidian —" in reply.text  # the Notion answer, plus one line about the vault
     tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert "- [ ] купить лампочки #home" in tasks
     assert any(c[0] == "create_page" for c in bot.notion.calls)  # and Notion has its row
@@ -101,7 +107,7 @@ async def test_the_vault_is_written_even_when_notion_asks_a_question(bot):
 
     reply = await bot.orch.handle_text(CHAT, USER, "зубы")
 
-    assert reply.buttons and "Obsidian:" in reply.text  # Notion is still asking
+    assert reply.buttons and "Obsidian —" in reply.text  # Notion is still asking
     assert "- [ ] зубы" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     # Nothing was written to Notion, so the vault's undo gets a row of its own for /undo.
     [row] = executions(bot)
@@ -135,7 +141,7 @@ async def test_notion_off_leaves_a_working_obsidian_bot(bot, tmp_path):
 
     reply = await bot.orch.handle_text(CHAT, USER, "зубы")
 
-    assert reply.text.startswith("Obsidian:") and not reply.buttons
+    assert reply.text.startswith("✅ Obsidian —") and not reply.buttons
     assert bot.llm.calls == 0 and bot.notion.calls == []
     assert "- [ ] зубы" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert json.loads(executions(bot)[0]["undo"])["kind"] == "vault"
@@ -170,3 +176,27 @@ async def test_a_vault_failure_never_costs_the_notion_answer(bot):
     assert "✅" in reply.text and reply.undo_id is not None  # Notion wrote and can be undone
     assert "Obsidian" not in reply.text  # nothing to report: the vault side never got that far
     assert json.loads(executions(bot)[0]["undo"])["vault"] == []
+
+
+async def test_an_account_out_of_credit_is_named_in_the_reply(bot):
+    """The whole of feature A, end to end: Notion still answers (the local model read the
+    message), the Obsidian line says what went wrong in words, and the reply carries the
+    warning once — not once per message for the rest of the evening."""
+    error = anthropic.APIError("boom", request=None,  # type: ignore[arg-type]
+                               body={"error": {"message": "Your credit balance is too low"}})
+    error.status_code = 400  # type: ignore[attr-defined]
+    for _ in range(2):
+        bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95, fields={
+            "t3.f1": val("зубы", 1.0), "t3.f2": val("t3.f2.o1", 1.0)})))
+    bot.claude.answers = [error, error]
+
+    first = await bot.orch.handle_text(CHAT, USER, "зубы")
+
+    assert "✅ Notion —" in first.text  # the Notion side is unharmed
+    assert texts.LLM_DOWN_SHORT["credit"] in first.text  # the Obsidian line names the cause
+    assert texts.LLM_DOWN_NOTE["credit"] in first.text  # and the reply says what to do
+
+    second = await bot.orch.handle_text(CHAT, USER, "зубы")
+
+    assert texts.LLM_DOWN_SHORT["credit"] in second.text  # still says why nothing was written
+    assert texts.LLM_DOWN_NOTE["credit"] not in second.text  # but does not repeat the lecture

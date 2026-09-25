@@ -75,12 +75,15 @@ INTENT_UNKNOWN_LABEL = "запрос"
 
 # ---- execution results ------------------------------------------------------------------------
 
-DONE_CREATE_ITEM = "✅ Добавлено: {target_name} — {item_title}"
+# Both stores answer in the same shape — «значок сторона — что сделано» — so a reply that
+# touched both reads as two lines of one answer instead of a Notion sentence with an Obsidian
+# afterthought. The Obsidian half of it lives in VAULT_REPLY / VAULT_FAILED below.
+DONE_CREATE_ITEM = "✅ Notion — добавлено в «{target_name}»: {item_title}"
 # The row was already in the table: nothing written, nothing changed in it.
-ALREADY_THERE = "↩️ Уже есть в «{target_name}»: {item_title} — ничего не менял"
-DONE_UPDATE = "✅ Обновлено: {target_name} — {item_title}"
-DONE_CREATE_PAGE = "✅ Создано: {target_name} — {item_title}"
-DONE_APPEND = "✅ Дописано: {target_name} — {item_title}"
+ALREADY_THERE = "↩️ Notion — уже есть в «{target_name}»: {item_title} (ничего не менял)"
+DONE_UPDATE = "✅ Notion — обновлено в «{target_name}»: {item_title}"
+DONE_CREATE_PAGE = "✅ Notion — создано в «{target_name}»: {item_title}"
+DONE_APPEND = "✅ Notion — дописано в «{target_name}»: {item_title}"
 DONE_LINK = "Открыть: {url}"
 
 # ---- multi-step plans -------------------------------------------------------------------------
@@ -96,8 +99,8 @@ PLAN_STOPPED = "⏹ План остановлен: {summary} (шагов вып�
 # the user to notice that the remaining steps never happened.
 PLAN_ABANDONED = " План «{goal}» отменён, невыполненных шагов: {left}."
 
-SEARCH_HEADER = "Нашёл:"
-SEARCH_EMPTY = "Ничего не нашёл."
+SEARCH_HEADER = "🔍 Notion — нашёл:"
+SEARCH_EMPTY = "🔍 Notion — ничего не нашёл."
 
 # ---- standalone replies -----------------------------------------------------------------------
 
@@ -218,6 +221,30 @@ ROOT_TARGET_DESCRIPTION = (
     "просит создать страницу в корне / на верхнем уровне / отдельно, не внутри другой страницы."
 )
 
+# ---- when Claude cannot be used (app/llm/health.py) -------------------------------------------
+
+# A few words for a line that is already about a failure ("Obsidian — не записано: …").
+LLM_DOWN_SHORT: dict[str, str] = {
+    "credit": "закончились кредиты Claude",
+    "key": "ключ Claude не принят",
+    "limit": "слишком много запросов к Claude",
+    "down": "Claude не отвечает",
+}
+# The whole sentence, appended to a reply at most once an hour. It says what broke, what that
+# costs the user right now, and what to do about it — a warning that names none of the three
+# is the silence it replaces.
+LLM_DOWN_NOTE: dict[str, str] = {
+    "credit": ("⚠️ На счёте Anthropic закончились кредиты. Пока отвечает локальная модель — она "
+               "заметно хуже, а Obsidian ничего не записывает. "
+               "Пополнить: https://console.anthropic.com/settings/billing"),
+    "key": ("⚠️ Claude не принимает ключ — проверьте ANTHROPIC_API_KEY. Пока отвечает локальная "
+            "модель, Obsidian ничего не записывает."),
+    "limit": ("⚠️ Слишком много запросов к Claude подряд. Отвечает локальная модель; "
+              "через несколько минут всё вернётся само."),
+    "down": ("⚠️ Claude сейчас не отвечает. Отвечает локальная модель — она заметно хуже, "
+             "а Obsidian ничего не записывает."),
+}
+
 # ---- LLM-facing keys --------------------------------------------------------------------------
 
 # Keys of the `pending` block the orchestrator adds to the request context when the next message
@@ -278,10 +305,10 @@ VAULT_GUIDE = """# Как бот раскладывает записи
 """
 VAULT_INBOX_NOTE = "Разное"
 # A question answered from the vault: the header, one line per hit, and the empty answer.
-VAULT_SEARCH_HEADER = "Obsidian — нашёл:"
+VAULT_SEARCH_HEADER = "🔍 Obsidian — нашёл:"
 VAULT_SEARCH_HIT = "• {name}{line}"
 VAULT_SEARCH_TASK = "• {line}"
-VAULT_SEARCH_EMPTY = "Obsidian: ничего не нашёл."
+VAULT_SEARCH_EMPTY = "🔍 Obsidian — ничего не нашёл."
 # Words a question is built from rather than about: they match everything and mean nothing.
 SEARCH_STOP_WORDS = frozenset({
     "найди", "найти", "покажи", "напомни", "скажи", "дай", "хочу", "нужно", "надо",
@@ -291,8 +318,8 @@ SEARCH_STOP_WORDS = frozenset({
     "про", "для", "это", "этот", "эта", "вообще", "потом", "ещё", "еще",
 })
 # One line per write, appended to the reply: what the Obsidian side did.
-VAULT_REPLY = "Obsidian: {what}"
-VAULT_FAILED = "Obsidian: не записано ({error})"
+VAULT_REPLY = "✅ Obsidian — {what}"
+VAULT_FAILED = "⚠️ Obsidian — не записано: {error}"
 VAULT_WHAT = {
     "task": "задача в «{note}»",
     "note": "заметка «{note}»",

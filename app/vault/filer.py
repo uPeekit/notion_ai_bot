@@ -18,6 +18,7 @@ import anthropic
 from pydantic import ValidationError
 
 from app import texts
+from app.llm.health import Health, describe
 from app.llm.prompts import FILER_PROMPT, filer_message, filer_vault
 from app.vault.index import VaultIndex
 from app.vault.writer import VaultAction
@@ -63,7 +64,12 @@ FILER_SCHEMA = _obj({"actions": {"type": "array", "items": ACTION_SCHEMA}})
 
 
 class FilerError(Exception):
-    pass
+    """`reason` is a code from app/llm/health.py when the call failed because Claude
+    could not be used at all, and "" for every other failure."""
+
+    def __init__(self, message: str, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -176,8 +182,10 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
 
 class Filer:
     def __init__(self, api_key: str, model: str, *, timeout_s: float = 30.0,
-                 client: anthropic.AsyncAnthropic | None = None) -> None:
+                 client: anthropic.AsyncAnthropic | None = None,
+                 health: Health | None = None) -> None:
         self.model = model
+        self._health = health or Health()
         self._client = client or anthropic.AsyncAnthropic(
             api_key=api_key, timeout=timeout_s, max_retries=1)
 
@@ -193,8 +201,8 @@ class Filer:
                 output_config={"format": {"type": "json_schema", "schema": FILER_SCHEMA}},
             )
         except anthropic.APIError as e:
-            raise FilerError(f"claude {getattr(e, 'status_code', None) or type(e).__name__}") \
-                from None
+            raise FilerError(describe(e), self._health.record(e)) from None
+        self._health.ok()
         if resp.stop_reason == "max_tokens":
             raise FilerError("answer cut off (max_tokens)")
         text = next((b.text for b in resp.content if b.type == "text"), "")
