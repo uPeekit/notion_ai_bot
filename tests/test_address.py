@@ -61,7 +61,7 @@ def test_questions_about_the_bot():
 @pytest.fixture
 def named(tmp_path, env, monkeypatch):
     bot = make_bot(tmp_path)
-    bot.orch._names = NAMES
+    bot.orch._fallback_names = NAMES  # what .env said; the admin page can override it
     return bot
 
 

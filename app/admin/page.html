@@ -50,6 +50,13 @@
   .option-row input { flex: 1; }
   #workspace-note, #mail-buckets { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
   #switches { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+  details { border: 1px solid #ddd; border-radius: 6px; margin: 10px 0; padding: 6px 12px; }
+  details[open] { padding-bottom: 14px; }
+  summary { cursor: pointer; font-size: 1.1em; font-weight: 600; padding: 6px 0; }
+  details h3 { font-size: 1em; margin: 14px 0 4px; }
+  label.field { display: block; margin: 8px 0 2px; font-weight: 600; }
+  label.field input { display: block; width: 100%; font: inherit; padding: 4px;
+                      font-weight: normal; margin-top: 2px; }
   .target.is-hidden { opacity: 0.55; }
   .inbox-row { margin: 8px 0; font-size: 0.9rem; }
   .inbox-row label { margin-left: 4px; }
@@ -69,51 +76,115 @@
 </style>
 </head>
 <body>
-<h1>Цели и описания для Notion-ассистента</h1>
+<h1>Настройки ассистента</h1>
 <p class="hint">
-  Здесь настраивается, как бот понимает вашу базу Notion: описание каждой цели (для чего она
-  нужна), обязательные поля и куда складывать сообщения, которые бот не смог распознать
-  («инбокс»). Ничего из этой страницы не отправляется в Notion — только в локальный файл
-  <code>data/targets.yaml</code>.
+  Всё на этой странице хранится локально и применяется со следующего сообщения — перезапускать
+  бота не нужно. Пустое поле означает «как по умолчанию».
 </p>
 <p class="meta" id="fetched-at"></p>
-<div id="notice-inbox-locked" class="notice" hidden>
-  Инбокс задан переменной окружения <code>INBOX_TARGET_ID</code> в <code>.env</code> — выбор
-  ниже недоступен, пока она установлена.
-</div>
 <div id="load-error" class="notice" hidden></div>
-<div id="empty-state" class="empty" hidden>
-  Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
-  Запустите бота и обновите эту страницу.
-</div>
-<h2>Что включено</h2>
-<p class="hint">
-  Куда бот пишет ваши сообщения. Меняется сразу, перезапуск не нужен. Если выключить Notion,
-  останется только Obsidian — бот продолжит работать, вопросов задавать не будет.
-</p>
-<div id="switches">
-  <label><input type="checkbox" id="switch-notion"> Notion</label>
-  <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
-  <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
-  <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
-</div>
-<p class="hint" id="switches-note"></p>
-<h2>Заметка о воркспейсе</h2>
-<p class="hint">
-  Как устроен ваш Notion — своими словами. Бот получает её с каждым сообщением. Например:
-  «Все задачи — в базе TODO. Страницы дом, gnezdo, knub — это виды TODO по тегам. Покупки —
-  тоже задачи».
-</p>
-<textarea id="workspace-note"></textarea>
-<h2>Почта: корзины</h2>
-<p class="hint">
-  По каким корзинам бот раскладывает письма в сводке. Одна строка — одна корзина:
-  <code>имя: что в неё класть</code>. Описание важнее имени — именно по нему бот решает.
-  Порядок строк — порядок разделов в сводке.
-</p>
-<textarea id="mail-buckets"></textarea>
-<h2>Цели</h2>
-<div id="targets"></div>
+
+<details open>
+  <summary>Что включено</summary>
+  <p class="hint">
+    Куда бот пишет ваши сообщения. Если выключить Notion, останется только Obsidian — бот
+    продолжит работать и вопросов задавать не будет.
+  </p>
+  <div id="switches">
+    <label><input type="checkbox" id="switch-notion"> Notion</label>
+    <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
+    <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
+    <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
+  </div>
+</details>
+
+<details>
+  <summary>Общее</summary>
+  <label class="field">Имя бота
+    <input type="text" id="tuning-bot_name" placeholder="Джеф,Джефф,Jeff">
+  </label>
+  <p class="hint">
+    Через запятую — все написания, которыми вы к нему обращаетесь. Имя в начале или в конце
+    сообщения бот убирает; в середине фразы это просто слово. Пусто — без имени.
+  </p>
+  <label class="field">Утренняя сводка, время
+    <input type="text" id="tuning-agenda_at" placeholder="09:00">
+  </label>
+  <p class="hint">Что просрочено, что сегодня и завтра. Несколько времён — через запятую.</p>
+</details>
+
+<details>
+  <summary>Notion</summary>
+  <div id="notice-inbox-locked" class="notice" hidden>
+    Инбокс задан переменной окружения <code>INBOX_TARGET_ID</code> в <code>.env</code> — выбор
+    ниже недоступен, пока она установлена.
+  </div>
+  <h3>Заметка о воркспейсе</h3>
+  <p class="hint">
+    Как устроен ваш Notion — своими словами. Бот получает её с каждым сообщением. Например:
+    «Все задачи — в базе TODO. Страницы дом, gnezdo, knub — это виды TODO по тегам».
+  </p>
+  <textarea id="workspace-note"></textarea>
+  <h3>Слова, по которым бот идёт искать в интернете</h3>
+  <p class="hint">
+    Поиск занимает минуты и стоит денег, поэтому он запускается только если в сообщении есть
+    одно из этих слов (достаточно начала слова). Через запятую.
+  </p>
+  <textarea id="tuning-web_words"></textarea>
+  <h3>Дополнение к промпту поиска</h3>
+  <p class="hint">
+    Добавляется к инструкции исследователя — не заменяет её. Например: «всегда указывай цены в
+    евро», «для рецептов сначала список покупок».
+  </p>
+  <textarea id="tuning-research_note"></textarea>
+  <h3>Цели</h3>
+  <div id="empty-state" class="empty" hidden>
+    Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
+    Запустите бота и обновите эту страницу.
+  </div>
+  <div id="targets"></div>
+</details>
+
+<details>
+  <summary>Obsidian</summary>
+  <p class="hint" id="vault-note"></p>
+  <p class="hint">
+    Правила раскладки бот читает в самом хранилище — заметка <code>_bot.md</code>, её удобно
+    править прямо в Obsidian, в том числе с телефона.
+  </p>
+  <label class="field">Тэг обратного отсчёта
+    <input type="text" id="tuning-countdown_tag" placeholder="отсчёт">
+  </label>
+  <p class="hint">Им бот помечает задачи, до срока которых считает дни.</p>
+  <label class="field">Свойства с датой
+    <input type="text" id="tuning-date_props" placeholder="date, дата, when, due, start">
+  </label>
+  <p class="hint">
+    Из каких свойств заметки брать дату события — встречи клуба, поездки, дни рождения.
+  </p>
+  <h3>Дополнение к промпту связей</h3>
+  <p class="hint">
+    Добавляется к инструкции, по которой бот расставляет ссылки между заметками. Например:
+    «не связывай заметки по общим словам вроде „проект“».
+  </p>
+  <textarea id="tuning-linker_note"></textarea>
+</details>
+
+<details>
+  <summary>Почта</summary>
+  <label class="field">Время сводок
+    <input type="text" id="tuning-mail_at" placeholder="12:00,19:00">
+  </label>
+  <p class="hint">Сводка охватывает всё, что пришло с прошлой.</p>
+  <h3>Корзины</h3>
+  <p class="hint">
+    По каким корзинам бот раскладывает письма. Одна строка — одна корзина:
+    <code>имя: что в неё класть</code>. Описание важнее имени — именно по нему бот решает.
+    Порядок строк — порядок разделов в сводке.
+  </p>
+  <textarea id="mail-buckets"></textarea>
+</details>
+
 <div id="save-bar">
   <button id="save-button" type="button">Сохранить</button>
   <span id="save-status"></span>
@@ -324,6 +395,15 @@ function load() {
       state.targets = data.targets || [];
       state.inboxLocked = !!data.inbox_locked;
       document.getElementById("workspace-note").value = data.workspace_note || "";
+      var tuning = data.tuning || {};
+      ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
+       "research_note", "linker_note"].forEach(function (name) {
+        var el = document.getElementById("tuning-" + name);
+        if (el) { el.value = tuning[name] || ""; }
+      });
+      document.getElementById("vault-note").textContent = data.obsidian_vault
+        ? "Хранилище: " + data.obsidian_vault
+        : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
       document.getElementById("mail-buckets").value =
         (data.mail_buckets || "").split(",").join(",
 ");
@@ -332,10 +412,23 @@ function load() {
         var el = document.getElementById("switch-" + name);
         el.checked = switches[name] !== false;
       });
-      document.getElementById("switches-note").textContent = data.obsidian_vault
+      var tuning = data.tuning || {};
+      ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
+       "research_note", "linker_note"].forEach(function (name) {
+        var el = document.getElementById("tuning-" + name);
+        if (el) { el.value = tuning[name] || ""; }
+      });
+      document.getElementById("vault-note").textContent = data.obsidian_vault
         ? "Хранилище: " + data.obsidian_vault
-        : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env, иначе сторона Obsidian "
-          + "выключена независимо от этой галочки.";
+        : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
+      document.getElementById("mail-buckets").value =
+        (data.mail_buckets || "").split(",").join(",
+");
+      var switches = data.switches || {};
+      ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
+        var el = document.getElementById("switch-" + name);
+        el.checked = switches[name] !== false;
+      });
       showLoadError("");
       showFetchedAt(data.fetched_at || null);
       render();
@@ -392,6 +485,12 @@ function collectBody() {
   return {
     targets: targets,
     workspace_note: document.getElementById("workspace-note").value,
+    tuning: ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
+             "research_note", "linker_note"].reduce(function (acc, name) {
+      var el = document.getElementById("tuning-" + name);
+      if (el) { acc[name] = el.value; }
+      return acc;
+    }, {}),
     mail_buckets: document.getElementById("mail-buckets").value
       .split("
 ").map(function (s) { return s.trim(); })

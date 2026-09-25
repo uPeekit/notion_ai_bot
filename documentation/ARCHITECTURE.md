@@ -520,6 +520,14 @@ it, so "Jeff, buy milk" is a shopping item; anywhere else in the sentence it is 
 and stays. The name alone answers `texts.CALLED`, and a short question about the bot answers
 `texts.ABOUT` — both without a model call and without writing anything.
 
+**Tuning** (`app/tuning.py`, `data/tuning.json`, edited on the admin page): the bot's name, the
+digest times, the words that may start a web search, the vault's countdown tag and date
+properties, and two "extra instructions" fields appended to the research and linker prompts.
+Every field falls back to `.env` and then to the code, is re-read when the file changes, and
+takes effect on the next message — no restart, no release. The system prompts themselves stay
+in code: they are long, interdependent and covered by tests, and the working pattern is a small
+structured text the prompt *reads* (the workspace note, `_bot.md`, the mail buckets).
+
 **Switches** (`app/switches.py`, `data/switches.json`, edited on the admin page): `notion`,
 `obsidian`, `linker`. `.env` says what they are until the file exists; the file then wins, and
 each is read per message, so a change needs no restart. With `notion` off the orchestrator goes

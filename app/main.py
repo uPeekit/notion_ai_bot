@@ -56,7 +56,7 @@ from app.commands.executor import Executor
 from app.config import Settings, load_settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
-from app.daily import DailyMessage, parse_at, parse_times
+from app.daily import DailyMessage, parse_times
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
@@ -65,6 +65,7 @@ from app.llm.fallback import FallbackLLM
 from app.llm.image_search import ImageSearch
 from app.llm.ollama import OllamaClient
 from app.llm.planner import Planner
+from app.llm.prompts import WEB_WORDS
 from app.llm.research import WebResearcher
 from app.llm.sections import SectionPicker
 from app.logging_setup import configure
@@ -82,6 +83,7 @@ from app.speech.base import SpeechToText
 from app.speech.whisper_local import WhisperLocal
 from app.switches import Switches
 from app.telegram.handlers import register
+from app.tuning import Defaults, Tuning
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
 from app.vault.filer import Filer
@@ -220,7 +222,8 @@ class App:
     fatal: tuple[int, str] | None = None
 
 
-def _vault_pipeline(settings: Settings, switches: Switches) -> VaultPipeline | None:
+def _vault_pipeline(settings: Settings, switches: Switches,
+                    tuning: Tuning) -> VaultPipeline | None:
     """The Obsidian side, when a vault is configured and Claude is reachable. It is built even
     when Notion is not: the two pipelines share nothing."""
     key = settings.anthropic_api_key.get_secret_value()
@@ -231,18 +234,18 @@ def _vault_pipeline(settings: Settings, switches: Switches) -> VaultPipeline | N
         log.warning("OBSIDIAN_VAULT is not a folder: %s — the Obsidian side stays off", root)
         return None
     index = VaultIndex(root)
-    writer = VaultWriter(index)
-    linker = Linker(index, writer, api_key=key, model=settings.linker_model)
+    writer = VaultWriter(index, tag_source=lambda: tuning.countdown_tag)
+    linker = Linker(index, writer, api_key=key, model=settings.linker_model,
+                    extra=lambda: tuning.linker_note)
     return VaultPipeline(index, writer, Filer(key, settings.filer_model), linker,
                          linking=lambda: switches.get("linker"))
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
-                  application: Callable[[], Application]) -> DailyMessage | None:
+                  tuning: Tuning, application: Callable[[], Application]) -> DailyMessage | None:
     """The morning agenda, if there is a vault to read it from and a time to send it at. It
     reads the Obsidian side only: the vault is where the dates live."""
-    at = parse_at(settings.daily_digest_at)
-    if vault is None or at is None or not settings.allowed_user_ids:
+    if vault is None or not settings.allowed_user_ids or not parse_times(tuning.agenda_at):
         return None
 
     async def send() -> None:
@@ -258,19 +261,18 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
             except Exception:  # one blocked chat must not stop the others
                 log.exception("could not send the daily digest to a chat")
 
-    return DailyMessage(send, at, settings.timezone)
+    return DailyMessage(send, lambda: parse_times(tuning.agenda_at), settings.timezone)
 
 
-def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets,
+def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, tuning: Tuning,
                  application: Callable[[], Application],
                  ) -> tuple[MailService | None, DailyMessage | None]:
     """Read-only mail triage: fetch what arrived since the last digest, sort it into the user's
     buckets, and send one message. Off unless both the address and the app password are set."""
     key = settings.anthropic_api_key.get_secret_value()
     password = settings.gmail_app_password.get_secret_value()
-    times = parse_times(settings.mail_digest_at)
-    if not (settings.gmail_address and password and key and times
-            and settings.allowed_user_ids):
+    if not (settings.gmail_address and password and key and settings.allowed_user_ids
+            and parse_times(tuning.mail_at)):
         return None, None
     buckets, meanings = buckets_file.parsed()
     service = MailService(
@@ -293,7 +295,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets,
             except Exception:
                 log.exception("could not send the mail digest to a chat")
 
-    return service, DailyMessage(send, times, settings.timezone)
+    return service, DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone)
 
 
 def build(
@@ -323,7 +325,7 @@ def build(
     researcher = (
         WebResearcher(settings.anthropic_api_key.get_secret_value(), settings.research_model,
                       max_searches=settings.research_max_searches, is_image=images.is_image,
-                      search=ImageSearch())
+                      search=ImageSearch(), extra=lambda: tuning.research_note)
         if uses_cloud(settings) else None
     )
     planner = (Planner(settings.anthropic_api_key.get_secret_value(), settings.plan_model)
@@ -344,19 +346,26 @@ def build(
         "notion": settings.notion_enabled, "obsidian": settings.obsidian_enabled,
         "linker": settings.linker_enabled,
     })
-    vault = _vault_pipeline(settings, switches)
+    tuning = Tuning(settings.db_path.with_name("tuning.json"), Defaults(
+        bot_name=settings.bot_name, agenda_at=settings.daily_digest_at,
+        mail_at=settings.mail_digest_at, web_words=WEB_WORDS,
+        countdown_tag=texts.VAULT_COUNTDOWN_TAG, date_props=texts.VAULT_DATE_PROPS,
+    ))
+    vault = _vault_pipeline(settings, switches, tuning)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,
-        switches=switches,
+        switches=switches, tuning=tuning,
     )
     speech = speech_factory(settings)
     buckets_file = Buckets(settings.db_path.with_name("mail_buckets.txt"),
                            settings.mail_buckets or texts.MAIL_BUCKETS_DEFAULT)
-    admin = AdminServer(settings, discovery, descriptions, note, switches, buckets_file)
+    admin = AdminServer(settings, discovery, descriptions, note, switches, buckets_file,
+                        tuning)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
-    daily = _daily_digest(settings, vault, switches, lambda: telegram_app)
-    mail, mail_digest = _mail_digest(settings, switches, buckets_file, lambda: telegram_app)
+    daily = _daily_digest(settings, vault, switches, tuning, lambda: telegram_app)
+    mail, mail_digest = _mail_digest(settings, switches, buckets_file, tuning,
+                                     lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()

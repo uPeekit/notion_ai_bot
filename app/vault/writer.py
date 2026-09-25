@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -86,10 +87,11 @@ def task_line(action: VaultAction, countdown_tag: str) -> str:
 
 class VaultWriter:
     def __init__(self, index: VaultIndex, *, countdown_tag: str = texts.VAULT_COUNTDOWN_TAG,
-                 now: callable = datetime.now) -> None:
+                 now: callable = datetime.now,
+                 tag_source: Callable[[], str] | None = None) -> None:
         self._index = index
         self._root = index.root
-        self._countdown = countdown_tag
+        self._tag_source = tag_source or (lambda: countdown_tag)
         self._now = now
 
     # ---- files -----------------------------------------------------------------------
@@ -158,7 +160,7 @@ class VaultWriter:
     def _task(self, action: VaultAction) -> VaultWrite:
         rel = f"{texts.VAULT_TASKS_NOTE}.md"
         previous = self._read(rel)
-        line = task_line(action, self._countdown)
+        line = task_line(action, self._tag_source())
         text = previous or ""
         if action.heading:
             updated = mdedit.append_to(text, [line], action.heading, create_heading=True)

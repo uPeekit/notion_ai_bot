@@ -67,6 +67,12 @@ class ResearchQuestion(Exception):
         self.question = question
 
 
+def _with_extra(prompt: str, extra: str) -> str:
+    """The user's extra instructions, appended to a system prompt. They add to it; they never
+    replace it, so the rules the code depends on still hold."""
+    return f"{prompt}\n\n{extra.strip()}" if extra.strip() else prompt
+
+
 def research_tools(model: str, max_uses: int) -> list[dict]:
     if model.startswith(_DYNAMIC_PREFIXES):
         search, fetch = "web_search_20260209", "web_fetch_20260209"
@@ -133,8 +139,11 @@ class WebResearcher:
         client: anthropic.AsyncAnthropic | None = None,
         is_image: Callable[[str], Awaitable[bool]] | None = None,
         search: ImageSearch | None = None,
+        extra: Callable[[], str] | None = None,
     ) -> None:
         self.model = model
+        # The user's own additions to the research prompt, from the admin page.
+        self._extra = extra or (lambda: "")
         self._tools = research_tools(model, max_searches)
         self._client = client or anthropic.AsyncAnthropic(
             # No retry: a search that ran long is slow, not broken, and trying again only
@@ -162,7 +171,8 @@ class WebResearcher:
 
     async def _research(self, request: str, query: str, media: str) -> str:
         want_text, want_images = media != "images", media != "text"
-        text_call = (self._run(RESEARCH_PROMPT, request, query) if want_text
+        text_call = (self._run(_with_extra(RESEARCH_PROMPT, self._extra()), request, query)
+                     if want_text
                      else asyncio.sleep(0, result=""))
         commons_call = (self._commons(request, query) if want_images
                         else asyncio.sleep(0, result=[]))

@@ -45,10 +45,17 @@ class DailyMessage:
     """Calls `send()` once a day at `at`, in `tz`. `send` decides whether there is anything
     worth sending; this class only decides when."""
 
-    def __init__(self, send: Callable[[], Awaitable[object]], at: time | tuple[time, ...],
+    def __init__(self, send: Callable[[], Awaitable[object]],
+                 at: time | tuple[time, ...] | Callable[[], tuple[time, ...]],
                  tz: str, *, now: Callable[[], datetime] | None = None) -> None:
         self._send = send
-        self._times = (at,) if isinstance(at, time) else tuple(sorted(at))
+        # A callable is re-read before every wait, so changing the times on the admin page
+        # takes effect without a restart.
+        if callable(at):
+            self._source = at
+        else:
+            fixed = (at,) if isinstance(at, time) else tuple(sorted(at))
+            self._source = lambda: fixed
         self._zone = ZoneInfo(tz)
         self._now = now or (lambda: datetime.now(self._zone))
         self._task: asyncio.Task | None = None
@@ -56,6 +63,10 @@ class DailyMessage:
     @property
     def running(self) -> bool:
         return self._task is not None
+
+    @property
+    def _times(self) -> tuple[time, ...]:
+        return tuple(sorted(self._source())) or (time(hour=9),)
 
     def next_run(self, after: datetime) -> datetime:
         """The next moment the message is due, strictly after `after` — the earliest of the

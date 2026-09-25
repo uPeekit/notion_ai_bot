@@ -85,6 +85,7 @@ from app.notion.discovery import Discovery
 from app.notion.errors import NotionError
 from app.notion.snapshot import Target, WorkspaceSnapshot
 from app.switches import Switches
+from app.tuning import Tuning
 from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
 from app.vault.pipeline import VaultPipeline, VaultTurn
@@ -161,11 +162,12 @@ def _fold(name: str) -> str:
     return " ".join(name.split()).casefold()
 
 
-def _asked_to_search(raw_text: str) -> bool:
+def _asked_to_search(raw_text: str, words: tuple[str, ...] = WEB_WORDS) -> bool:
     """Did the user actually ask for something to be looked up? A search is minutes of waiting
-    and a page rather than a line, so it takes a word of theirs to start one."""
+    and a page rather than a line, so it takes a word of theirs to start one. The words are
+    the user's own vocabulary, so they are editable on the admin page."""
     text = raw_text.lower()
-    return any(w in text for w in WEB_WORDS)
+    return any(w in text for w in words)
 
 
 def _has_something_to_write(candidate: Any) -> bool:
@@ -308,15 +310,17 @@ class Orchestrator:
         sessions: SessionStore, clock: Callable[[], datetime] = now_utc,
         researcher: WebResearcher | None = None, planner: Planner | None = None,
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
-        switches: Switches | None = None,
+        switches: Switches | None = None, tuning: Tuning | None = None,
     ) -> None:
         self._s = settings
         self._researcher = researcher
         self._planner = planner
         self._vault = vault
         self._switches = switches
+        self._tuning = tuning
         # The bot's own name, if it has one: recognised deterministically (app/address.py).
-        self._names = address.names(settings.bot_name)
+        # Read per message, so renaming it on the admin page needs no restart.
+        self._fallback_names = address.names(settings.bot_name)
         self._note = note or (lambda: "")
         self._discovery = discovery
         self._builder = builder
@@ -424,6 +428,15 @@ class Orchestrator:
         return Reply("")
 
     # ---- text pipeline -----------------------------------------------------------------------
+
+    @property
+    def _names(self) -> tuple[str, ...]:
+        return (address.names(self._tuning.bot_name) if self._tuning is not None
+                else self._fallback_names)
+
+    @property
+    def _web_words(self) -> tuple[str, ...]:
+        return self._tuning.web_words if self._tuning is not None else WEB_WORDS
 
     def _on(self, name: str) -> bool:
         return self._switches.get(name) if self._switches is not None else True
@@ -579,7 +592,7 @@ class Orchestrator:
         if (candidate is None or not candidate.web_query
                 or result.intent not in ("create", "append")):
             return decision, None
-        if not _asked_to_search(text) and _has_something_to_write(candidate):
+        if not _asked_to_search(text, self._web_words) and _has_something_to_write(candidate):
             # The model offers a search for "I want to watch the film X" as readily as for
             # "find a borsch recipe". The first costs minutes of waiting, a page instead of a
             # line in the list, and a few cents — for a title the user already gave. Whether a

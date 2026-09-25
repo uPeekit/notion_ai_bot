@@ -438,6 +438,28 @@ def test_mail_buckets_are_served_and_saved_without_a_release(settings, discovery
         s.stop()
 
 
+def test_tuning_is_served_and_saved(settings, discovery, descriptions, tmp_path):
+    """The settings that used to need a release, or at least a restart."""
+    from app.tuning import Defaults, Tuning
+
+    tuning = Tuning(tmp_path / "tuning.json", Defaults(
+        bot_name="", agenda_at="09:00", mail_at="12:00,19:00",
+        web_words=("найди",), countdown_tag="отсчёт", date_props=("date",)))
+    s = AdminServer(settings, discovery, descriptions, None, None, None, tuning)
+    s.start()
+    try:
+        served = json.loads(_get(s, "/api/targets")[1])["tuning"]
+        assert served["agenda_at"] == "09:00" and served["web_words"] == "найди"
+        status, body = _post(s, "/api/descriptions", {"targets": {}, "tuning": {
+            "bot_name": "Джеф", "agenda_at": "08:30", "web_words": "найди, погугли"}})
+        assert status == 200 and json.loads(body) == {"saved": 3}
+        assert tuning.bot_name == "Джеф" and tuning.agenda_at == "08:30"
+        assert tuning.web_words == ("найди", "погугли")
+        assert _post(s, "/api/descriptions", {"targets": {}, "tuning": "нет"})[0] == 400
+    finally:
+        s.stop()
+
+
 def test_workspace_note_is_served_and_saved(settings, discovery, descriptions, tmp_path):
     note = WorkspaceNote(tmp_path / "workspace_note.md")
     s = AdminServer(settings, discovery, descriptions, note)

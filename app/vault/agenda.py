@@ -115,11 +115,11 @@ def open_tasks(index: VaultIndex) -> list[Item]:
     return out
 
 
-def dated_notes(index: VaultIndex) -> list[Item]:
+def dated_notes(index: VaultIndex, props: tuple[str, ...] = DATE_PROPS) -> list[Item]:
     """Notes that carry a date property: meetings, trips, anything with a day of its own."""
     out: list[Item] = []
     for note in index.notes:
-        for prop in DATE_PROPS:
+        for prop in props:
             when = _as_date(note.props.get(prop))
             if when is not None:
                 out.append(Item(text=note.name, path=note.path, due=when, kind="note"))
@@ -132,7 +132,7 @@ def _sorted(items: list[Item]) -> list[Item]:
                                         i.text.casefold()))
 
 
-def build(index: VaultIndex, today: date) -> Agenda:
+def build(index: VaultIndex, today: date, props: tuple[str, ...] = DATE_PROPS) -> Agenda:
     """Overdue, today and tomorrow — the shape of the morning message."""
     tomorrow = today + timedelta(days=1)
     tasks = open_tasks(index)
@@ -140,16 +140,17 @@ def build(index: VaultIndex, today: date) -> Agenda:
         overdue=_sorted([t for t in tasks if t.due and t.due < today])[:MAX_PER_SECTION],
         today=_sorted([t for t in tasks if t.due == today])[:MAX_PER_SECTION],
         tomorrow=_sorted([t for t in tasks if t.due == tomorrow])[:MAX_PER_SECTION],
-        events=_sorted([n for n in dated_notes(index)
+        events=_sorted([n for n in dated_notes(index, props)
                         if today <= (n.due or date.max) <= tomorrow])[:MAX_PER_SECTION],
     )
     return agenda
 
 
-def on_day(index: VaultIndex, start: date, end: date | None = None) -> list[Item]:
+def on_day(index: VaultIndex, start: date, end: date | None = None,
+           props: tuple[str, ...] = DATE_PROPS) -> list[Item]:
     """Everything dated inside a range: one day, a week, whatever the question named."""
     end = end or start
-    both = open_tasks(index) + dated_notes(index)
+    both = open_tasks(index) + dated_notes(index, props)
     return _sorted([i for i in both if i.due and start <= i.due <= end])
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 
 import anthropic
 
@@ -102,10 +103,11 @@ def obvious_links(body: str, index: VaultIndex, *, exclude: str = "") -> list[tu
 class Linker:
     def __init__(self, index: VaultIndex, writer: VaultWriter, *, api_key: str = "",
                  model: str = "", client: anthropic.AsyncAnthropic | None = None,
-                 timeout_s: float = 30.0) -> None:
+                 timeout_s: float = 30.0, extra: Callable[[], str] | None = None) -> None:
         self._index = index
         self._writer = writer
         self.model = model
+        self._extra = extra or (lambda: "")  # the user's additions, from the admin page
         self._client = client
         if client is None and api_key and model:
             self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s,
@@ -161,10 +163,12 @@ class Linker:
         if not candidates:
             return []
         from app.llm.prompts import LINKER_PROMPT, linker_message
+        from app.llm.research import _with_extra
 
         try:
             resp = await self._client.messages.create(
-                model=self.model, max_tokens=MAX_TOKENS, system=LINKER_PROMPT,
+                model=self.model, max_tokens=MAX_TOKENS,
+                system=_with_extra(LINKER_PROMPT, self._extra()),
                 messages=[{"role": "user", "content": linker_message(
                     body[:MAX_TEXT], candidates, already)}],
                 output_config={"format": {"type": "json_schema", "schema": LINK_SCHEMA}},
