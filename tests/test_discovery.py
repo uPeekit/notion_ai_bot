@@ -106,7 +106,7 @@ async def test_pages_discovered_with_children(disco):
     assert ideas.path == "Дом / Идеи"
     assert ideas.parent_page_id == "home"
     assert [i.title for i in ideas.items] == ["Отпуск"]
-    assert ideas.operations == frozenset({"create_page", "append", "search"})
+    assert ideas.operations == frozenset({"create_page", "append", "rewrite", "search"})
     assert snap.target("row1") is None  # rows are not page targets
     assert snap.target("home").path == "Дом"
 

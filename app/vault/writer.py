@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict
 
 from app import texts
-from app.vault import mdedit
+from app.vault import frontmatter, mdedit
 from app.vault.frontmatter import render
 from app.vault.index import VaultIndex
 from app.vault.names import safe_name, unique
@@ -31,7 +31,7 @@ class VaultAction(BaseModel):
     index before they reach the writer (app/vault/filer.py)."""
 
     model_config = ConfigDict(extra="forbid")
-    action: str  # task | note | append | update | log | inbox
+    action: str  # task | note | append | update | rewrite | log | inbox
     text: str = ""  # the task's, log line's or inbox line's words
     note: str = ""  # which note to add to or change
     folder: str = ""
@@ -151,7 +151,8 @@ class VaultWriter:
     def run(self, action: VaultAction) -> VaultWrite:
         handler = {
             "task": self._task, "note": self._note, "append": self._append,
-            "update": self._update, "log": self._log, "inbox": self._inbox,
+            "update": self._update, "rewrite": self._rewrite, "log": self._log,
+            "inbox": self._inbox,
         }.get(action.action)
         if handler is None:
             return self._inbox(action)
@@ -217,6 +218,38 @@ class VaultWriter:
             return self._inbox(action)
         undo = self._write(note.path, text, previous)
         return VaultWrite(kind="update", path=note.path, note=note.name, undo=undo)
+
+    def _rewrite(self, action: VaultAction) -> VaultWrite:
+        """Replace a note's text (or one section of it) with text already written by the
+        rewriter — the pipeline makes that call, because it is the only part of the vault
+        side that has to read a note before it can write it.
+
+        The old version also goes to `.trash`, where it outlives the undo window: this is
+        the one write that can lose something the user spent an evening on."""
+        note = self._index.by_name(action.note)
+        if note is None or not action.body:
+            return self._inbox(action)
+        previous = self._read(note.path) or ""
+        if action.heading:
+            text = mdedit.replace_section(previous, action.heading, action.body)
+            if text is None:  # the heading is gone: better to write nothing than all of it
+                return self._inbox(action)
+        else:
+            props, _ = frontmatter.split(previous)
+            text = frontmatter.render(props, "\n".join(action.body))
+        self._to_trash(note.path, previous)
+        undo = self._write(note.path, text, previous)
+        return VaultWrite(kind="rewrite", path=note.path, note=note.name, undo=undo)
+
+    def _to_trash(self, rel: str, text: str) -> None:
+        """A copy of what a note said before, kept whatever happens to the undo record."""
+        if not text.strip():
+            return
+        stamp = self._now().strftime("%Y-%m-%d %H%M%S")
+        name = PurePosixPath(rel).stem
+        path = self._unused(self._path(f"{TRASH_DIR}/{name} ({stamp}).md"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
 
     def _log(self, action: VaultAction) -> VaultWrite:
         day = self._now().strftime("%Y-%m-%d")

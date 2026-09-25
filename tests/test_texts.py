@@ -24,6 +24,7 @@ ALL_KWARGS = dict(
     target_name="Покупки", item_title="Молоко", url="https://notion.so/x",
     field_name="Приоритет", value="A", intent="create", item_text="кефир",
     message="value_invalid", minutes=5, reason="Не понял.", question="Какой элемент?",
+    error="claude 400",
 )
 
 
@@ -55,6 +56,8 @@ ERROR_PLACEHOLDERS: dict[str, set[str]] = {
     "WEB_TIMEOUT": {"minutes"}, "PLAN_UNAVAILABLE": set(),
     "PLAN_FAILED": set(), "STEP_WRONG_TARGET": {"target_name"},
     "NOTHING_ENABLED": set(),
+    "REWRITE_EMPTY": {"target_name"}, "REWRITE_UNAVAILABLE": set(),
+    "REWRITE_FAILED": {"error"},
 }
 
 

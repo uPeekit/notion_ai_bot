@@ -207,3 +207,56 @@ def _notion_page_id(href: str) -> str | None:
         return None
     raw = raw.lower()
     return f"{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}"
+
+
+# ---- reading a page so it can be rewritten -----------------------------------------------
+
+# Block types that are nothing but text, and so may be replaced when the user asks for a page
+# to be rewritten. Everything else — an image, a file, a sub-page, an embedded database, a
+# table, a column layout — is left exactly where it is, whatever the instruction says. This is
+# a rule in the code and not a line in a prompt on purpose: a model that misreads a request to
+# rewrite a page must not be able to delete someone's photographs.
+REWRITABLE = frozenset({
+    "paragraph", "heading_1", "heading_2", "heading_3",
+    "bulleted_list_item", "numbered_list_item", "to_do", "quote", "code", "divider",
+})
+HEADING_TYPES = ("heading_1", "heading_2", "heading_3")
+
+
+def is_rewritable(block: dict) -> bool:
+    """A block with children is kept whatever its own type is: the children were never read,
+    so there is no way to know that none of them is a picture."""
+    return block.get("type") in REWRITABLE and not block.get("has_children")
+
+
+def heading_text(block: dict) -> str:
+    kind = block.get("type", "")
+    if kind not in HEADING_TYPES:
+        return ""
+    return _plain(block.get(kind, {}).get("rich_text", []))
+
+
+def section_of(blocks: list[dict], heading: str) -> tuple[int, int] | None:
+    """Where the named section starts and ends: the heading itself and everything under it,
+    down to the next heading of the same level or higher. None when no heading matches."""
+    wanted = heading.strip().casefold()
+    if not wanted:
+        return None
+    for i, block in enumerate(blocks):
+        title = heading_text(block)
+        if not title or title.strip().casefold() != wanted:
+            continue
+        level = int(block["type"][-1])
+        for j in range(i + 1, len(blocks)):
+            kind = blocks[j].get("type", "")
+            if kind in HEADING_TYPES and int(kind[-1]) <= level:
+                return i, j
+        return i, len(blocks)
+    return None
+
+
+def page_markdown(blocks: list[dict]) -> str:
+    """A page's blocks as plain markdown, for a model to read. Page links become their own
+    text rather than [[wiki links]]: nothing here is going into a vault."""
+    return Renderer(page_note=lambda _id: None,
+                    file_name=lambda url, _kind: url).render(blocks)

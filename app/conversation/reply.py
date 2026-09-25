@@ -13,12 +13,15 @@ from typing import Any
 
 from app import texts
 from app.commands.executor import ExecutionResult, Written
-from app.commands.models import AppendBlocks, CreateItem, CreatePage, UpdateItem
+from app.commands.models import AppendBlocks, CreateItem, CreatePage, RewritePage, UpdateItem
 from app.notion.snapshot import Option
 from app.validation.policy import QType, Question
 from app.validation.semantic import DateRange
 
 SEARCH_LIMIT = 20
+# A rewrite that leaves less than this fraction of the text is still carried out ("make it
+# three lines" is a real request), but the reply says so: that is exactly when Undo matters.
+SHRANK_TO = 0.2
 
 # Type-specific extra buttons, appended to the trailing row before BTN_CANCEL/BTN_INBOX. Empty
 # for question types the user answers with free text (field_required without options,
@@ -163,10 +166,39 @@ def format_execution(result: ExecutionResult, *, target_url: str | None) -> str:
     elif isinstance(cmd, AppendBlocks):
         header = texts.DONE_APPEND.format(target_name=cmd.target_name, item_title=cmd.page_title)
         bullets = []
+    elif isinstance(cmd, RewritePage):
+        return _rewritten(cmd, result, target_url)
     else:
         raise TypeError(f"format_execution does not support {type(cmd).__name__}")
 
     lines = [header] + [f"• {w.name}: {_value_label(w.value)}" for w in bullets]
+    url = result.url or target_url
+    if url:
+        lines.append(texts.DONE_LINK.format(url=url))
+    return "\n".join(lines)
+
+
+def _rewritten(cmd: RewritePage, result: ExecutionResult, target_url: str | None) -> str:
+    """A rewrite answers with what it did to the text, not with the text.
+
+    The size change is the part the user cannot see from a preview and the part that
+    decides whether they press Undo, so it is always there; the blocks left alone are named
+    because a page that keeps its pictures looks, at a glance, like a page that was only
+    half rewritten."""
+    lines = [texts.DONE_REWRITE.format(target_name=cmd.target_name,
+                                       item_title=cmd.page_title),
+             texts.REWRITE_SIZE.format(before=result.before_lines,
+                                       after=result.after_lines)]
+    if result.kept_blocks:
+        lines.append(texts.REWRITE_KEPT.format(n=result.kept_blocks))
+    if result.before_lines and result.after_lines < result.before_lines * SHRANK_TO:
+        lines.append(texts.REWRITE_SHRANK.format(undo=texts.BTN_UNDO))
+    preview = [x for x in result.preview.splitlines() if x.strip()]
+    if preview:
+        lines.append("")
+        lines += preview[:texts.REWRITE_PREVIEW_LINES]
+        if len(preview) > texts.REWRITE_PREVIEW_LINES:
+            lines.append(texts.REWRITE_PREVIEW_MORE)
     url = result.url or target_url
     if url:
         lines.append(texts.DONE_LINK.format(url=url))

@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from app import texts
+from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
+from app.vault import mdedit
 from app.vault.filer import Filer, FilerError, check, context
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -95,11 +97,13 @@ class VaultTurn:
 class VaultPipeline:
     def __init__(self, index: VaultIndex, writer: VaultWriter, filer: Filer,
                  linker: Linker | None = None, *, now=datetime.now,
-                 linking: Callable[[], bool] = lambda: True) -> None:
+                 linking: Callable[[], bool] = lambda: True,
+                 rewriter: Rewriter | None = None) -> None:
         self._index = index
         self._writer = writer
         self._filer = filer
         self._linker = linker
+        self._rewriter = rewriter
         self._now = now
         self._linking = linking
         self._tasks: set[asyncio.Task] = set()  # linking, running behind the reply
@@ -110,6 +114,8 @@ class VaultPipeline:
         await self._filer.aclose()
         if self._linker is not None:
             await self._linker.aclose()
+        if self._rewriter is not None:
+            await self._rewriter.aclose()
 
     async def handle(self, message: str) -> VaultTurn:
         """Read the message, write the vault, and start the linking behind the reply."""
@@ -131,6 +137,12 @@ class VaultPipeline:
         dated = [a for a in actions if a.action == "agenda"]
         questions = [a for a in actions if a.action == "search"]
         actions = [a for a in actions if a.action not in ("search", "agenda")]
+        # A rewrite is the one action the filer cannot finish on its own: it needs the
+        # note's current text, which the filer never saw. Each one becomes an action
+        # carrying the finished text, or is dropped with a line in the reply.
+        prepared = [await self._rewritten(a, turn) if a.action == "rewrite" else a
+                    for a in actions]
+        actions = [a for a in prepared if a is not None]
         for question in dated:
             answer = await asyncio.to_thread(self._agenda_answer, question)
             turn.answer = f"{turn.answer}\n{answer}".strip() if turn.answer else answer
@@ -150,6 +162,43 @@ class VaultPipeline:
                             *([f"search:{len(turn.hits)} hits"] if turn.asked else [])]) or "-")
         self._link_later(turn.writes)
         return turn
+
+    async def _rewritten(self, action: VaultAction, turn: VaultTurn) -> VaultAction | None:
+        """The same action with `body` filled in by the rewriter, or None when there is
+        nothing to rewrite and saying so beats writing something. A heading that is no
+        longer in the note widens the rewrite to the whole of it rather than failing: the
+        user asked for the note to change, and the section was only how they pointed."""
+        note = self._index.by_name(action.note)
+        if note is None:
+            return None
+        if self._rewriter is None:
+            turn.error = turn.error or texts.VAULT_REWRITE_OFF
+            return None
+        try:
+            text = await asyncio.to_thread(self._index.read, note.path)
+        except OSError as e:
+            log.warning("could not read %s to rewrite it: %s", note.path, e)
+            return None
+        current, heading = text, action.heading
+        if heading:
+            lines = text.split(chr(10))
+            section = mdedit.find_section(lines, heading)
+            if section is None:
+                heading = ''
+            else:
+                current = chr(10).join(lines[section.start:section.end])
+        try:
+            new_text, prompt_tokens, output_tokens = await self._rewriter.rewrite(
+                current, action.text)
+        except RewriteError as e:
+            log.warning("rewrite of %s failed: %s", note.name, e)
+            turn.error = turn.error or str(e)
+            turn.reason = turn.reason or e.reason
+            return None
+        turn.prompt_tokens += prompt_tokens
+        turn.output_tokens += output_tokens
+        return action.model_copy(update={"heading": heading,
+                                         "body": new_text.splitlines()})
 
     def _agenda_answer(self, action: VaultAction) -> str:
         """A question about dates, answered from the vault: a day, a range, or "what now"."""

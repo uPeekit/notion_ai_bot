@@ -57,6 +57,18 @@ class AppendBlocks(Strict):
     request: str = ""
 
 
+class RewritePage(Strict):
+    """Replace the text of a page with a rewritten version of itself. `instruction` is the
+    user's own words about what to change; the page's current text is read at execution
+    time, because the interpreter never sees it."""
+
+    action: Literal["rewrite_page"] = "rewrite_page"
+    page_id: str
+    target_name: str
+    page_title: str
+    instruction: str
+
+
 class Search(Strict):
     action: Literal["search"] = "search"
     data_source_id: str | None
@@ -66,4 +78,4 @@ class Search(Strict):
     filters: list[PropertyWrite] = []
 
 
-Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | Search
+Command = CreateItem | UpdateItem | CreatePage | AppendBlocks | RewritePage | Search

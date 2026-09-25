@@ -68,6 +68,7 @@ INTENT_LABELS: dict[str, str] = {
     "create": "добавить запись",
     "update": "изменить запись",
     "append": "дописать текст",
+    "rewrite": "переписать текст",
     "search": "найти",
     "plan": "выполнить несколько действий",
 }
@@ -84,6 +85,16 @@ ALREADY_THERE = "↩️ Notion — уже есть в «{target_name}»: {item_t
 DONE_UPDATE = "✅ Notion — обновлено в «{target_name}»: {item_title}"
 DONE_CREATE_PAGE = "✅ Notion — создано в «{target_name}»: {item_title}"
 DONE_APPEND = "✅ Notion — дописано в «{target_name}»: {item_title}"
+DONE_REWRITE = "✅ Notion — переписано в «{target_name}»: {item_title}"
+# What a rewrite actually did, in numbers: the one thing the user cannot see from the
+# preview, and the thing that tells them whether to press Undo.
+REWRITE_SIZE = "Было {before} строк → стало {after}"
+REWRITE_KEPT = "Не трогал (не текст): {n}"
+# Said when the text shrank by more than four fifths: allowed, but worth noticing.
+REWRITE_SHRANK = "⚠️ Текста стало сильно меньше — если это не то, нажмите «{undo}»."
+# The first lines of the new text, so the user sees what happened without opening Notion.
+REWRITE_PREVIEW_LINES = 6
+REWRITE_PREVIEW_MORE = "…"
 DONE_LINK = "Открыть: {url}"
 
 # ---- multi-step plans -------------------------------------------------------------------------
@@ -142,6 +153,11 @@ INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."
 # arrive without a candidate; their placeholder comes from Issue.detail. test_texts.py pins the
 # placeholder set of every code against that.
 ERRORS: dict[str, str] = {
+    # A rewrite of a page that has no text on it at all (only pictures, only sub-pages).
+    "REWRITE_EMPTY": "На «{target_name}» нет текста, который можно переписать — картинки, "
+                      "файлы и подстраницы я не трогаю.",
+    "REWRITE_UNAVAILABLE": "Переписать текст сейчас не могу: для этого нужен Claude.",
+    "REWRITE_FAILED": "Не удалось переписать текст ({error}). Ничего не изменил.",
     # Both stores are switched off on the admin page: there is nowhere to write.
     "NOTHING_ENABLED": "Обе стороны выключены — включите Notion или Obsidian на странице "
                         "настроек.",
@@ -320,11 +336,15 @@ SEARCH_STOP_WORDS = frozenset({
 # One line per write, appended to the reply: what the Obsidian side did.
 VAULT_REPLY = "✅ Obsidian — {what}"
 VAULT_FAILED = "⚠️ Obsidian — не записано: {error}"
+# Said in place of the Obsidian line when a rewrite was asked for and there is no model to
+# do it with.
+VAULT_REWRITE_OFF = "некому переписать — нужен Claude"
 VAULT_WHAT = {
     "task": "задача в «{note}»",
     "note": "заметка «{note}»",
     "append": "дописано в «{note}»",
     "update": "обновлено «{note}»",
+    "rewrite": "переписано «{note}»",
     "log": "запись в дневнике «{note}»",
     "inbox": "в «{note}» — не понял, куда это",
 }

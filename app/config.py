@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # wrong; Sonnet listed 15, all right.
     plan_model: str = "claude-sonnet-5"
 
+    # Rewriting text the user already wrote (a page consolidated into one plan, a note
+    # trimmed). Sonnet: this is their own writing, and Haiku loses facts while shortening.
+    rewrite_model: str = "claude-sonnet-5"
+
     # What to call the bot. Several spellings separated by commas ("Jeff,Jeph,Geoff"): the
     # name is taken off the front or the back of a message before anything reads it, so
     # "Jeff, buy milk" is a shopping item and not a note about someone called Jeff.

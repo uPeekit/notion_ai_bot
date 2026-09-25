@@ -15,7 +15,7 @@ WRITABLE_TYPES: frozenset[str] = frozenset(
 )
 
 DB_OPERATIONS: frozenset[str] = frozenset({"create", "update", "search"})
-PAGE_OPERATIONS: frozenset[str] = frozenset({"create_page", "append", "search"})
+PAGE_OPERATIONS: frozenset[str] = frozenset({"create_page", "append", "rewrite", "search"})
 
 
 @dataclass(frozen=True)

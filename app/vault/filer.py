@@ -25,7 +25,8 @@ from app.vault.writer import VaultAction
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("task", "note", "append", "update", "log", "search", "agenda", "inbox")
+ACTIONS = ("task", "note", "append", "update", "rewrite", "log", "search", "agenda",
+           "inbox")
 MAX_ACTIONS = 10
 MAX_TOKENS = 4000
 MAX_BODY_LINES = 200
@@ -160,7 +161,8 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
             action.scope = ""
         if action.repeat and not action.repeat.lower().startswith("every"):
             action.repeat = ""
-        if action.action in ("append", "update") and index.by_name(action.note) is None:
+        if (action.action in ("append", "update", "rewrite")
+                and index.by_name(action.note) is None):
             action = VaultAction(action="inbox",
                                  text=action.text or " ".join(action.body) or message)
         if action.action == "note":
@@ -169,6 +171,9 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
             if not (action.title or action.text).strip():
                 continue
         if action.action in ("task", "log", "inbox") and not action.text.strip():
+            continue
+        # A rewrite with no instruction is a note emptied for no stated reason.
+        if action.action == "rewrite" and not action.text.strip():
             continue
         if action.action == "agenda" and not (action.scope or action.due_from or action.due_to):
             action.scope = "now"

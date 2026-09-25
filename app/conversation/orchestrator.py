@@ -51,7 +51,7 @@ from pydantic import ValidationError
 from app import address, texts
 from app.audit.store import AuditStore
 from app.commands.builder import build_command
-from app.commands.executor import ExecutionResult, Executor, UndoRecord
+from app.commands.executor import ExecutionResult, Executor, Refused, UndoRecord
 from app.commands.models import Command, CreateItem, CreatePage, Search
 from app.config import Settings
 from app.conversation.inbox import inbox_command, inbox_target
@@ -568,6 +568,12 @@ class Orchestrator:
         turn.audit(command=command.model_dump_json())
         try:
             executed = await self._executor.run(command)
+        except Refused as e:
+            # The command was understood and refused for a reason worth saying: an empty page,
+            # no rewriter, a model that gave nothing back. Nothing was written, and filing the
+            # message in the inbox would only add litter — the user is told and that is all.
+            log.info("refused: %s", e.code)
+            return self._plain(turn, e.code, **e.fmt)
         except NotionError as e:
             log.warning("execute failed: %s", e)
             code = "NOTION_4XX" if 400 <= e.status < 500 else "NOTION_5XX"

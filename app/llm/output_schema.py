@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.interpretation.models import WEB_MEDIA
 from app.llm.context import Context
 
-INTENTS = ["create", "update", "append", "search", "unknown"]
+INTENTS = ["create", "update", "append", "rewrite", "search", "unknown"]
 STRING = {"type": "string"}
 NUMBER = {"type": "number"}
 CONFIDENCE = {"type": "number", "minimum": 0, "maximum": 1}

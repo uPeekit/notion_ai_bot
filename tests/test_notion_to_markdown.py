@@ -1,11 +1,11 @@
-"""Notion blocks → Obsidian markdown (app/vault/notion_blocks.py), plus the name and
+"""Notion blocks → Obsidian markdown (app/notion/to_markdown.py), plus the name and
 frontmatter helpers it is used with."""
 
 from __future__ import annotations
 
+from app.notion.to_markdown import CHILDREN, Renderer
 from app.vault import frontmatter
 from app.vault.names import safe_name, unique
-from app.vault.notion_blocks import CHILDREN, Renderer
 
 
 def rt(text: str, **annotations) -> dict:

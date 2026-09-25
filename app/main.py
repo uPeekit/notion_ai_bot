@@ -68,6 +68,7 @@ from app.llm.ollama import OllamaClient
 from app.llm.planner import Planner
 from app.llm.prompts import WEB_WORDS
 from app.llm.research import WebResearcher
+from app.llm.rewrite import Rewriter
 from app.llm.sections import SectionPicker
 from app.logging_setup import configure
 from app.mail.buckets import Buckets
@@ -224,7 +225,8 @@ class App:
 
 
 def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
-                    health: Health) -> VaultPipeline | None:
+                    health: Health,
+                    rewriter: Rewriter | None = None) -> VaultPipeline | None:
     """The Obsidian side, when a vault is configured and Claude is reachable. It is built even
     when Notion is not: the two pipelines share nothing."""
     key = settings.anthropic_api_key.get_secret_value()
@@ -239,7 +241,7 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
     linker = Linker(index, writer, api_key=key, model=settings.linker_model,
                     extra=lambda: tuning.linker_note, health=health)
     return VaultPipeline(index, writer, Filer(key, settings.filer_model, health=health),
-                         linker, linking=lambda: switches.get("linker"))
+                         linker, linking=lambda: switches.get("linker"), rewriter=rewriter)
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
@@ -353,7 +355,12 @@ def build(
     sections = (SectionPicker(settings.anthropic_api_key.get_secret_value(),
                               settings.claude_model, health=health)
                 if uses_cloud(settings) else None)
-    executor = Executor(provider, images=images, sections=sections)
+    # Rewriting a page is the one job where a cheaper model is obviously worse: it is the
+    # user's own writing being consolidated, so it gets the research model (Sonnet).
+    rewriter = (Rewriter(settings.anthropic_api_key.get_secret_value(), settings.rewrite_model,
+                         health=health)
+                if uses_cloud(settings) else None)
+    executor = Executor(provider, images=images, sections=sections, rewriter=rewriter)
     switches = Switches(settings.db_path.with_name("switches.json"), {
         "notion": settings.notion_enabled, "obsidian": settings.obsidian_enabled,
         "linker": settings.linker_enabled,
@@ -363,7 +370,7 @@ def build(
         mail_at=settings.mail_digest_at, web_words=WEB_WORDS,
         countdown_tag=texts.VAULT_COUNTDOWN_TAG, date_props=texts.VAULT_DATE_PROPS,
     ))
-    vault = _vault_pipeline(settings, switches, tuning, health)
+    vault = _vault_pipeline(settings, switches, tuning, health, rewriter)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,

@@ -33,9 +33,9 @@ import yaml
 from app import texts
 from app.notion import props as notion_props
 from app.notion.provider import NotionProvider
+from app.notion.to_markdown import CHILDREN, Renderer
 from app.vault.frontmatter import render
 from app.vault.names import safe_name, unique
-from app.vault.notion_blocks import CHILDREN, Renderer
 
 log = logging.getLogger(__name__)
 

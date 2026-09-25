@@ -17,8 +17,10 @@ Risk = Literal["LOW", "MEDIUM"]
 QType = Literal["target", "intent_confirm", "item", "item_not_found", "field_required",
                 "field_ambiguous", "field_confirm", "date", "content_required",
                 "nothing_to_write", "clarify"]
+# A rewrite replaces text the user wrote themselves, which is the one write that cannot
+# be shrugged off if it goes wrong: it asks before it runs when it is not sure.
 RISK_BY_INTENT: dict[str, Risk] = {"create": "LOW", "append": "LOW", "search": "LOW",
-                                   "update": "MEDIUM"}
+                                   "update": "MEDIUM", "rewrite": "MEDIUM"}
 _ORDER: dict[str, int] = {t: i for i, t in enumerate(
     ["clarify", "target", "intent_confirm", "item", "item_not_found", "field_required",
      "field_ambiguous", "date", "field_confirm", "content_required", "nothing_to_write"])}
@@ -155,7 +157,7 @@ class Policy:
                        for f in best.fields.values()):
                 q = Question(type="nothing_to_write", target_key=best.key)
                 return Decision("REJECT", best, [q], ["nothing to write"], risk)
-        if r.intent == "append" and best.item is None and best.item_candidates:
+        if r.intent in ("append", "rewrite") and best.item is None and best.item_candidates:
             qs.append(Question(
                 type="item", target_key=best.key,
                 options=[QOption(key=self._item_key(best, i), label=i.title)
@@ -184,6 +186,9 @@ class Policy:
         # A web query brings its own content: the research result is what gets appended.
         if r.intent == "append" and not best.content and not best.web_query:
             qs.append(Question(type="content_required", target_key=best.key))
+        # A rewrite without an instruction is a page emptied for no stated reason.
+        if r.intent == "rewrite" and not best.content:
+            qs.append(Question(type="nothing_to_write", target_key=best.key))
 
         if qs:
             qs.sort(key=lambda q: _ORDER[q.type])

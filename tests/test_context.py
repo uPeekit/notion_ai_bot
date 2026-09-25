@@ -46,7 +46,7 @@ def test_empty_option_field_dropped_and_relation_options_present():
 def test_page_targets_get_synthetic_title_and_children():
     ctx = build()
     ideas = ctx.payload["targets"][4]
-    assert ideas["kind"] == "page" and ideas["ops"] == ["append", "create", "search"]
+    assert ideas["kind"] == "page" and ideas["ops"] == ["append", "create", "rewrite", "search"]
     assert ideas["fields"] == [{
         "key": "t5.f1", "name": "Заголовок", "type": "title", "required": True,
         "description": "Название новой подстраницы",

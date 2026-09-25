@@ -12,7 +12,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from app.commands.models import AppendBlocks, Command, CreateItem, CreatePage, Search, UpdateItem
+from app.commands.models import (
+    AppendBlocks,
+    Command,
+    CreateItem,
+    CreatePage,
+    RewritePage,
+    Search,
+    UpdateItem,
+)
+from app.llm.rewrite import RewriteError, Rewriter
 from app.llm.sections import SectionPicker
 from app.notion import props, titles
 from app.notion.errors import NotionError
@@ -27,6 +36,7 @@ from app.notion.mapper import (
 )
 from app.notion.markdown import rich_text
 from app.notion.provider import NotionProvider
+from app.notion.to_markdown import is_rewritable, page_markdown
 from app.vault.writer import VaultUndo
 
 log = logging.getLogger(__name__)
@@ -113,11 +123,14 @@ class SearchHit:
 class UndoRecord(BaseModel):
     # "vault" is a turn that wrote only to the Obsidian vault: there is nothing for the Notion
     # executor to undo, and `vault` below holds the files to put back.
-    kind: Literal["archive", "restore", "delete_blocks", "batch", "vault"]
+    kind: Literal["archive", "restore", "delete_blocks", "rewrite", "batch", "vault"]
     page_id: str | None = None
     properties: dict | None = None
     block_ids: list[str] = []
     partial: bool = False
+    # kind "rewrite": the page's text before it was rewritten, as markdown lines. Undo
+    # deletes `block_ids` and appends these again.
+    markdown: list[str] = []
     # kind "batch": every write of a multi-step plan, undone newest first ("undo all").
     batch: list[UndoRecord] = []
     # Files the Obsidian side wrote in the same turn (app/vault/writer.py). The Notion executor
@@ -137,14 +150,32 @@ class ExecutionResult:
     # The row was already in the table, so nothing was written and there is nothing to undo;
     # page_id and url point at the row that is already there.
     existing: bool = False
+    # A rewrite's receipt: how big the text was, how big it is now, how many blocks were
+    # left alone because they are not text, and the new text itself for the preview.
+    before_lines: int = 0
+    after_lines: int = 0
+    kept_blocks: int = 0
+    preview: str = ""
+
+
+class Refused(ValueError):
+    """The command cannot be carried out as asked, for a reason the user should be told in
+    plain words. `code` is a key of texts.ERRORS and `fmt` fills its placeholders."""
+
+    def __init__(self, code: str, **fmt: Any) -> None:
+        super().__init__(code)
+        self.code = code
+        self.fmt = fmt
 
 
 class Executor:
     def __init__(self, provider: NotionProvider, images: ImageHost | None = None,
-                 sections: SectionPicker | None = None) -> None:
+                 sections: SectionPicker | None = None,
+                 rewriter: Rewriter | None = None) -> None:
         self._p = provider
         self._images = images
         self._sections = sections
+        self._rewriter = rewriter
 
     async def _duplicate(self, cmd: CreateItem) -> tuple[str, str] | None:
         """The row this create would duplicate, if the table already has that title."""
@@ -320,9 +351,59 @@ class Executor:
                 written=[Written("paragraphs", cmd.paragraphs)],
                 undo=UndoRecord(kind="delete_blocks", block_ids=ids) if ids else None,
             )
+        if isinstance(cmd, RewritePage):
+            return await self._rewrite(cmd)
         if isinstance(cmd, Search):
             return ExecutionResult(cmd, hits=await self._search(cmd))
         raise TypeError(f"unsupported command {type(cmd).__name__}")
+
+    async def _rewrite(self, cmd: RewritePage) -> ExecutionResult:
+        """Replace a page's text with a rewritten version of itself.
+
+        Which blocks may go is decided here and not by the model: only blocks that are
+        nothing but text, and only those with no children of their own. An image, a file,
+        a sub-page, a database view or a nested list stays exactly where it is, whatever
+        the instruction asked for. The new text is written before the old text is
+        archived, so a failure halfway leaves the page with too much rather than too
+        little."""
+        if self._rewriter is None:
+            raise Refused("REWRITE_UNAVAILABLE")
+        children = await self._p.block_children(cmd.page_id)
+        replaceable = [b for b in children if is_rewritable(b)]
+        current = page_markdown(replaceable)
+        if not current.strip():
+            raise Refused("REWRITE_EMPTY", target_name=cmd.page_title)
+        try:
+            new_text, _, _ = await self._rewriter.rewrite(current, cmd.instruction)
+        except RewriteError as e:
+            raise Refused("REWRITE_FAILED", error=str(e)) from None
+        lines = new_text.splitlines()
+        blocks = await self._prepare(content_blocks(lines, True))
+        if not blocks:
+            raise Refused("REWRITE_FAILED", error="no blocks")
+        # After the last block that is being kept and comes before the text, so a page that
+        # opens with a picture still opens with it. Nothing to anchor to means the end of
+        # the page, which is where Notion appends by default.
+        first = children.index(replaceable[0])
+        kept_before = [b for b in children[:first] if b.get('id')]
+        after = kept_before[-1]["id"] if kept_before else None
+        ids = await self._append(cmd.page_id, blocks, after)
+        for block in replaceable:
+            bid = block.get("id")
+            if not bid:
+                continue
+            try:
+                await self._p.delete_block(bid)
+            except NotionError as e:  # the new text is already there; say nothing is worse
+                log.warning("could not archive %s while rewriting: %s", bid, e)
+        return ExecutionResult(
+            cmd, cmd.page_id, None, block_ids=ids,
+            written=[Written("rewrite", cmd.instruction)],
+            before_lines=len(current.splitlines()), after_lines=len(lines),
+            kept_blocks=len(children) - len(replaceable), preview=new_text,
+            undo=UndoRecord(kind="rewrite", page_id=cmd.page_id, block_ids=ids,
+                            markdown=current.splitlines()),
+        )
 
     async def _search(self, cmd: Search) -> list[SearchHit]:
         if cmd.data_source_id:
@@ -348,6 +429,18 @@ class Executor:
             await self._p.update_page(rec.page_id, archived=True)
         elif rec.kind == "restore" and rec.page_id:
             await self._p.update_page(rec.page_id, properties=rec.properties or {})
+        elif rec.kind == "rewrite" and rec.page_id:
+            # The new text goes, the old text comes back. Its block ids do not: Notion
+            # gives new ones, and anything that linked to a single old block cannot be
+            # restored. The words are what the user asked for back.
+            for bid in rec.block_ids:
+                try:
+                    await self._p.delete_block(bid)
+                except NotionError:
+                    continue
+            if rec.markdown:
+                await self._append(rec.page_id,
+                                   await self._prepare(content_blocks(rec.markdown, True)))
         elif rec.kind == "delete_blocks":
             for bid in rec.block_ids:
                 # Undo may be pressed twice; a block already deleted must not abort the rest.

@@ -9,6 +9,7 @@ from app.commands.models import (
     CreateItem,
     CreatePage,
     PropertyWrite,
+    RewritePage,
     Search,
     UpdateItem,
 )
@@ -109,6 +110,11 @@ def build_command(c: VCandidate, intent: str, raw_text: str) -> Command:
                             page_title=page.title if page else t.name,
                             paragraphs=markdown_lines(c.content), markdown=True,
                             request=_request(t, raw_text))
+    if intent == "rewrite":
+        page = c.item
+        return RewritePage(page_id=page.id if page else t.id, target_name=t.name,
+                           page_title=page.title if page else t.name,
+                           instruction=c.content or raw_text)
     if intent == "search":
         title = t.title_field()
         filters = _search_filters(c)

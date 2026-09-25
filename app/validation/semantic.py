@@ -47,6 +47,7 @@ INTENT_OPS: dict[str, frozenset[str]] = {
     "create": frozenset({"create", "create_page"}),
     "update": frozenset({"update"}),
     "append": frozenset({"append"}),
+    "rewrite": frozenset({"rewrite"}),
     "search": frozenset({"search"}),
 }
 Status = Literal["not_mentioned", "explicit_null", "ambiguous", "value"]
