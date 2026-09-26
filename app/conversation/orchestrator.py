@@ -325,6 +325,9 @@ class _Turn:
     # starts before the interpreter has answered, so this is what holds its writes back
     # without cancelling a write already running in a thread.
     vault_go: asyncio.Future[bool] | None = None
+    # The vault was held back because this message is going to search the web: what the
+    # search finds is what the vault should be given, and it costs minutes to get.
+    vault_after_research: bool = False
     execution_id: int | None = None
 
     def let_vault_write(self, allowed: bool) -> None:
@@ -654,6 +657,12 @@ class Orchestrator:
         if turn.plan is not None:
             line = await self._vault_step(turn, text, command)
             text_reply = f"{text_reply}\n{line}" if line else text_reply
+        elif turn.vault_after_research and self._vault_on():
+            # Replacing the held turn rather than calling the vault inline: _finish_vault
+            # then reports it and files its undo in this execution's own record, exactly as
+            # it does for a message that needed no search.
+            turn.vault = asyncio.create_task(
+                self._vault.handle(text, content=_written_text(command)))
         execution_id = self._record_execution(turn, executed)
         return Reply(text_reply, _undo_buttons(execution_id), undo_id=execution_id)
 
@@ -707,6 +716,12 @@ class Orchestrator:
             return replace(decision, candidate=replace(candidate, web_query=None)), None
         if self._researcher is None:
             return decision, await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
+        # The vault started on the bare message and would write a note about wanting
+        # pictures rather than a note with pictures in it. Hold it — as a plan's steps do —
+        # and run it again below with what the search actually found.
+        if self._vault_on():
+            turn.vault_after_research = True
+            turn.let_vault_write(False)
         await self._progress(turn, Reply(texts.SEARCHING_THE_WEB))
         try:
             found = await self._researcher.research(text, candidate.web_query,

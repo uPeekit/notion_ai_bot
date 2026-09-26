@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from app import texts
-from app.llm.edits import EditError, Editor
+from app.llm.edits import EditError, Editor, NothingToChange
 from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
 from app.vault import frontmatter, mdedit
@@ -264,6 +264,11 @@ class VaultPipeline:
             try:
                 plan, prompt_tokens, output_tokens = await self._editor.plan(
                     mdedit.numbered(lines), instruction)
+            except NothingToChange:
+                # Not a failure: the model read the note and the instruction does not apply
+                # to anything in it. The "not written" wording made it look like a breakage.
+                turn.error = turn.error or texts.VAULT_NOTHING_TO_CHANGE
+                return None
             except EditError as e:
                 return self._failed(name, e, turn)
             turn.prompt_tokens += prompt_tokens

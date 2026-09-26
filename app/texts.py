@@ -385,6 +385,9 @@ VAULT_REPLY = "✅ Obsidian — {what}"
 VAULT_FAILED = "⚠️ Obsidian — не записано: {error}"
 # Said in place of the Obsidian line when a rewrite was asked for and there is no model to
 # do it with.
+# The editor read the note and found nothing the instruction applies to. Not a breakage,
+# so it must not read like one.
+VAULT_NOTHING_TO_CHANGE = "не нашёл, что именно поправить"
 VAULT_REWRITE_OFF = "некому переписать — нужен Claude"
 VAULT_WHAT = {
     "task": "задача в «{note}»",

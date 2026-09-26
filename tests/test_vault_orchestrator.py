@@ -349,3 +349,74 @@ async def test_a_vault_failure_inside_a_plan_never_stops_the_plan(bot):
 
 def notion_calls_create(bot) -> list:
     return [c for c in bot.notion.calls if c[0] == "create_page"]
+
+
+# ---- a single message that searches the web reaches the vault too -----------------------------
+
+async def test_what_a_search_found_is_written_to_the_vault_as_well(bot):
+    """The reported failure: «найди картинки и добавь на страницу» filled the Notion page with
+    images and left the note empty. The vault ran in parallel from the start, so it never saw a
+    word of what the search found — it asked its editor to add pictures with no addresses to add,
+    and got "no changes" back.
+
+    Only a *plan* step used to hand its research over. A single message does now too."""
+    from tests.test_orchestrator import FakeResearcher
+
+    found = "## Изображения\n![тории](https://example.com/torii.jpg)"
+    bot.orch._researcher = FakeResearcher(found)
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95,
+                                              web_query="виды ворот тории фото")))
+    client = use(bot, {"тории": {"actions": [{
+        "action": "note", "folder": texts.VAULT_NOTES_DIR, "title": "Ворота тории",
+        "body": ["своё"]}]}})
+
+    await bot.orch.handle_text(CHAT, USER, "найди фото ворот тории и добавь на страницу")
+
+    note = (bot.dir / texts.VAULT_NOTES_DIR / "Ворота тории.md").read_text(encoding="utf-8")
+    assert "example.com/torii.jpg" in note   # the pictures the search paid for
+    assert "своё" not in note                # the filer picked the place, not the words
+    # The search text is data, never a prompt: the filer was not shown it.
+    assert found not in json.dumps(client.seen, ensure_ascii=False)
+
+
+async def test_the_vault_writes_once_not_twice_when_a_search_runs(bot):
+    """The parallel turn is held at the gate rather than cancelled, and the second one carries the
+    content — so exactly one write, not one empty note plus one good one."""
+    from tests.test_orchestrator import FakeResearcher
+
+    bot.orch._researcher = FakeResearcher("## Изображения\n![x](https://example.com/x.jpg)")
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="что-то")))
+    use(bot, {"фото": {"actions": [{"action": "note", "folder": texts.VAULT_NOTES_DIR,
+                                     "title": "Фото", "body": ["своё"]}]}})
+
+    await bot.orch.handle_text(CHAT, USER, "найди фото и добавь на страницу")
+
+    notes = list((bot.dir / texts.VAULT_NOTES_DIR).glob("*.md"))
+    assert [p.name for p in notes] == ["Фото.md"]
+
+
+async def test_nothing_to_change_is_not_reported_as_a_failure(tmp_path):
+    """It reached the user as «Obsidian — не записано: no changes»: English, and wrong. Nothing
+    failed; the instruction simply did not apply to anything in the note."""
+    from app.llm.edits import Editor
+    from app.vault.filer import Filer
+    from app.vault.index import VaultIndex
+    from app.vault.pipeline import VaultPipeline
+    from app.vault.writer import VaultWriter
+    from tests.test_edits import FakeAnthropic as FakeEditor
+    from tests.test_vault_filer import FakeAnthropic as FakeFiler
+
+    (tmp_path / "Ворота.md").write_text("# Ворота\n\nтекст\n", encoding="utf-8")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+    pipeline = VaultPipeline(
+        index, VaultWriter(index),
+        Filer("", "haiku", client=FakeFiler({"actions": [{
+            "action": "rewrite", "note": "Ворота", "text": "добавь картинки"}]})),
+        None, editor=Editor("", "sonnet", client=FakeEditor({"edits": [], "full": ""})))
+
+    turn = await pipeline.handle("добавь картинки к каждому виду ворот")
+
+    assert turn.writes == []
+    assert texts.VAULT_NOTHING_TO_CHANGE in turn.reply_line()
+    assert "no changes" not in turn.reply_line()
