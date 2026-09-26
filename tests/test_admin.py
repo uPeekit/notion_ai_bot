@@ -477,3 +477,69 @@ def test_workspace_note_is_served_and_saved(settings, discovery, descriptions, t
         assert _post(s, "/api/descriptions", {"targets": {}, "workspace_note": 5})[0] == 400
     finally:
         s.stop()
+
+# ---- the page's own script ---------------------------------------------------------------------
+
+def _script() -> str:
+    """The contents of page.html's single <script> block."""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "app" / "admin" / "page.html").read_text(
+        encoding="utf-8")
+    return html[html.index("<script>") + len("<script>"):html.rindex("</script>")]
+
+
+def test_no_string_literal_is_left_open_at_the_end_of_a_line():
+    """This is the bug that shipped in 0.5.17 and made the whole page inert: `"\\n"` lost its
+    backslash to a shell heredoc and became a real newline inside a string. An unterminated
+    string is a parse error, so the script never ran — no data anywhere, every checkbox
+    unchecked — while the server still answered 200 with perfectly good JSON.
+
+    No test executed the page's script, so nothing noticed for four releases."""
+    import re
+
+    bad = []
+    for n, line in enumerate(_script().split("\n"), 1):
+        text = re.sub(r"\\.", "", line)       # an escaped quote is not a quote
+        text = re.sub(r"//.*$", "", text)     # nor is one inside a line comment
+        if text.count('"') % 2 or text.count("'") % 2:
+            bad.append(f"{n}: {line.strip()[:70]}")
+    assert bad == []
+
+
+def test_the_script_parses(tmp_path):
+    """A real parse, when node is around. The check above is the one that always runs; this one
+    catches everything else a browser would refuse."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed")
+    js = tmp_path / "admin.js"
+    js.write_text(_script(), encoding="utf-8")
+    done = subprocess.run([node, "--check", str(js)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+
+
+def test_every_element_the_script_reaches_for_exists_in_the_markup():
+    """The other way this page can go quietly blank: an id the script fills in that the markup
+    no longer has. `document.getElementById(...)` returns null and the first assignment throws,
+    which stops the rest of the load."""
+    import re
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "app" / "admin" / "page.html").read_text(
+        encoding="utf-8")
+    wanted = set(re.findall(r'getElementById\(["\']([^"\']+)["\']\)', html))
+    # Ids built at run time from a list ("tuning-" + name, "switch-" + name) are checked through
+    # the lists themselves, below.
+    wanted = {w for w in wanted if "+" not in w}
+    declared = set(re.findall(r'\bid=["\']([^"\']+)["\']', html))
+    assert wanted - declared == set()
+
+    for prefix, names in (("tuning-", re.search(r'\["bot_name",(.*?)\]', html, re.S)),
+                          ("switch-", re.search(r'\["notion", "obsidian"(.*?)\]', html, re.S))):
+        assert names is not None, prefix
+        for name in re.findall(r'"([\w_]+)"', names.group(0)):
+            assert prefix + name in declared, prefix + name

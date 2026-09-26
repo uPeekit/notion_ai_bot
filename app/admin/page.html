@@ -405,25 +405,7 @@ function load() {
         ? "Хранилище: " + data.obsidian_vault
         : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
       document.getElementById("mail-buckets").value =
-        (data.mail_buckets || "").split(",").join(",
-");
-      var switches = data.switches || {};
-      ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
-        var el = document.getElementById("switch-" + name);
-        el.checked = switches[name] !== false;
-      });
-      var tuning = data.tuning || {};
-      ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-       "research_note", "linker_note"].forEach(function (name) {
-        var el = document.getElementById("tuning-" + name);
-        if (el) { el.value = tuning[name] || ""; }
-      });
-      document.getElementById("vault-note").textContent = data.obsidian_vault
-        ? "Хранилище: " + data.obsidian_vault
-        : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
-      document.getElementById("mail-buckets").value =
-        (data.mail_buckets || "").split(",").join(",
-");
+        (data.mail_buckets || "").split(",").join(",\n");
       var switches = data.switches || {};
       ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);
@@ -492,8 +474,7 @@ function collectBody() {
       return acc;
     }, {}),
     mail_buckets: document.getElementById("mail-buckets").value
-      .split("
-").map(function (s) { return s.trim(); })
+      .split("\n").map(function (s) { return s.trim(); })
       .filter(function (s) { return s.length; }).join(","),
     switches: {
       notion: document.getElementById("switch-notion").checked,
