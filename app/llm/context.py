@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from app import texts
 from app.notion.snapshot import Field, Target, WorkspaceSnapshot
 
 RU_WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -17,6 +16,14 @@ _PAGE_TITLE = Field(
     id=PAGE_TITLE_FIELD_ID, name="Заголовок", type="title", required=True, options=[],
     relation_data_source_id=None, description="Название новой подстраницы",
 )
+
+
+# The place this chat last wrote to, offered so a follow-up that names none has something to
+# resolve. LLM-facing Russian, like the weekday names above and for the same reason: this
+# module speaks Russian to the model, not to the user. It lives here rather than in
+# app/texts.py because importing that from here would close an import cycle
+# (texts -> validation.policy -> commands.jsonvalue -> validation.semantic -> llm.context).
+RECENT_PAGE = "последняя_страница"
 
 
 def build_calendar(now: datetime) -> dict:
@@ -209,7 +216,7 @@ class ContextBuilder:
         if recent:
             # The place this chat last wrote to. A hint and nothing more: it is what
             # "убери оттуда второй вариант" means when the message names no page at all.
-            ctx.payload[texts.PENDING_RECENT] = recent
+            ctx.payload[RECENT_PAGE] = recent
         return ctx
 
     @staticmethod

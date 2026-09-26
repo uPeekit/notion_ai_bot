@@ -291,9 +291,6 @@ LLM_DOWN_NOTE: dict[str, str] = {
 PENDING_QUESTION = "вопрос"
 PENDING_TARGET = "цель"
 PENDING_TEXT = "исходный_текст"
-# The place this chat last wrote to, so a follow-up that names none ("убери оттуда второй
-# вариант") still has something to resolve.
-PENDING_RECENT = "последняя_страница"
 
 # ---- Obsidian vault ---------------------------------------------------------------------------
 

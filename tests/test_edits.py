@@ -20,6 +20,7 @@ from app import texts
 from app.commands.executor import Executor, Refused, UndoRecord
 from app.commands.models import RewritePage
 from app.conversation.reply import format_execution
+from app.llm.context import RECENT_PAGE
 from app.llm.edits import Edit, EditError, Editor, EditPlan, check, parse
 from app.llm.health import Health
 from app.notion.to_markdown import numbered, outline
@@ -450,7 +451,7 @@ async def test_the_page_this_chat_last_wrote_to_is_offered_to_the_interpreter(tm
     assert bot.store.last_page(CHAT) == page_id
     name = next(t.name for t in bot.snapshot.targets if t.id == page_id)
     ctx = bot.orch._builder.build(bot.snapshot, recent=name)
-    assert ctx.payload[texts.PENDING_RECENT] == name
+    assert ctx.payload[RECENT_PAGE] == name
 
 
 async def test_a_page_the_workspace_no_longer_has_is_simply_not_offered(tmp_path, env):
@@ -461,7 +462,7 @@ async def test_a_page_the_workspace_no_longer_has_is_simply_not_offered(tmp_path
                                               kind="message"),
                            notion_page_id="pg-gone")
     ctx = bot.orch._builder.build(bot.snapshot)
-    assert texts.PENDING_RECENT not in ctx.payload
+    assert RECENT_PAGE not in ctx.payload
 
 
 def test_another_chats_page_is_not_offered(tmp_path, env):

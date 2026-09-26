@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import sys
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -562,3 +564,39 @@ async def test_register_commands_survives_an_unreachable_telegram(caplog):
     messages = _messages(caplog)
     assert any("command menu" in m for m in messages)
     assert not any("SECRET" in m for m in messages)
+
+def test_every_module_imports_on_its_own():
+    """No import cycles, whichever module a process happens to reach first.
+
+    A cycle only shows up when the import chain *starts* at the wrong module, so the suite can
+    pass while `python -c "import app.llm.claude"` fails. That really happened: app/llm/context
+    imported app/texts, which reaches app/validation/semantic, which imports app/llm/context —
+    and nothing broke under pytest, because something else had always imported it first.
+
+    It runs in its own interpreter on purpose. Doing this in-process means clearing `app.*` out
+    of sys.modules, which leaves every later test comparing objects from two different copies of
+    the same module.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        "import importlib, sys\n"
+        "from pathlib import Path\n"
+        "root = Path(sys.argv[1])\n"
+        "names = sorted('.'.join(p.relative_to(root).with_suffix('').parts)\n"
+        "               for p in (root / 'app').rglob('*.py') if p.name != '__init__.py')\n"
+        "broken = []\n"
+        "for name in names:\n"
+        "    for loaded in [m for m in sys.modules if m == 'app' or m.startswith('app.')]:\n"
+        "        del sys.modules[loaded]\n"
+        "    try:\n"
+        "        importlib.import_module(name)\n"
+        "    except ImportError as e:\n"
+        "        broken.append(name + ': ' + str(e))\n"
+        "print(chr(10).join(broken))\n"
+    )
+    done = subprocess.run([sys.executable, "-c", script, str(root)],
+                          capture_output=True, text=True, cwd=root, timeout=180)
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert done.stdout.strip() == "", done.stdout
