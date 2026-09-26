@@ -45,6 +45,23 @@ class AuditStore:
             self._conn.close()
 
     # events
+    def last_page(self, chat_id: int, *, within: int = 20) -> str | None:
+        """The Notion page this chat last wrote to, or None.
+
+        Read from the audit rows rather than kept in memory, so a restart does not lose
+        it: an edit of "the page we were just talking about" has to work in the evening
+        too. Only the chat's last `within` events are considered - a page from last week
+        is not what "that page" means, and offering it would resolve a vague message to
+        somewhere the user has long stopped thinking about."""
+        row = self._conn.execute(
+            "SELECT notion_page_id FROM "
+            "(SELECT id, notion_page_id FROM events WHERE chat_id = ? "
+            " ORDER BY id DESC LIMIT ?) "
+            "WHERE notion_page_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (chat_id, within),
+        ).fetchone()
+        return row[0] if row else None
+
     def new_event(self, *, telegram_user_id: int, chat_id: int, kind: str, **cols) -> int:
         with self._lock:
             cols.update(telegram_user_id=telegram_user_id, chat_id=chat_id, kind=kind)

@@ -538,7 +538,8 @@ class Orchestrator:
                   else text)
         asked = list(session.asked) if session is not None else []
 
-        ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None)
+        ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None,
+                                  recent=self._recent(turn, snapshot))
         if not ctx.target_keys():
             return _prefixed(self._plain(turn, "DISCOVERY_FAILED"), prefix)
         turn.audit(llm_context=ctx.json())
@@ -564,6 +565,23 @@ class Orchestrator:
         if turn.plan is not None:
             reply = await self._after_step(turn, reply)
         return _prefixed(reply, prefix)
+
+    def _recent(self, turn: _Turn, snapshot: WorkspaceSnapshot) -> str:
+        """The name of the page this chat last wrote to, or "".
+
+        A name, never an id: the payload names places the way the user does, and an id here
+        would be echoed back as if the model had chosen it. A page the snapshot no longer
+        knows about is simply not offered."""
+        try:
+            page_id = self._store.last_page(turn.chat_id)
+        except Exception as e:  # a hint is never worth failing a message for
+            log.info("could not read the last page of chat %s (%s)", turn.chat_id,
+                     type(e).__name__)
+            return ""
+        if not page_id:
+            return ""
+        target = snapshot.target(page_id)
+        return target.name if target is not None and target.kind == "page" else ""
 
     async def _vault_only(self, turn: _Turn, text: str) -> Reply:
         """A message when Notion is off. There is nothing to ask about — the vault never asks —

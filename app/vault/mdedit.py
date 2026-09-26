@@ -185,3 +185,42 @@ def set_task(text: str, line_no: int, *, checked: bool | None = None,
         rest = f"{rest} 📅 {due}" if due else rest
     lines[line_no] = f"{indent}{marker}[{mark}] {rest.strip()}"
     return frontmatter.render(props, "\n".join(lines))
+
+
+def numbered(lines: list[str]) -> str:
+    """A note as the editing model reads it: `[7] the line`, one number per line.
+
+    A note has no block ids, so a line number *is* the address — which is why the edits are
+    applied to exactly the list of lines that was numbered, and never to a re-read file."""
+    return "\n".join(f"[{i}] {line}" for i, line in enumerate(lines, start=1))
+
+
+def apply_edits(lines: list[str], edits: list) -> list[str]:
+    """The note's lines with an edit script applied. Pure: no file is read or written here.
+
+    Every edit is resolved against the numbering it was given, so several edits never shift each
+    other's targets — replacements happen in place, insertions are collected per line and
+    written out afterwards, deletions only drop lines. An edit naming a line that is not there
+    is ignored: the model can only point at what it was shown."""
+    replaced: dict[int, str] = {}
+    inserted: dict[int, list[str]] = {}
+    dropped: set[int] = set()
+    for edit in edits:
+        op = getattr(edit, "op", "")
+        at = getattr(edit, "at", 0)
+        if op == "replace" and 1 <= at <= len(lines):
+            replaced[at] = edit.text
+        elif op == "delete":
+            dropped.update(n for n in edit.span if 1 <= n <= len(lines))
+        elif op == "insert" and edit.text.strip():
+            inserted.setdefault(min(max(at, 1), len(lines)), []).append(edit.text)
+        elif op == "image" and edit.url:
+            caption = edit.caption or ""
+            inserted.setdefault(min(max(at, 1), len(lines)), []).append(
+                f"![{caption}]({edit.url})")
+    out: list[str] = []
+    for n, line in enumerate(lines, start=1):
+        if n not in dropped:
+            out.append(replaced.get(n, line))
+        out += inserted.get(n, [])
+    return out

@@ -24,6 +24,8 @@ class FakeNotionProvider:
         self.fail_search: Exception | None = None
         self.fail_create_page: Exception | None = None
         self.fail_append_blocks: Exception | None = None
+        self.fail_update_block: Exception | None = None
+        self.fail_restore_block: Exception | None = None
         self.fail_query: Exception | None = None
 
     async def me(self) -> dict:
@@ -90,14 +92,37 @@ class FakeNotionProvider:
         return list(self.page_blocks.get(block_id, []))
 
     async def append_blocks(self, block_id, children, after=None) -> dict:
+        """As Notion really answers: an insert *after* a block reports the new blocks **and
+        every sibling that follows them**. Modelled here because treating those trailing ids
+        as freshly created is what made Undo delete the user's own lines."""
         self.calls.append(("append_blocks", block_id, children, after))
         if self.fail_append_blocks:
             raise self.fail_append_blocks
-        return {"results": [{"id": f"blk-{i}"} for i, _ in enumerate(children)]}
+        new = [{"id": f"blk-{i}", **c} for i, c in enumerate(children)]
+        page = self.page_blocks.get(block_id)
+        if page is None or after is None:
+            return {"results": [{"id": b["id"]} for b in new]}
+        ids = [b.get("id") for b in page]
+        at = ids.index(after) + 1 if after in ids else len(page)
+        followers = [{"id": b["id"]} for b in page[at:] if b.get("id")]
+        self.page_blocks[block_id] = [*page[:at], *new, *page[at:]]
+        return {"results": [*({"id": b["id"]} for b in new), *followers]}
+
+    async def update_block(self, block_id, body) -> dict:
+        self.calls.append(("update_block", block_id, body))
+        if self.fail_update_block:
+            raise self.fail_update_block
+        return {"id": block_id, **body}
 
     async def delete_block(self, block_id) -> dict:
         self.calls.append(("delete_block", block_id))
         return {"id": block_id, "archived": True}
+
+    async def restore_block(self, block_id) -> dict:
+        self.calls.append(("restore_block", block_id))
+        if self.fail_restore_block:
+            raise self.fail_restore_block
+        return {"id": block_id, "archived": False}
 
     async def upload_file(self, filename, content_type, data) -> str:
         self.calls.append(("upload_file", filename, content_type, len(data)))

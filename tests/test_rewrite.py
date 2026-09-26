@@ -245,9 +245,11 @@ async def test_a_claude_failure_leaves_the_page_untouched_and_names_the_cause():
     assert health.reason == "credit"  # and the reply will say so, once
 
 
-async def test_no_rewriter_is_a_plain_refusal_not_a_crash():
+async def test_no_model_at_all_is_a_plain_refusal_not_a_crash():
+    provider = FakeNotionProvider()
+    provider.page_blocks[PAGE] = [_text("paragraph", "есть текст", "p-1")]
     with pytest.raises(Refused) as exc:
-        await Executor(FakeNotionProvider()).run(_cmd())
+        await Executor(provider).run(_cmd())
     assert exc.value.code == "REWRITE_UNAVAILABLE"
 
 

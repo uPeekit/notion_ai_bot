@@ -86,6 +86,16 @@ DONE_UPDATE = "✅ Notion — обновлено в «{target_name}»: {item_tit
 DONE_CREATE_PAGE = "✅ Notion — создано в «{target_name}»: {item_title}"
 DONE_APPEND = "✅ Notion — дописано в «{target_name}»: {item_title}"
 DONE_REWRITE = "✅ Notion — переписано в «{target_name}»: {item_title}"
+DONE_EDIT = "✅ Notion — правки в «{target_name}»: {item_title}"
+# What an edit script changed, assembled from the parts that are not zero. The counts are
+# the whole receipt: an edit touches places, so "was 137 lines" says nothing about it.
+EDIT_REPLACED = "изменено строк: {n}"
+EDIT_ADDED = "добавлено: {n}"
+EDIT_REMOVED = "убрано: {n}"
+# Always said out loud when a picture or a file was removed, never folded into the count:
+# that is the one removal the user cannot see undone from the numbers alone. Undo brings
+# it back whole, but at the end of the page — Notion cannot say where it belonged.
+EDIT_REMOVED_MEDIA = ("убрано вложений: {n} — «{undo}» вернёт их, но в конец страницы")
 # What a rewrite actually did, in numbers: the one thing the user cannot see from the
 # preview, and the thing that tells them whether to press Undo.
 REWRITE_SIZE = "Было {before} строк → стало {after}"
@@ -156,6 +166,8 @@ ERRORS: dict[str, str] = {
     # A rewrite of a page that has no text on it at all (only pictures, only sub-pages).
     "REWRITE_EMPTY": "На «{target_name}» нет текста, который можно переписать — картинки, "
                       "файлы и подстраницы я не трогаю.",
+    # The model read the page and found nothing the instruction applies to.
+    "REWRITE_NOTHING": "Не нашёл на «{target_name}», что именно поправить — ничего не изменил.",
     "REWRITE_UNAVAILABLE": "Переписать текст сейчас не могу: для этого нужен Claude.",
     "REWRITE_FAILED": "Не удалось переписать текст ({error}). Ничего не изменил.",
     # Both stores are switched off on the admin page: there is nowhere to write.
@@ -237,6 +249,14 @@ ROOT_TARGET_DESCRIPTION = (
     "просит создать страницу в корне / на верхнем уровне / отдельно, не внутри другой страницы."
 )
 
+# ---- a page as numbered lines, for the editing model (app/notion/to_markdown.py) --------------
+
+# A block that is a thing rather than a sentence: its text cannot be edited, but it can be
+# removed. Named in the user's language so the model reads the page the way the user sees it.
+OUTLINE_MEDIA = "<вложение {what}>"
+# A block nothing may touch: a sub-page, a database, a table, a column layout.
+OUTLINE_KEPT = "<не трогать: {what}>"
+
 # ---- when Claude cannot be used (app/llm/health.py) -------------------------------------------
 
 # A few words for a line that is already about a failure ("Obsidian — не записано: …").
@@ -271,6 +291,9 @@ LLM_DOWN_NOTE: dict[str, str] = {
 PENDING_QUESTION = "вопрос"
 PENDING_TARGET = "цель"
 PENDING_TEXT = "исходный_текст"
+# The place this chat last wrote to, so a follow-up that names none ("убери оттуда второй
+# вариант") still has something to resolve.
+PENDING_RECENT = "последняя_страница"
 
 # ---- Obsidian vault ---------------------------------------------------------------------------
 

@@ -17,9 +17,10 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from app import texts
+from app.llm.edits import EditError, Editor
 from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
-from app.vault import mdedit
+from app.vault import frontmatter, mdedit
 from app.vault.filer import Filer, FilerError, check, context
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -124,12 +125,14 @@ class VaultPipeline:
     def __init__(self, index: VaultIndex, writer: VaultWriter, filer: Filer,
                  linker: Linker | None = None, *, now=datetime.now,
                  linking: Callable[[], bool] = lambda: True,
-                 rewriter: Rewriter | None = None) -> None:
+                 rewriter: Rewriter | None = None,
+                 editor: Editor | None = None) -> None:
         self._index = index
         self._writer = writer
         self._filer = filer
         self._linker = linker
         self._rewriter = rewriter
+        self._editor = editor
         self._now = now
         self._linking = linking
         self._tasks: set[asyncio.Task] = set()  # linking, running behind the reply
@@ -142,6 +145,8 @@ class VaultPipeline:
             await self._linker.aclose()
         if self._rewriter is not None:
             await self._rewriter.aclose()
+        if self._editor is not None:
+            await self._editor.aclose()
 
     async def handle(self, message: str, *, content: str = "",
                      go: Callable[[], Awaitable[bool]] | None = None) -> VaultTurn:
@@ -203,41 +208,80 @@ class VaultPipeline:
         return turn
 
     async def _rewritten(self, action: VaultAction, turn: VaultTurn) -> VaultAction | None:
-        """The same action with `body` filled in by the rewriter, or None when there is
-        nothing to rewrite and saying so beats writing something. A heading that is no
-        longer in the note widens the rewrite to the whole of it rather than failing: the
-        user asked for the note to change, and the section was only how they pointed."""
+        """The same action with `body` filled in, or None when nothing could be changed and
+        saying so beats writing something.
+
+        One model call decides whether this is a few edits or a whole new text; the note (or the
+        named section) is read once, and the edits are applied to exactly the lines that were
+        numbered. A heading that is no longer there widens the change to the whole note rather
+        than failing: the user asked for the note to change, and the section was only how they
+        pointed.
+
+        Undo needs nothing special here. The writer keeps the file's whole previous text, so
+        putting a note back is exact — including its pictures, whose files are never deleted."""
         note = self._index.by_name(action.note)
         if note is None:
             return None
-        if self._rewriter is None:
+        if self._editor is None and self._rewriter is None:
             turn.error = turn.error or texts.VAULT_REWRITE_OFF
             return None
         try:
             text = await asyncio.to_thread(self._index.read, note.path)
         except OSError as e:
-            log.warning("could not read %s to rewrite it: %s", note.path, e)
+            log.warning("could not read %s to change it: %s", note.path, e)
             return None
-        current, heading = text, action.heading
+        # The note without its frontmatter: the writer puts the properties back, so a line
+        # number the model is given has to mean the same line the writer will change.
+        _, note_body = frontmatter.split(text)
+        current, heading = note_body, action.heading
         if heading:
-            lines = text.split(chr(10))
+            lines = note_body.split("\n")
             section = mdedit.find_section(lines, heading)
             if section is None:
-                heading = ''
+                heading = ""
             else:
-                current = chr(10).join(lines[section.start:section.end])
+                current = "\n".join(lines[section.start:section.end])
+        body = await self._new_body(note.name, current, action.text, turn)
+        if body is None:
+            return None
+        return action.model_copy(update={"heading": heading, "body": body})
+
+    async def _new_body(self, name: str, current: str, instruction: str,
+                        turn: VaultTurn) -> list[str] | None:
+        """The note's (or section's) new lines: a few edits applied, or a whole new text."""
+        lines = current.split("\n")
+        if self._editor is not None:
+            try:
+                plan, prompt_tokens, output_tokens = await self._editor.plan(
+                    mdedit.numbered(lines), instruction)
+            except EditError as e:
+                return self._failed(name, e, turn)
+            turn.prompt_tokens += prompt_tokens
+            turn.output_tokens += output_tokens
+            if plan.edits:
+                # A note is the user's own text file and the previous version is kept whole, so
+                # the only rule worth enforcing is that an edit may not point outside what the
+                # model was shown; `apply_edits` ignores anything that does.
+                return mdedit.apply_edits(lines, plan.edits)
+            if plan.full.strip():
+                return plan.full.splitlines()
+            return None
+        assert self._rewriter is not None
         try:
             new_text, prompt_tokens, output_tokens = await self._rewriter.rewrite(
-                current, action.text)
+                current, instruction)
         except RewriteError as e:
-            log.warning("rewrite of %s failed: %s", note.name, e)
-            turn.error = turn.error or str(e)
-            turn.reason = turn.reason or e.reason
-            return None
+            return self._failed(name, e, turn)
         turn.prompt_tokens += prompt_tokens
         turn.output_tokens += output_tokens
-        return action.model_copy(update={"heading": heading,
-                                         "body": new_text.splitlines()})
+        return new_text.splitlines()
+
+    @staticmethod
+    def _failed(name: str, error: Exception, turn: VaultTurn) -> None:
+        log.warning("changing %s failed: %s", name, error)
+        turn.error = turn.error or str(error)
+        turn.reason = turn.reason or getattr(error, "reason", "")
+        return None
 
     def _agenda_answer(self, action: VaultAction) -> str:
         """A question about dates, answered from the vault: a day, a range, or "what now"."""

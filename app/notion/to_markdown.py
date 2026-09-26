@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+from urllib.parse import urlsplit
+
+from app import texts
 
 CHILDREN = "_children"
 LIST_TYPES = ("bulleted_list_item", "numbered_list_item", "to_do")
@@ -83,6 +87,10 @@ class Renderer:
 
     def render(self, blocks: list[dict]) -> str:
         return "\n".join(self._blocks(blocks, 0)).strip("\n")
+
+    def one(self, block: dict) -> list[str]:
+        """One block on its own, without the blank lines `render` puts between blocks."""
+        return self._block(block, 0, 1)
 
     def _blocks(self, blocks: list[dict], depth: int) -> list[str]:
         """Lines for a run of sibling blocks. A blank line separates blocks, except between
@@ -260,3 +268,98 @@ def page_markdown(blocks: list[dict]) -> str:
     text rather than [[wiki links]]: nothing here is going into a vault."""
     return Renderer(page_note=lambda _id: None,
                     file_name=lambda url, _kind: url).render(blocks)
+
+
+# ---- a page as numbered lines, so a model can point at one place in it ----------------------
+
+# Blocks that are a thing rather than a sentence: their text cannot be edited, but they can be
+# removed, and Notion brings them back out of the trash whole (verified against the API: the
+# same block id, the same picture — only its position is lost, so undo puts it at the end).
+MEDIA = (*FILE_TYPES, *LINK_TYPES, "equation")
+# Blocks nothing may touch. A sub-page or a database is another page, not a place on this one,
+# and deleting one would throw away everything inside it.
+UNTOUCHABLE = ("child_page", "child_database", "link_to_page", "table", "table_row",
+               "column_list", "column", "synced_block", "table_of_contents", "breadcrumb")
+
+
+@dataclass(frozen=True)
+class Line:
+    """One block of a page, as the editing model sees it.
+
+    `n` is what the model points at (1-based, stable only within one reading of the page) and
+    `id` is what the code acts on, so a model can never name a block the code did not read."""
+
+    n: int
+    id: str
+    kind: str
+    lines: tuple[str, ...]
+    editable: bool   # its text may be replaced in place (PATCH /blocks/{id})
+    removable: bool  # it may be moved to the trash
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+def outline(blocks: list[dict]) -> list[Line]:
+    """Every block of a page, numbered, with what may be done to each.
+
+    A block with children is readable but neither editable nor removable: its children were
+    never read, so there is no telling what removing it would take with it."""
+    renderer = Renderer(page_note=lambda _id: None, file_name=lambda url, _kind: url)
+    out: list[Line] = []
+    for i, block in enumerate(blocks, start=1):
+        kind = block.get("type", "")
+        has_children = bool(block.get("has_children"))
+        if kind in MEDIA:
+            lines = (texts.OUTLINE_MEDIA.format(what=_media_label(block)),)
+            editable, removable = False, True
+        elif kind in UNTOUCHABLE:
+            lines = (texts.OUTLINE_KEPT.format(what=_kept_label(block, renderer)),)
+            editable, removable = False, False
+        else:
+            rendered = renderer.one(block) or [""]
+            lines = tuple(rendered)
+            editable = kind in REWRITABLE and not has_children
+            removable = editable
+        out.append(Line(n=i, id=block.get("id", ""), kind=kind, lines=lines,
+                        editable=editable, removable=removable))
+    return out
+
+
+def _media_label(block: dict) -> str:
+    kind = block.get("type", "")
+    data = block.get(kind, {}) or {}
+    caption = _plain(data.get("caption", []))
+    source = data.get(data.get("type", ""), {}) or {}
+    url = source.get("url") or data.get("url") or ""
+    name = PurePosixPath(urlsplit(url).path).name if url else ""
+    return f"{kind}: {caption or name or url}"[:200]
+
+
+def _kept_label(block: dict, renderer: Renderer) -> str:
+    kind = block.get("type", "")
+    data = block.get(kind, {}) or {}
+    title = data.get("title") or _plain(data.get("rich_text", []))
+    return f"{kind}: {title}"[:200] if title else kind
+
+
+def strip_placeholders(text: str) -> str:
+    """Text with the outline's own `<...>` stand-ins dropped.
+
+    A page is shown to the model with a placeholder where each picture and sub-page is, and
+    a model rewriting the whole text sometimes copies one back. Writing it would put the
+    placeholder itself on the page as a line of text, next to the picture it stands for."""
+    marks = tuple(t.split("{", 1)[0] for t in (texts.OUTLINE_MEDIA, texts.OUTLINE_KEPT))
+    return "\n".join(line for line in text.split("\n")
+                     if not line.strip().startswith(marks))
+
+
+def numbered(lines: list[Line]) -> str:
+    """The page as the model reads it: `[7] the line`, continuations indented under it."""
+    out: list[str] = []
+    for line in lines:
+        first, *rest = line.lines or [""]
+        out.append(f"[{line.n}] {first}")
+        out += [f"    {r}" for r in rest]
+    return "\n".join(out)

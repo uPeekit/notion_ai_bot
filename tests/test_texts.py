@@ -56,7 +56,8 @@ ERROR_PLACEHOLDERS: dict[str, set[str]] = {
     "WEB_TIMEOUT": {"minutes"}, "PLAN_UNAVAILABLE": set(),
     "PLAN_FAILED": set(), "STEP_WRONG_TARGET": {"target_name"},
     "NOTHING_ENABLED": set(),
-    "REWRITE_EMPTY": {"target_name"}, "REWRITE_UNAVAILABLE": set(),
+    "REWRITE_EMPTY": {"target_name"}, "REWRITE_NOTHING": {"target_name"},
+    "REWRITE_UNAVAILABLE": set(),
     "REWRITE_FAILED": {"error"},
 }
 

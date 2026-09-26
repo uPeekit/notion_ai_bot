@@ -195,8 +195,24 @@ class DirectNotionProvider:
             body["after"] = after
         return await self._request("PATCH", f"/blocks/{block_id}/children", body)
 
+    async def update_block(self, block_id: str, body: dict) -> dict:
+        """Change one block in place. `body` is the block's own payload
+        ({"paragraph": {"rich_text": [...]}}), and the update replaces the whole of each
+        field it names. A block's type cannot be changed this way — that is a delete and
+        an insert."""
+        return await self._request("PATCH", f"/blocks/{block_id}", body)
+
     async def delete_block(self, block_id: str) -> dict:
         return await self._request("DELETE", f"/blocks/{block_id}")
+
+    async def restore_block(self, block_id: str) -> dict:
+        """Take a block back out of the trash. This is what makes deleting a picture
+        undoable: the bytes are still Notion's, so the block comes back whole rather
+        than being re-uploaded. `archived` is sent alongside `in_trash` because which of
+        the two a Notion-Version accepts has changed over time, and an unknown field is
+        ignored rather than refused."""
+        return await self._request("PATCH", f"/blocks/{block_id}",
+                                  {"in_trash": False, "archived": False})
 
     async def upload_file(self, filename: str, content_type: str, data: bytes) -> str:
         """Single-part file upload (≤ 20 MB): create the upload, send the bytes, and return its

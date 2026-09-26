@@ -167,11 +167,44 @@ def format_execution(result: ExecutionResult, *, target_url: str | None) -> str:
         header = texts.DONE_APPEND.format(target_name=cmd.target_name, item_title=cmd.page_title)
         bullets = []
     elif isinstance(cmd, RewritePage):
-        return _rewritten(cmd, result, target_url)
+        return (_edited(cmd, result, target_url) if result.undo is not None
+                and result.undo.kind == "edits"
+                else _rewritten(cmd, result, target_url))
     else:
         raise TypeError(f"format_execution does not support {type(cmd).__name__}")
 
     lines = [header] + [f"• {w.name}: {_value_label(w.value)}" for w in bullets]
+    url = result.url or target_url
+    if url:
+        lines.append(texts.DONE_LINK.format(url=url))
+    return "\n".join(lines)
+
+
+def _edited(cmd: RewritePage, result: ExecutionResult, target_url: str | None) -> str:
+    """What an edit script changed, place by place rather than in page sizes.
+
+    A removed picture or file is named on its own line and never folded into the count of
+    things removed: it is the one change whose undo behaves differently (the picture comes
+    back, but at the end of the page), and the one the user most needs to notice."""
+    parts = []
+    if result.replaced:
+        parts.append(texts.EDIT_REPLACED.format(n=result.replaced))
+    if result.added:
+        parts.append(texts.EDIT_ADDED.format(n=result.added))
+    plain = result.removed - result.removed_media
+    if plain > 0:
+        parts.append(texts.EDIT_REMOVED.format(n=plain))
+    if result.removed_media:
+        parts.append(texts.EDIT_REMOVED_MEDIA.format(n=result.removed_media,
+                                                     undo=texts.BTN_UNDO))
+    lines = [texts.DONE_EDIT.format(target_name=cmd.target_name,
+                                    item_title=cmd.page_title), ", ".join(parts)]
+    preview = [x for x in result.preview.splitlines() if x.strip()]
+    if preview:
+        lines.append("")
+        lines += preview[:texts.REWRITE_PREVIEW_LINES]
+        if len(preview) > texts.REWRITE_PREVIEW_LINES:
+            lines.append(texts.REWRITE_PREVIEW_MORE)
     url = result.url or target_url
     if url:
         lines.append(texts.DONE_LINK.format(url=url))

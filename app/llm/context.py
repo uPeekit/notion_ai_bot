@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app import texts
 from app.notion.snapshot import Field, Target, WorkspaceSnapshot
 
 RU_WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -157,7 +158,7 @@ class ContextBuilder:
 
     def build(
         self, snapshot: WorkspaceSnapshot, now: datetime | None = None, pending: dict | None = None,
-        *, allow_plan: bool = True,
+        *, allow_plan: bool = True, recent: str = "",
     ) -> Context:
         if now is not None and now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
@@ -205,6 +206,10 @@ class ContextBuilder:
         ctx.local_only = frozenset(local_only)
         if pending:
             ctx.payload["pending"] = pending
+        if recent:
+            # The place this chat last wrote to. A hint and nothing more: it is what
+            # "убери оттуда второй вариант" means when the message names no page at all.
+            ctx.payload[texts.PENDING_RECENT] = recent
         return ctx
 
     @staticmethod

@@ -61,6 +61,7 @@ from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
 from app.llm.context import ContextBuilder
+from app.llm.edits import Editor
 from app.llm.fallback import FallbackLLM
 from app.llm.health import Health
 from app.llm.image_search import ImageSearch
@@ -225,8 +226,8 @@ class App:
 
 
 def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
-                    health: Health,
-                    rewriter: Rewriter | None = None) -> VaultPipeline | None:
+                    health: Health, rewriter: Rewriter | None = None,
+                    editor: Editor | None = None) -> VaultPipeline | None:
     """The Obsidian side, when a vault is configured and Claude is reachable. It is built even
     when Notion is not: the two pipelines share nothing."""
     key = settings.anthropic_api_key.get_secret_value()
@@ -241,7 +242,8 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
     linker = Linker(index, writer, api_key=key, model=settings.linker_model,
                     extra=lambda: tuning.linker_note, health=health)
     return VaultPipeline(index, writer, Filer(key, settings.filer_model, health=health),
-                         linker, linking=lambda: switches.get("linker"), rewriter=rewriter)
+                         linker, linking=lambda: switches.get("linker"), rewriter=rewriter,
+                         editor=editor)
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
@@ -360,7 +362,13 @@ def build(
     rewriter = (Rewriter(settings.anthropic_api_key.get_secret_value(), settings.rewrite_model,
                          health=health)
                 if uses_cloud(settings) else None)
-    executor = Executor(provider, images=images, sections=sections, rewriter=rewriter)
+    # The editor changes places on a page; the rewriter replaces a whole text. One model call
+    # decides which, so both are built together and share the rewrite model.
+    editor = (Editor(settings.anthropic_api_key.get_secret_value(), settings.rewrite_model,
+                     health=health)
+              if uses_cloud(settings) else None)
+    executor = Executor(provider, images=images, sections=sections, rewriter=rewriter,
+                        editor=editor)
     switches = Switches(settings.db_path.with_name("switches.json"), {
         "notion": settings.notion_enabled, "obsidian": settings.obsidian_enabled,
         "linker": settings.linker_enabled,
@@ -370,7 +378,7 @@ def build(
         mail_at=settings.mail_digest_at, web_words=WEB_WORDS,
         countdown_tag=texts.VAULT_COUNTDOWN_TAG, date_props=texts.VAULT_DATE_PROPS,
     ))
-    vault = _vault_pipeline(settings, switches, tuning, health, rewriter)
+    vault = _vault_pipeline(settings, switches, tuning, health, rewriter, editor)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,
