@@ -1,12 +1,20 @@
-# notion_ai_bot
+# ai_assistant
 
-A Telegram bot that turns a text or voice message into a change in your own Notion workspace —
-"купи молоко" becomes a row in your shopping list, "в идеи: ..." becomes a paragraph on your
-ideas page, and so on. Speech recognition (faster-whisper) always runs on your own machine. The
-language model is a local [Ollama](https://ollama.com) model, or — if you add an Anthropic API
-key — Claude, with the local model as the automatic fallback (see "Using Claude", below). Anything the bot can't confidently classify gets a
-follow-up question with buttons — never a silent guess — and, if you flag one, an "inbox" page
-that nothing is ever dropped into oblivion for.
+A Telegram bot that turns a text or voice message into a change in your own notes —
+"купи молоко" becomes a line on your shopping list, "в идеи: ..." becomes a paragraph on your
+ideas page, and so on.
+
+It writes to **two stores at once, each on its own terms**: a Notion workspace (databases,
+pages, sub-pages) and an Obsidian vault (a folder of markdown files on your machine). Neither
+mirrors the other — each has its own reading of the message, its own rules and its own undo —
+and either can be switched off on the admin page, so the bot keeps working as a Notion bot, an
+Obsidian bot, or both.
+
+Speech recognition (faster-whisper) always runs on your own machine. The language model is a
+local [Ollama](https://ollama.com) model, or — if you add an Anthropic API key — Claude, with
+the local model as the automatic fallback (see "Using Claude", below). Anything the bot can't
+confidently classify gets a follow-up question with buttons — never a silent guess — and, if you
+flag one, an "inbox" page, so that nothing is ever dropped into oblivion.
 
 Design and internals live in [`documentation/`](documentation/) (start with
 [ARCHITECTURE.md](documentation/ARCHITECTURE.md) and [FLOWS.md](documentation/FLOWS.md) if you
@@ -78,14 +86,14 @@ in one `.env` file.
      `TELEGRAM_ALLOWED_USER_IDS` below.
 5. **Build and install a release.** Double-click **`release.cmd`** in this repo and accept the
    defaults (see [RELEASE.md](RELEASE.md)). When it asks *"Update the production install now"*,
-   say yes: with no install there yet, it offers a fresh one in `C:\apps\notion_ai_bot` — its own
+   say yes: with no install there yet, it offers a fresh one in `C:\apps\ai_assistant` — its own
    Python environment, the database schema, and a `.env` copied from `.env.example`, which it
    offers to open in Notepad. It does **not** fill in your tokens for you — do that next.
-6. **Fill in `.env`** in the install directory (`C:\apps\notion_ai_bot\.env` in the example
+6. **Fill in `.env`** in the install directory (`C:\apps\ai_assistant\.env` in the example
    above) with the Notion token, the Telegram bot token, and your Telegram user id (see the table
    below for exactly which keys).
 7. **Start the bot:** double-click **`start.cmd`** in the install folder
-   (`C:\apps\notion_ai_bot\start.cmd`). The bot runs in that window; stop it with Ctrl+C (then
+   (`C:\apps\ai_assistant\start.cmd`). The bot runs in that window; stop it with Ctrl+C (then
    `Y`) or by closing the window. The first thing it does is discover your workspace and write
    `data\targets.yaml` — watch for `discovery: N targets` to confirm it saw what you expected. If
    it stops instead, the window says why in one line and offers the fix (open `.env`, or apply a
@@ -299,7 +307,7 @@ Query it with the `sqlite3` CLI, or open it with a free GUI tool like
 [DB Browser for SQLite](https://sqlitebrowser.org/) if you'd rather click around than type SQL:
 
 ```powershell
-sqlite3 C:\apps\notion_ai_bot\data\bot.sqlite "SELECT ts, kind, decision, error FROM events ORDER BY id DESC LIMIT 20;"
+sqlite3 C:\apps\ai_assistant\data\bot.sqlite "SELECT ts, kind, decision, error FROM events ORDER BY id DESC LIMIT 20;"
 ```
 
 Your Notion token and Telegram bot token are never written to this database, or to any log —

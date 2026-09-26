@@ -2,8 +2,8 @@
 
 ## Quick way (double-click)
 
-- `release.cmd` in the repo root: shows current version and what `--auto` would do, asks kind / dry run / skip tests with defaults, runs `release.py`, then offers to push and to update (or freshly install) the production directory. Answers are remembered in `%USERPROFILE%\.notion_ai_bot\wizard.json`.
-- `update.cmd` in the production install root: shows installed version and schema state, then a menu: update (default zip = newest `notion_ai_bot-*.zip` in the repo `dist/` or Downloads; a dry run is shown before confirming), dry run only, roll back, quit.
+- `release.cmd` in the repo root: shows current version and what `--auto` would do, asks kind / dry run / skip tests with defaults, runs `release.py`, then offers to push and to update (or freshly install) the production directory. Answers are remembered in `%USERPROFILE%\.ai_assistant\wizard.json`.
+- `update.cmd` in the production install root: shows installed version and schema state, then a menu: update (default zip = newest `ai_assistant-*.zip` in the repo `dist/` or Downloads; a dry run is shown before confirming), dry run only, roll back, quit.
 
 Every wizard prints the exact command it runs, so the manual commands below stay discoverable.
 
@@ -28,7 +28,7 @@ Every wizard prints the exact command it runs, so the manual commands below stay
    ```
    uv run python release.py --auto
    ```
-   This bumps `pyproject.toml`, runs `uv lock --offline`, commits `release: vX.Y.Z`, tags `vX.Y.Z` (skip with `--no-tag`), and writes `dist/notion_ai_bot-X.Y.Z.zip` + `dist/last_release.json`. Add `--dry-run` to see the computed version/kind without doing anything. Use `--patch`/`--full`/`--set-version` to override the auto classification.
+   This bumps `pyproject.toml`, runs `uv lock --offline`, commits `release: vX.Y.Z`, tags `vX.Y.Z` (skip with `--no-tag`), and writes `dist/ai_assistant-X.Y.Z.zip` + `dist/last_release.json`. Add `--dry-run` to see the computed version/kind without doing anything. Use `--patch`/`--full`/`--set-version` to override the auto classification.
 3. Push:
    ```
    git push && git push --tags
@@ -38,7 +38,7 @@ Every wizard prints the exact command it runs, so the manual commands below stay
 ## First install
 
 ```
-deploy\install.ps1 -Zip dist\notion_ai_bot-0.0.2.zip -Dest C:\apps\notion_ai_bot
+deploy\install.ps1 -Zip dist\ai_assistant-0.0.2.zip -Dest C:\apps\ai_assistant
 ```
 
 **Warning:** `install.ps1` is for a fresh, empty `-Dest` only. Never re-run it against an
@@ -55,7 +55,7 @@ Does, in order: locate `uv` (`PATH`, else `%USERPROFILE%\.local\bin\uv.exe`), ex
 From the **install directory** (not the repo):
 
 ```
-C:\apps\notion_ai_bot\deploy\update.ps1 dist\notion_ai_bot-0.0.3.zip
+C:\apps\ai_assistant\deploy\update.ps1 dist\ai_assistant-0.0.3.zip
 ```
 
 Wraps `apply_update.py <zip> --root <install dir>`. Refuses (exit 1) if the zip's version is not newer than the installed `VERSION`, or if the bot is running (a process holds the OS lock on `data\bot.pid` — the file's mere presence, e.g. left behind by a crash, does not count) — pass `-Force` to override either check. Rollback refuses while the bot is running too. On success: backs up the current app layer to `.backup\<old-version>\` (keeps the 2 most recent), extracts the new files (protected paths skipped), deletes files present in the old manifest but absent from the new one, runs `uv sync --frozen --no-dev` only if `uv.lock`'s hash changed, then `python -m tools.migrate --apply`, then writes the new `VERSION`. Exit codes: `0` success, `1` refused (not newer / bot running / bad archive), `2` failure mid-update (partially applied — see Rollback). `-DryRun` reports what would happen and exits before any of that (still exits 1 if the "not newer"/"bot running" refusal applies, since that check runs before the dry-run short-circuit).
@@ -93,7 +93,7 @@ At startup, `AuditStore.assert_schema_current()` (wired into `app.main` in a lat
 
 ## Dev vs prod layout
 
-Development is this repo (`C:\coding\notion_ai_bot`), driven with `uv run ...`. Production is a **separate directory** on the same or another Windows machine — e.g. `C:\apps\notion_ai_bot` — populated only by `deploy\install.ps1`/`deploy\update.ps1` from a release zip, never by `git clone`. The prod directory has its own `.env` (own tokens), its own `.venv` (own `uv sync --frozen --no-dev`, no dev dependencies), and its own `data\` (own SQLite DB, own backups) — none of that is shared with or derived from the dev checkout. Running dev and a prod install side by side on one machine is safe as long as they're different directories with different `.env`/`data`.
+Development is this repo (`C:\coding\ai_assistant`), driven with `uv run ...`. Production is a **separate directory** on the same or another Windows machine — e.g. `C:\apps\ai_assistant` — populated only by `deploy\install.ps1`/`deploy\update.ps1` from a release zip, never by `git clone`. The prod directory has its own `.env` (own tokens), its own `.venv` (own `uv sync --frozen --no-dev`, no dev dependencies), and its own `data\` (own SQLite DB, own backups) — none of that is shared with or derived from the dev checkout. Running dev and a prod install side by side on one machine is safe as long as they're different directories with different `.env`/`data`.
 
 ## Pid file contract
 

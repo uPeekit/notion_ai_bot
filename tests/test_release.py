@@ -32,7 +32,7 @@ def test_classify_changes():
 @pytest.fixture
 def fake_repo(tmp_path):
     for rel, text in {
-        "pyproject.toml": '[project]\nname="notion-ai-bot"\nversion="0.0.1"\n',
+        "pyproject.toml": '[project]\nname="ai-assistant"\nversion="0.0.1"\n',
         "uv.lock": "lock",
         ".env.example": "X=",
         "README.md": "r",
@@ -70,13 +70,13 @@ def test_collect_files_includes_only_shippable(fake_repo):
 def test_build_zip_layout_and_manifest(fake_repo):
     out = fake_repo / "dist"
     z = release.build_zip(fake_repo, "0.0.2", "patch", out)
-    assert z == out / "notion_ai_bot-0.0.2.zip"
+    assert z == out / "ai_assistant-0.0.2.zip"
     with zipfile.ZipFile(z) as zf:
         names = set(zf.namelist())
         assert {"VERSION", "manifest.json", "app/a.py", "uv.lock"} <= names
         assert zf.read("VERSION").decode().strip() == "0.0.2"
         man = json.loads(zf.read("manifest.json"))
-    assert man["name"] == "notion_ai_bot" and man["version"] == "0.0.2" and man["kind"] == "patch"
+    assert man["name"] == "ai_assistant" and man["version"] == "0.0.2" and man["kind"] == "patch"
     assert man["lock_hash"] == release.sha256_file(fake_repo / "uv.lock")
     assert "app/a.py" in man["files"] and ".env" not in man["files"]
     assert not any(n.startswith("/") or ".." in n for n in names)

@@ -21,7 +21,7 @@ async def test_commons_returns_thumbnails_with_readable_captions():
     def handler(req):
         assert req.url.host == "commons.wikimedia.org"
         assert "torii gate filetype:bitmap" == req.url.params["gsrsearch"]
-        assert req.headers["user-agent"].startswith("notion-ai-bot/")
+        assert req.headers["user-agent"].startswith("ai-assistant/")
         return httpx.Response(200, json={"query": {"pages": {
             "2": {"index": 2, "title": "File:Second_one.png",
                   "imageinfo": [{"url": "https://up/2.png", "thumburl": "https://up/2t.png"}]},

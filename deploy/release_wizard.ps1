@@ -1,5 +1,5 @@
 # Interactive release wizard. Double-click release.cmd in the repo root.
-# Wraps release.py; remembers your answers in %USERPROFILE%\.notion_ai_bot\wizard.json,
+# Wraps release.py; remembers your answers in %USERPROFILE%\.ai_assistant\wizard.json,
 # except the release kind, which always defaults to auto (override it when auto is wrong).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -27,8 +27,8 @@ function AskYN([string]$prompt, [bool]$default) {
 }
 
 function Load-State {
-  $file = Join-Path $env:USERPROFILE ".notion_ai_bot\wizard.json"
-  $state = @{ push = $true; update_prod = $true; prod_dir = "C:\apps\notion_ai_bot"; dist_dir = (Join-Path $root "dist") }
+  $file = Join-Path $env:USERPROFILE ".ai_assistant\wizard.json"
+  $state = @{ push = $true; update_prod = $true; prod_dir = "C:\apps\ai_assistant"; dist_dir = (Join-Path $root "dist") }
   if (Test-Path $file) {
     $saved = Get-Content $file -Raw | ConvertFrom-Json
     foreach ($k in @("push", "update_prod", "prod_dir")) {
@@ -39,7 +39,7 @@ function Load-State {
 }
 
 function Save-State($state) {
-  $dir = Join-Path $env:USERPROFILE ".notion_ai_bot"
+  $dir = Join-Path $env:USERPROFILE ".ai_assistant"
   New-Item -ItemType Directory -Force $dir | Out-Null
   $state | ConvertTo-Json | Set-Content (Join-Path $dir "wizard.json") -Encoding ASCII
 }
@@ -48,7 +48,7 @@ $uv = Find-Uv
 $state = Load-State
 
 Write-Host ""
-Write-Host "=== notion_ai_bot release ==="
+Write-Host "=== ai_assistant release ==="
 $pyproject = Get-Content (Join-Path $root "pyproject.toml") -Raw
 $current = [regex]::Match($pyproject, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
 $lastTag = (git tag --list "v*" --sort=-v:refname | Select-Object -First 1)
@@ -56,7 +56,7 @@ if (-not $lastTag) { $lastTag = "(none)" }
 Write-Host "current version : $current"
 Write-Host "last tag        : $lastTag"
 Write-Host "auto would do   : " -NoNewline
-# --quiet and 2>$null: uv prints "Building notion-ai-bot ..." on stderr whenever the venv is
+# --quiet and 2>$null: uv prints "Building ai-assistant ..." on stderr whenever the venv is
 # out of date, and with ErrorActionPreference=Stop that native stderr aborted the whole wizard.
 $auto = & $uv run --quiet python release.py --auto --dry-run 2>$null |
   Where-Object { $_ -match "\S" } | Select-Object -First 1

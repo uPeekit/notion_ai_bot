@@ -157,7 +157,7 @@ Phase 1 is where the real answer is: whether the classification is good enough t
    developer contact, scope `https://www.googleapis.com/auth/gmail.modify`, yourself as a test
    user — then **Publish app** so tokens stop expiring weekly.
 3. **Credentials → Create credentials → OAuth client ID → Desktop app** → download the JSON →
-   save it as `C:\apps\notion_ai_bot\data\gmail_client.json`. Do not paste its contents into
+   save it as `C:\apps\ai_assistant\data\gmail_client.json`. Do not paste its contents into
    chat; it is a secret like the other keys.
 4. Run the one-time authorisation command I will add (`uv run python -m tools.gmail_auth`): a
    browser opens, you approve, the token is written next to the client file.

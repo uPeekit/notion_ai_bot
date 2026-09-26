@@ -11,7 +11,7 @@ import release
 
 def make_repo(root: Path, version: str, extra: dict[str, str] | None = None) -> Path:
     files = {
-        "pyproject.toml": f'[project]\nname="notion-ai-bot"\nversion="{version}"\n',
+        "pyproject.toml": f'[project]\nname="ai-assistant"\nversion="{version}"\n',
         "uv.lock": "lock-v1", ".env.example": "X=", "README.md": "r", "RELEASE.md": "rel",
         "apply_update.py": "print(1)", "app/__init__.py": "", "app/a.py": f"V='{version}'",
         "tools/__init__.py": "", "migrations/0001_initial.sql": "CREATE TABLE x (id INTEGER);",

@@ -19,19 +19,19 @@ function AskYN([string]$prompt, [bool]$default) {
 
 function Find-NewestZip {
   $dirs = @()
-  $wiz = Join-Path $env:USERPROFILE ".notion_ai_bot\wizard.json"
+  $wiz = Join-Path $env:USERPROFILE ".ai_assistant\wizard.json"
   if (Test-Path $wiz) {
     $s = Get-Content $wiz -Raw | ConvertFrom-Json
     if ($s.dist_dir) { $dirs += $s.dist_dir }
   }
   $dirs += (Join-Path $env:USERPROFILE "Downloads")
   $dirs += $root
-  $found = foreach ($d in $dirs) { if (Test-Path $d) { Get-ChildItem -Path $d -Filter "notion_ai_bot-*.zip" -File -ErrorAction SilentlyContinue } }
+  $found = foreach ($d in $dirs) { if (Test-Path $d) { Get-ChildItem -Path $d -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "ai_assistant-*.zip" -or $_.Name -like "notion_ai_bot-*.zip" } } }
   $found | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
 Write-Host ""
-Write-Host "=== notion_ai_bot update ==="
+Write-Host "=== ai_assistant update ==="
 $version = if (Test-Path "VERSION") { (Get-Content "VERSION" -Raw).Trim() } else { "(unknown)" }
 Write-Host "installed version : $version"
 Write-Host "install dir       : $root"

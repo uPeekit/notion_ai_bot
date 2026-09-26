@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-NAME = "notion_ai_bot"
+NAME = "ai_assistant"
 ROOT = Path(__file__).resolve().parent
 INCLUDE_GLOBS = [
     "app/**/*.py", "app/**/*.html", "tools/**/*.py", "migrations/*.sql", "deploy/*.ps1",

@@ -40,7 +40,7 @@ $port = Read-EnvValue "ADMIN_UI_PORT" "8787"
 $logFile = Read-EnvValue "LOG_FILE" "logs/bot.log"
 
 Write-Host ""
-Write-Host "=== notion_ai_bot $version ===" -ForegroundColor Cyan
+Write-Host "=== ai_assistant $version ===" -ForegroundColor Cyan
 if ($logFile) { Write-Host "log file   : $(Join-Path $root $logFile)" } else { Write-Host "log file   : (disabled)" }
 if ($port -ne "0") { Write-Host "admin page : http://127.0.0.1:$port" }
 Write-Host "stop       : Ctrl+C (then Y), or close this window"

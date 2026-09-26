@@ -33,7 +33,7 @@ IMAGE_TYPES = {
 }
 _SAFE_NAME = re.compile(r"[^\w.-]+")
 # Wikimedia rate-limits (429) generic browser-like agents; it asks bots to say what they are.
-USER_AGENT = "notion-ai-bot/1.0 (personal Notion assistant; python-httpx)"
+USER_AGENT = "ai-assistant/1.0 (personal notes assistant; python-httpx)"
 
 
 class NotAnImage(Exception):

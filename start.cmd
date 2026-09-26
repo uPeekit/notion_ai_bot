@@ -1,5 +1,5 @@
 @echo off
-title notion_ai_bot
+title ai_assistant
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\start.ps1"
 echo.
 pause

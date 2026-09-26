@@ -1,6 +1,6 @@
 """Capture the real Notion workspace, as the bot sees it, for offline benchmarking.
 
-uv run python -m tools.capture_workspace --targets-file C:\\apps\\notion_ai_bot\\data\\targets.yaml
+uv run python -m tools.capture_workspace --targets-file C:\\apps\\ai_assistant\\data\\targets.yaml
 
 Read-only against Notion (search, data sources, queries). Descriptions come from the given
 targets.yaml, but discovery writes to its descriptions file whenever it finds a new page or
