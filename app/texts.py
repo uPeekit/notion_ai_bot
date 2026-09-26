@@ -411,6 +411,7 @@ VAULT_AGENDA_MORE = " и ещё {n}"
 VAULT_ON_DAY = "📅 {date}:"
 VAULT_ON_RANGE = "📅 {start} — {end}:"
 VAULT_NOW = "С чего начать:"
+VAULT_OVERDUE = "🔴 Просрочено:"
 
 # ---- the bot's own name -----------------------------------------------------------------------
 

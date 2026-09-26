@@ -139,6 +139,44 @@ def test_an_agenda_action_without_anything_defaults_to_now(index):
     assert action.action == "agenda" and action.scope == "now"
 
 
+async def test_what_have_i_not_done_lists_everything_overdue(index):
+    """This is the bug the user reported. «Какие у меня задачи просрочены» answered "ничего не
+    нашёл" while eleven tasks were overdue — see the two tests below for why."""
+    turn = await pipeline(index, {"actions": [{"action": "agenda", "scope": "overdue"}]}
+                          ).handle("какие задачи я не сделал?")
+    line = turn.reply_line()
+    assert line.startswith(texts.VAULT_OVERDUE)
+    assert "коробка разобрать" in line
+
+
+def test_the_scope_the_model_fills_in_by_default_means_nothing(index):
+    """Root cause. The filer puts `scope: "any"` on almost every action it answers — it is
+    filler, not a scope. Being truthy, it slipped past the "unspecified means what-now" guard and
+    the question fell through to the date branch, which looks at *today* alone. Nothing was due
+    exactly today, so the answer was "nothing found"."""
+    [action] = check([{"action": "agenda", "scope": "any"}], index, "какие задачи просрочены")
+    assert action.scope == "now"
+
+
+async def test_a_question_the_vault_answered_is_not_buried_under_notions_empty_search(index):
+    """The other half of what the user saw: Notion cannot express "overdue" at all, so its title
+    search found nothing and said so — above the real answer."""
+    turn = await pipeline(index, {"actions": [{"action": "agenda", "scope": "overdue"}]}
+                          ).handle("какие задачи я не сделал?")
+    assert turn.answer and turn.reply_line() == turn.answer
+
+
+async def test_an_answered_question_is_visible_in_the_log(index, caplog):
+    """A turn that answered a question used to log exactly what a turn that did nothing logged
+    (`vault <model>: -`), which is how the bug above stayed hidden for a week."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="app.vault.pipeline"):
+        await pipeline(index, {"actions": [{"action": "agenda", "scope": "overdue"}]}
+                       ).handle("что просрочено")
+    assert any("answered:" in r.getMessage() for r in caplog.records)
+
+
 def test_made_up_dates_and_scopes_are_dropped(index):
     [action] = check([{"action": "agenda", "scope": "вчера", "due_from": "завтра"}], index, "x")
     assert action.due_from == "" and action.scope == "now"

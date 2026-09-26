@@ -66,7 +66,7 @@ ACTION_SCHEMA = _obj({
     "task": _STRING,
     "due_from": _STRING,
     "due_to": _STRING,
-    "scope": {"enum": ["day", "now", "any", "list"]},
+    "scope": {"enum": ["day", "now", "overdue", "any", "list"]},
 })
 FILER_SCHEMA = _obj({"actions": {"type": "array", "items": ACTION_SCHEMA}})
 
@@ -239,7 +239,7 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
         for field in ("due", "due_from", "due_to"):
             if not _DATE.match(getattr(action, field)):
                 setattr(action, field, "")
-        if action.scope not in ("day", "now", "any", GROCERY_LIST):
+        if action.scope not in ("day", "now", "overdue", "any", GROCERY_LIST):
             action.scope = ""
         if action.repeat and not action.repeat.lower().startswith("every"):
             action.repeat = ""
@@ -279,8 +279,15 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
         # A rewrite with no instruction is a note emptied for no stated reason.
         if action.action == "rewrite" and not action.text.strip():
             continue
-        if action.action == "agenda" and not (action.scope or action.due_from or action.due_to):
-            action.scope = "now"
+        if action.action == "agenda":
+            # "any" is what the model puts on almost every action it fills in, not a scope.
+            # Treating it as a scope sent every undated question to the date branch, which
+            # looks at today alone: «what have I not done» answered "nothing found" with
+            # eleven tasks overdue.
+            if action.scope == "any":
+                action.scope = ""
+            if not (action.scope or action.due_from or action.due_to):
+                action.scope = "now"
         if action.action == "search" and not (action.text.strip() or action.tags
                                               or action.folder or action.props
                                               or action.due_from or action.due_to):

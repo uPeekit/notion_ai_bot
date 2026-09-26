@@ -1339,7 +1339,13 @@ class Orchestrator:
         if undos:
             self._record_vault_undo(turn, undos)
         line = result.reply_line()
-        return replace(reply, text=f"{reply.text}\n{line}".strip()) if line else reply
+        if not line:
+            return reply
+        if result.answer and reply.text.strip() == texts.SEARCH_EMPTY:
+            # The vault answered the question from its own dates; Notion's "nothing found"
+            # above that answer is noise, and reads as if the bot had failed.
+            return replace(reply, text=line)
+        return replace(reply, text=f"{reply.text}\n{line}".strip())
 
     def _record_vault_undo(self, turn: _Turn, undos: list[Any]) -> None:
         if turn.execution_id is not None:

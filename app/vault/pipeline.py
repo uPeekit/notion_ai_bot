@@ -209,7 +209,11 @@ class VaultPipeline:
             return turn
         log.info("vault %s: %s", self._filer.model,
                  ", ".join([*(f"{w.kind}:{w.note}" for w in turn.writes),
-                            *([f"search:{len(turn.hits)} hits"] if turn.asked else [])]) or "-")
+                            *([f"search:{len(turn.hits)} hits"] if turn.asked else []),
+                            # Without this an answered question looked exactly like a turn
+                            # that did nothing at all, which is how the overdue bug hid.
+                            *([f"answered:{len(turn.answer.splitlines())} lines"]
+                              if turn.answer else [])]) or "-")
         self._link_later(turn.writes)
         return turn
 
@@ -301,6 +305,11 @@ class VaultPipeline:
     def _agenda_answer(self, action: VaultAction) -> str:
         """A question about dates, answered from the vault: a day, a range, or "what now"."""
         today = self._now().date()
+        if action.scope == "overdue":
+            # Everything late, oldest first — the question asks for the list, not for a
+            # suggestion of what to start with.
+            return agenda_mod.listing(agenda_mod.build(self._index, today).overdue,
+                                      texts.VAULT_OVERDUE)
         if action.scope == "now":
             return agenda_mod.listing(agenda_mod.suggest(self._index, today), texts.VAULT_NOW)
         start = _day(action.due_from) or _day(action.due_to) or today
