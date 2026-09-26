@@ -514,6 +514,29 @@ Rules that hold here:
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
 
+**Editing any place on a page** (`app/llm/edits.py`, `app/notion/to_markdown.py`): the page
+is read once and shown to the model as numbered lines — pictures and sub-pages included, as
+`<вложение …>` and `<не трогать: …>` — and the model answers with a short list of
+operations against those numbers (`replace`, `insert`, `delete`, `image`), or with a whole
+new text in `full` when the instruction really is "rewrite all of this". One call decides
+which. Editing places rather than replacing a page keeps block ids (so comments and links
+survive), costs a couple of hundred output tokens instead of the page again, needs no
+special case for pictures, and lets the reply say exactly what changed.
+
+`edits.check` is the gate the feature rests on, and every rule in it is about what the code
+*read*, never about what the instruction said: a line number the model invented, a sub-page
+or a nested list it tried to delete, or a script that would throw away more than half the
+page cannot get through. A picture can be removed, because that is what was asked for, and
+`restore_block` brings it back whole out of the trash — at the *end* of the page, which
+Notion gives no way to avoid, so the reply says so rather than pretending otherwise.
+
+An edit that names no page («убери оттуда второй вариант») resolves to the page this chat last
+wrote to (`AuditStore.last_page`, offered to the interpreter as `llm/context.RECENT_PAGE`).
+It is read from the audit rows, so a restart does not lose it, and bounded to the chat's
+last twenty events — a page from last week is not what "that page" means. Measured live:
+with the hint the interpreter picks the page at 0.9 confidence, without it 0.55, which is
+below `POLICY_TARGET_MIN` and so asks instead of guessing.
+
 **Rewriting what is already there** (`rewrite` on both sides, `app/llm/rewrite.py`): the
 user names a place, optionally a section, and says what to change in their own words
 («оставь один подход и одни размеры»). The current text is read at

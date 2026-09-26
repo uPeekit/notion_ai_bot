@@ -26,6 +26,7 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `UNDO_FAILED` | commands/executor | Notion refused undo | Не удалось отменить: <message>. | audit |
 | `SESSION_EXPIRED` | conversation/session | button pressed after TTL, or a stale/mismatched callback token, or an unknown callback prefix | Вопрос устарел. Повторите запрос. | drop session |
 | `REWRITE_EMPTY` | commands/executor | the page or note holds no text, only pictures / files / sub-pages | На «…» нет текста, который можно переписать | nothing written, nothing archived |
+| `REWRITE_NOTHING` | llm/edits | the model read the page and found nothing the instruction applies to | Не нашёл на «…», что именно поправить | nothing written |
 | `REWRITE_UNAVAILABLE` | commands/executor | no rewriter (no Anthropic key, or cloud off) | Переписать текст сейчас не могу | none |
 | `REWRITE_FAILED` | llm/rewrite | Claude refused, answered nothing, or was cut off | Не удалось переписать текст (…) | the page is untouched; the credit/key warning is appended once an hour |
 | `INTERNAL` | conversation/orchestrator | unexpected exception on any path (the orchestrator never raises to the transport) | Не удалось обработать сообщение. | audit error, log exception |
