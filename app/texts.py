@@ -339,6 +339,33 @@ VAULT_GUIDE = """# Как бот раскладывает записи
 
 ## Области
 """
+# The grocery page: a registry, not a to-do list (app/vault/groceries.py). Every product has
+# one permanent line — ticked means in stock, unticked means buy it — so the page never grows
+# except for a genuinely new product, and nothing is ever archived. The home page finds the
+# unticked ones by file name, so the lines carry no tag.
+# Words in front of a product that are not part of its name, so "купить 2 л молока"
+# registers as "молока". Units are only stripped after a number — on their own
+# they would eat the product ("г" is also the start of "гречка").
+# Letters that sort out of alphabetical order by code point, folded before sorting the
+# grocery page: ё sits after я, so a product starting with it would land at the bottom
+# of an otherwise alphabetical list.
+VAULT_SORT_FOLD = {"ё": "е"}
+VAULT_GROCERY_UNITS = ("л", "мл", "кг", "г", "гр", "шт", "уп")
+# Containers, which are unambiguous enough to strip on their own ("пачка соли").
+VAULT_GROCERY_PACKS = ("пачк", "банк", "бутыл", "пара", "пары")
+# Both tenses: "buy milk" names a product to get, "bought milk" names the same product as
+# already got, and the name has to survive either.
+VAULT_BUY_WORDS = ("купить", "купи", "куплю", "купили", "купила", "купил",
+                   "закупился", "закупить", "заказать", "закажи", "заказали", "заказала",
+                   "заказал", "взять", "возьми", "взяли", "взяла", "взял", "есть")
+VAULT_GROCERIES_NOTE = "Продукты"
+VAULT_GROCERIES_INTRO = ("Отмеченные — есть дома. Снимите галочку с того, что нужно "
+                         "купить — оно появится на Главной. Сроков и повторов здесь не бывает.")
+# The answer to "что надо купить?"
+VAULT_GROCERIES_LIST = "🛒 Купить: {items}"
+VAULT_GROCERIES_EMPTY = "🛒 Всё есть — покупать нечего."
+# One line in the morning digest, only when something is actually needed.
+VAULT_GROCERIES_DIGEST = "🛒 Продукты ({n}): {items}"
 VAULT_INBOX_NOTE = "Разное"
 # A question answered from the vault: the header, one line per hit, and the empty answer.
 VAULT_SEARCH_HEADER = "🔍 Obsidian — нашёл:"
@@ -367,6 +394,8 @@ VAULT_WHAT = {
     "rewrite": "переписано «{note}»",
     "log": "запись в дневнике «{note}»",
     "inbox": "в «{note}» — не понял, куда это",
+    "grocery": "в список продуктов: {detail}",
+    "grocery_done": "куплено: {detail}",
 }
 
 # ---- the vault's agenda: the morning message and the "what now" answer -------------------------
@@ -377,6 +406,7 @@ VAULT_AGENDA_TODAY = "📌 Сегодня ({n}):"
 VAULT_AGENDA_TOMORROW = "➡️ Завтра ({n}):"
 VAULT_AGENDA_EVENTS = "📅 Встречи и даты ({n}):"
 VAULT_AGENDA_ITEM = "• {text}"
+VAULT_AGENDA_MORE = " и ещё {n}"
 # Answers to a question about a day or a range, and to "что мне сейчас делать".
 VAULT_ON_DAY = "📅 {date}:"
 VAULT_ON_RANGE = "📅 {start} — {end}:"

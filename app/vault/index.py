@@ -234,6 +234,16 @@ class VaultIndex:
         hits = [line for _, mark, line in lines if mark == OPEN and stems(line) & wanted]
         return hits[:limit]
 
+    def groceries(self) -> str:
+        """The grocery page's text, or "" when there is not one yet."""
+        note = self.by_name(texts.VAULT_GROCERIES_NOTE)
+        if note is None:
+            return ""
+        try:
+            return self.read(note.path)
+        except OSError:
+            return ""
+
     def guide(self) -> str:
         """The user's own instructions to the bot (`_bot.md`), without its frontmatter."""
         note = self.by_name(GUIDE_NOTE)

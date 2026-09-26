@@ -20,19 +20,26 @@ from pydantic import ValidationError
 from app import texts
 from app.llm.health import Health, describe
 from app.llm.prompts import FILER_PROMPT, filer_message, filer_vault
+from app.vault import groceries as groceries_mod
+from app.vault import mdedit
 from app.vault.index import VaultIndex
 from app.vault.writer import VaultAction
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("task", "note", "append", "update", "rewrite", "log", "search", "agenda",
-           "inbox")
+ACTIONS = ("task", "note", "append", "update", "rewrite", "log", "grocery", "search",
+           "agenda", "inbox")
 MAX_ACTIONS = 10
 MAX_TOKENS = 4000
 MAX_BODY_LINES = 200
 MAX_TEXT = 4000
 MAX_CANDIDATES = 40
 MAX_GUIDE = 4000
+# How much of the grocery registry the model is shown. Enough to judge a new product by the
+# company it keeps; the page itself decides about products it already has.
+MAX_GROCERIES = 60
+# `scope` on a grocery action: answer with what still has to be bought, write nothing.
+GROCERY_LIST = "list"
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _STRING = {"type": "string"}
 
@@ -59,7 +66,7 @@ ACTION_SCHEMA = _obj({
     "task": _STRING,
     "due_from": _STRING,
     "due_to": _STRING,
-    "scope": {"enum": ["day", "now", "any"]},
+    "scope": {"enum": ["day", "now", "any", "list"]},
 })
 FILER_SCHEMA = _obj({"actions": {"type": "array", "items": ACTION_SCHEMA}})
 
@@ -82,6 +89,10 @@ class VaultContext:
     tags: list[str]
     known_notes: list[str]
     open_tasks: list[str]
+    # What the grocery page already knows, so a product that is new but keeps familiar
+    # company is recognised as one too. A product already on the page needs no model
+    # judgement at all: `check` decides that from the page itself.
+    groceries: list[str]
     tasks_note: str
     daily_folder: str
     today: str
@@ -91,7 +102,8 @@ class VaultContext:
         return filer_vault(guide=self.guide, today=self.today, weekday=self.weekday,
                            folders=self.folders, tags=self.tags, tasks_note=self.tasks_note,
                            daily_folder=self.daily_folder, known_notes=self.known_notes,
-                           open_tasks=self.open_tasks)
+                           open_tasks=self.open_tasks, groceries=self.groceries,
+                           groceries_note=texts.VAULT_GROCERIES_NOTE)
 
 
 def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
@@ -103,6 +115,7 @@ def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
         tags=index.tags(),
         known_notes=[n.name for n in index.candidates(message, MAX_CANDIDATES)],
         open_tasks=index.open_tasks(message),
+        groceries=[ln.name for ln in groceries_mod.read(index.groceries())][:MAX_GROCERIES],
         tasks_note=texts.VAULT_TASKS_NOTE,
         daily_folder=texts.VAULT_DAILY_DIR,
         today=now.strftime("%Y-%m-%d"),
@@ -121,10 +134,79 @@ def _props(raw: object) -> dict[str, str]:
     return out
 
 
+def _grocery_line(pantry: list, text: str):
+    """The grocery the text names, if the page already has it."""
+    name = groceries_mod.bare(text)
+    return groceries_mod.match(name, pantry) if name else None
+
+
+def _as_grocery(action: VaultAction, pantry: list) -> VaultAction | None:
+    """The same request as a grocery write, when the page says this is a grocery.
+
+    This is the rule the whole feature rests on, and it is a lookup rather than a
+    judgement: a product already on the page can never be misfiled, whatever the model
+    answered. So a mistake is only ever possible the first time a word is seen, and
+    correcting it means editing one line of a markdown page."""
+    if action.action == "task" and not (action.due or action.repeat):
+        # A dated or repeating errand is not a grocery, even when it is about food: a cake
+        # for Saturday is a task with a deadline, and a grocery line may never carry a date.
+        if _grocery_line(pantry, action.text) is not None:
+            return VaultAction(action="grocery",
+                               body=[groceries_mod.bare(action.text)], done=False)
+    if action.action == "update" and action.done is True:
+        # "bought the milk": the model reads that as ticking a task off. If the product is
+        # on the grocery page, ticking it there is what was meant.
+        for candidate in (action.task, action.text):
+            if candidate and _grocery_line(pantry, candidate) is not None:
+                return VaultAction(action="grocery",
+                                   body=[groceries_mod.bare(candidate)], done=True)
+    return None
+
+
+def _or_new_task(action: VaultAction, tasks_text: str) -> VaultAction:
+    """An update of a task the file does not have, turned into creating that task.
+
+    The model answers "buy a cake by Saturday" as an update when it believes the errand is
+    already on the list. When it is not, the writer has nothing to change and the message
+    used to end up in the inbox — a clear request with a deadline, lost. Creating it is what
+    was asked for. Only when nothing is being ticked off: marking a task done when it is not
+    there must never add an open one."""
+    # `done: false` is what the model sends on every action; only `true` means something is
+    # being ticked off, and only then would creating an open task be wrong.
+    if action.action != "update" or action.done is True or action.props:
+        return action
+    if action.note != texts.VAULT_TASKS_NOTE:
+        return action
+    wanted = (action.task or action.text).strip()
+    if not wanted or mdedit.find_task(tasks_text, wanted) is not None:
+        return action
+    text, tags = _split_tags(wanted)
+    if not text:
+        return action
+    return VaultAction(action="task", text=text, tags=tags, heading=action.heading,
+                       due=action.due, repeat=action.repeat,
+                       countdown=action.countdown)
+
+
+def _split_tags(line: str) -> tuple[str, list[str]]:
+    """A task line the model wrote as one string, split back into words and tags."""
+    tags = [w.lstrip("#") for w in line.split() if w.startswith("#") and len(w) > 1]
+    text = " ".join(w for w in line.split() if not w.startswith("#"))
+    return text.strip(), tags
+
+
 def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[VaultAction]:
     """Every action the writer may safely carry out. An action naming a note or a folder that
     is not there is not guessed at — it becomes an inbox line holding the user's own words."""
     out: list[VaultAction] = []
+    pantry = groceries_mod.read(index.groceries())
+    tasks_note = index.by_name(texts.VAULT_TASKS_NOTE)
+    tasks_text = ""
+    if tasks_note is not None:
+        try:
+            tasks_text = index.read(tasks_note.path)
+        except OSError:
+            tasks_text = ""
     folders = set(index.folders())
     for raw in raw_actions[:MAX_ACTIONS]:
         if not isinstance(raw, dict):
@@ -157,7 +239,7 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
         for field in ("due", "due_from", "due_to"):
             if not _DATE.match(getattr(action, field)):
                 setattr(action, field, "")
-        if action.scope not in ("day", "now", "any"):
+        if action.scope not in ("day", "now", "any", GROCERY_LIST):
             action.scope = ""
         if action.repeat and not action.repeat.lower().startswith("every"):
             action.repeat = ""
@@ -172,6 +254,28 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 continue
         if action.action in ("task", "log", "inbox") and not action.text.strip():
             continue
+        instead = _as_grocery(action, pantry)
+        if instead is not None:
+            action = instead
+        action = _or_new_task(action, tasks_text)
+        if action.action == "grocery":
+            names = [groceries_mod.bare(n) for n in (action.body or [action.text])]
+            names = [n for n in names if n]
+            # Listing what has to be bought is answering a *question*, so a message that says
+            # something was bought is never one, whatever scope the model put on it: it kept
+            # answering "bought the eggs" with the whole list instead of ticking them off.
+            listing = action.scope == GROCERY_LIST and not names and not action.done
+            if not (names or listing):
+                # The model named no product. The message did — that is the whole of what it
+                # said — so the name comes from there rather than the action being dropped.
+                names = [n for n in [groceries_mod.bare(message)] if n]
+            if not (names or listing):
+                continue
+            # A grocery line never carries a date or a repeat rule: a recurring tick makes
+            # a copy of itself, which is exactly the pile this page exists to avoid.
+            action = VaultAction(action="grocery", body=names,
+                                 done=bool(action.done),
+                                 scope=GROCERY_LIST if listing else "")
         # A rewrite with no instruction is a note emptied for no stated reason.
         if action.action == "rewrite" and not action.text.strip():
             continue

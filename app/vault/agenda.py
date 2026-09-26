@@ -101,7 +101,11 @@ def open_tasks(index: VaultIndex) -> list[Item]:
     """Every open tick box in the vault, with its due date and time if it has one."""
     out: list[Item] = []
     for note in index.notes:
-        if note.name == texts.VAULT_ARCHIVE_NOTE or note.name.startswith("_"):
+        # The grocery page is a registry of what is in stock, not a list of things to do
+        # today: its unticked lines belong on the home page and in one digest line, not in
+        # "what should I start with" next to the dentist.
+        if note.name in (texts.VAULT_ARCHIVE_NOTE, texts.VAULT_GROCERIES_NOTE) \
+                or note.name.startswith("_"):
             continue
         try:
             text = index.read(note.path)
@@ -200,3 +204,19 @@ def digest(agenda: Agenda, today: date) -> str:
 
 def listing(items: list[Item], header: str) -> str:
     return f"{header}\n{_lines(items)}" if items else texts.VAULT_SEARCH_EMPTY
+
+
+def groceries_line(index: VaultIndex, limit: int = 8) -> str:
+    """One line for the morning digest, or "" when nothing has to be bought.
+
+    A count and the first few names: the whole list belongs on the home page, where the check
+    boxes work, not in a message that cannot be ticked."""
+    from app.vault import groceries
+
+    want = groceries.needed(index.groceries())
+    if not want:
+        return ""
+    shown = ", ".join(want[:limit])
+    if len(want) > limit:
+        shown += texts.VAULT_AGENDA_MORE.format(n=len(want) - limit)
+    return texts.VAULT_GROCERIES_DIGEST.format(n=len(want), items=shown)

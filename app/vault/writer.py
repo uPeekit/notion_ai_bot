@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict
 
 from app import texts
-from app.vault import frontmatter, mdedit
+from app.vault import frontmatter, groceries, mdedit
 from app.vault.frontmatter import render
 from app.vault.index import SKIP_DIRS, VaultIndex
 from app.vault.names import safe_name, unique
@@ -31,7 +31,7 @@ class VaultAction(BaseModel):
     index before they reach the writer (app/vault/filer.py)."""
 
     model_config = ConfigDict(extra="forbid")
-    action: str  # task | note | append | update | rewrite | log | inbox
+    action: str  # task | note | append | update | rewrite | log | grocery | inbox
     text: str = ""  # the task's, log line's or inbox line's words
     note: str = ""  # which note to add to or change
     folder: str = ""
@@ -65,11 +65,15 @@ class VaultWrite(BaseModel):
     kind: str
     path: str
     note: str
+    # What exactly was written, when the note's name is not the interesting part: the
+    # products a grocery write touched.
+    detail: str = ""
     undo: VaultUndo | None = None
 
     @property
     def what(self) -> str:
-        return texts.VAULT_WHAT.get(self.kind, "{note}").format(note=self.note)
+        return texts.VAULT_WHAT.get(self.kind, "{note}").format(note=self.note,
+                                                                 detail=self.detail)
 
 
 def task_line(action: VaultAction, countdown_tag: str) -> str:
@@ -157,7 +161,7 @@ class VaultWriter:
         handler = {
             "task": self._task, "note": self._note, "append": self._append,
             "update": self._update, "rewrite": self._rewrite, "log": self._log,
-            "inbox": self._inbox,
+            "grocery": self._grocery, "inbox": self._inbox,
         }.get(action.action)
         if handler is None:
             return self._inbox(action)
@@ -255,6 +259,26 @@ class VaultWriter:
         path = self._unused(self._path(f"{TRASH_DIR}/{name} ({stamp}).md"))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8", newline="\n")
+
+    def _grocery(self, action: VaultAction) -> VaultWrite:
+        """Untick the products that have to be bought, or tick back the ones that were.
+
+        Nothing is created and nothing is archived: the page holds one permanent line per
+        product, and a message only changes which of them are ticked. A product the page
+        has never heard of gets a line, which is how the registry learns."""
+        rel = f"{texts.VAULT_GROCERIES_NOTE}.md"
+        previous = self._read(rel)
+        names = [n for n in (action.body or [action.text]) if n.strip()]
+        done = bool(action.done)
+        text, changed = groceries.apply(previous or groceries.note(), names, done=done)
+        if not changed:  # already in the state that was asked for
+            return VaultWrite(kind="grocery_none", path=rel,
+                              note=texts.VAULT_GROCERIES_NOTE,
+                              detail=", ".join(names))
+        undo = self._write(rel, text, previous)
+        return VaultWrite(kind="grocery_done" if done else "grocery", path=rel,
+                          note=texts.VAULT_GROCERIES_NOTE,
+                          detail=", ".join(changed), undo=undo)
 
     def _log(self, action: VaultAction) -> VaultWrite:
         day = self._now().strftime("%Y-%m-%d")

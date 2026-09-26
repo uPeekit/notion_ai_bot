@@ -21,7 +21,7 @@ from app.llm.edits import EditError, Editor
 from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
 from app.vault import frontmatter, mdedit
-from app.vault.filer import Filer, FilerError, check, context
+from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
 from app.vault.search import Hit, search, vault_name
@@ -180,7 +180,13 @@ class VaultPipeline:
                          output_tokens=output_tokens, vault=vault_name(self._index.root))
         dated = [a for a in actions if a.action == "agenda"]
         questions = [a for a in actions if a.action == "search"]
-        actions = [a for a in actions if a.action not in ("search", "agenda")]
+        shopping = [a for a in actions
+                    if a.action == "grocery" and a.scope == GROCERY_LIST]
+        actions = [a for a in actions if a.action not in ("search", "agenda")
+                   and a not in shopping]
+        for _ in shopping[:1]:  # one answer however many times it was asked for
+            answer = await asyncio.to_thread(self._grocery_answer)
+            turn.answer = f"{turn.answer}\n{answer}".strip() if turn.answer else answer
         # A rewrite is the one action the filer cannot finish on its own: it needs the
         # note's current text, which the filer never saw. Each one becomes an action
         # carrying the finished text, or is dropped with a line in the reply.
@@ -283,6 +289,15 @@ class VaultPipeline:
         turn.reason = turn.reason or getattr(error, "reason", "")
         return None
 
+    def _grocery_answer(self) -> str:
+        """What still has to be bought, or that nothing does."""
+        from app.vault import groceries
+
+        want = groceries.needed(self._index.groceries())
+        if not want:
+            return texts.VAULT_GROCERIES_EMPTY
+        return texts.VAULT_GROCERIES_LIST.format(items=", ".join(want))
+
     def _agenda_answer(self, action: VaultAction) -> str:
         """A question about dates, answered from the vault: a day, a range, or "what now"."""
         today = self._now().date()
@@ -303,7 +318,11 @@ class VaultPipeline:
         empty string when there is nothing to say — nobody wants "you have 0 tasks"."""
         self._index.refresh()
         day = today or self._now().date()
-        return agenda_mod.digest(agenda_mod.build(self._index, day), day)
+        text = agenda_mod.digest(agenda_mod.build(self._index, day), day)
+        shopping = agenda_mod.groceries_line(self._index)
+        if not shopping:
+            return text
+        return f"{text}\n\n{shopping}" if text else shopping
 
     def _write_all(self, actions: list[VaultAction]) -> list[VaultWrite]:
         return [self._writer.run(a) for a in actions]
