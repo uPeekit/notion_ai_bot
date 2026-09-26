@@ -568,6 +568,25 @@ either digest. The Obsidian line says the cause in the user's own language inste
 `claude 400`, and an empty balance puts the interpreter's fallback on a 30-minute cooldown
 rather than 5: topping up an account takes longer than that.
 
+**Groceries** (`app/vault/groceries.py`, the page named by `texts.VAULT_GROCERIES_NOTE`): a
+registry rather than a to-do list. One permanent line per product, ticked when it is in stock
+and unticked when it has to be bought, so nothing is ever created or archived and the page's
+size tracks the grocery vocabulary instead of the number of shopping trips. The home page
+finds the unticked ones with the Tasks plugin's `filename includes`, which is why the lines
+carry no tag — the file is the identity, and the same query keys the undated-tasks view's
+`filename does not include` exclusion.
+
+The rule it rests on is a lookup and not a judgement: `filer.check` reads the page, and a
+product already on it is filed there whatever the model answered. The model is consulted only
+about a word the page has never seen, and correcting it means editing one line of markdown —
+which is also how the user teaches it. Two invariants are enforced in code: a grocery line
+never carries a date or a repeat rule (a recurring tick copies itself on completion, which is
+what filled the archive note with duplicates), and an ambiguous name adds a line rather than
+unticking a guess, because a wrong untick puts the wrong thing in the shop while a
+near-duplicate takes seconds to merge. Groceries are left out of the task listings — a
+shopping list is not a thing to do today — and reduced to one line in the morning digest.
+The one-off setup of an existing vault is `tools/groceries_setup.py` (dry run by default).
+
 **The morning digest** (`app/daily.py`): one asyncio task sleeps until `DAILY_DIGEST_AT` in
 `TIMEZONE`, asks the vault for overdue / today / tomorrow plus dated notes, and sends it to the
 allowed chats. Nothing due means nothing sent. A restart within two hours of the time still
